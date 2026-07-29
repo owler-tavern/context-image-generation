@@ -158,6 +158,7 @@ This project is released into the public domain under [The Unlicense](LICENSE). 
 - Original extension by **Elouann** — [elouannd/context-image-generation](https://github.com/elouannd/context-image-generation).
 - LinkAPI provider support added in this fork by **BlueOwler**.
 - Created for use with [SillyTavern](https://github.com/SillyTavern/SillyTavern).
+- Provider architecture and UX research informed by [Pawtrait](https://github.com/ThatGirl-me/Pawtrait) and [Quick Image Gen](https://github.com/platberlitz/sillytavern-image-gen). No code was copied from either project.
 
 ### Provider hardening
 
