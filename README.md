@@ -8,7 +8,7 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 > **Fork notice** — This is a fork of [elouannd/context-image-generation](https://github.com/elouannd/context-image-generation) by **Elouann**. It was forked to add **LinkAPI provider support** (routing image generation through LinkAPI's Gemini-compatible endpoint) without changing your active SillyTavern Chat Completion profile. All credit for the original extension goes to Elouann; the original is released into the public domain under The Unlicense.
 
-> **Development note** — This fork is maintained by **BlueOwler** with AI-assisted development using **OpenAI Codex**, under human direction and review.
+> **Development note** — This fork is maintained by **BlueOwler** with AI-assisted development using **OpenAI Codex**, with manual direction and review.
 
 ## What's New in this Fork (v1.7.1)
 
