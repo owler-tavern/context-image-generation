@@ -1,4 +1,4 @@
-# Context Image Generation 🍌
+# Context Image Generation
 
 A SillyTavern extension that adds scene-image generation with character context and avatar references.
 
