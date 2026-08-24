@@ -11,4 +11,3 @@ test('shared generation path builds one plan and labels invocation sources', asy
     assert.match(index, /'slash'\)/);
     assert.match(index, /'swipe'\);/);
 });
-
