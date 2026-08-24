@@ -37,6 +37,8 @@ import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, normalizeProviderError } from './lib/providers/errors.js';
+import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
+import { createOperationState } from './lib/operation-state.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -64,6 +66,7 @@ const defaultSettings = {
 
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createGenerationCoordinator();
+const modelDiscoveryState = createOperationState();
 
 function showGenerationError(error, operation = 'Image generation') {
     const settings = extension_settings[extensionName] || {};
@@ -271,15 +274,20 @@ async function fetchManagedProviderModels() {
         return;
     }
 
+    const operation = modelDiscoveryState.begin();
     try {
         const fetched = await fetchProviderModels({ providerId, apiKey: key });
+        const currentSettings = extension_settings[extensionName];
+        if (!modelDiscoveryState.isCurrent(operation) || (currentSettings.provider || 'makersuite') !== providerId) return;
         setProviderModelEntries(settings, providerId, mergeFetchedModelEntries(getProviderModelEntries(settings, providerId), fetched.map((entry) => entry.id)));
         updateModelDropdown();
         renderModelManager();
         saveSettingsDebounced();
         toastr.success(`Loaded ${fetched.length} model(s).`, 'Context Image Generation');
     } catch (error) {
-        showGenerationError(error, 'Provider model discovery');
+        if (modelDiscoveryState.isCurrent(operation)) showGenerationError(error, 'Provider model discovery');
+    } finally {
+        modelDiscoveryState.finish(operation);
     }
 }
 // Dev aid: reach the pure helpers from the DevTools console for verification.
@@ -711,7 +719,6 @@ async function requestSillyTavernImage(requestBody, { providerId = requestBody?.
 
     const textContent = result.choices?.[0]?.message?.content;
     if (textContent) {
-        console.log(`[${extensionName}] Text response received:`, textContent);
         throw new Error('Model returned text instead of image');
     }
 
@@ -967,7 +974,7 @@ async function generateImage() {
     }
 }
 
-async function cigMessageButton($icon, { captureSelection = true } = {}) {
+async function cigMessageButton($icon, { captureSelection = true, generationInput = null } = {}) {
     const context = getContext();
 
     if ($icon.hasClass('cig_busy')) {
@@ -977,7 +984,7 @@ async function cigMessageButton($icon, { captureSelection = true } = {}) {
 
     const messageElement = $icon.closest('.mes');
     const messageId = Number(messageElement.attr('mesid'));
-    const message = context.chat[messageId];
+    const message = generationInput?.message || context.chat[messageId];
 
     if (!message) {
         console.error('[CIG] Could not find message for generation button');
@@ -993,7 +1000,7 @@ async function cigMessageButton($icon, { captureSelection = true } = {}) {
     const charName = context.name2 || 'Character';
     const userName = name1 || 'User';
     const sender = message.is_user ? `{{user}} (${userName})` : `{{char}} (${charName})`;
-    const generationInput = captureWandGenerationInput({
+    const capturedInput = generationInput || captureWandGenerationInput({
         chatId: context.chatId,
         messageId,
         message,
@@ -1007,7 +1014,7 @@ async function cigMessageButton($icon, { captureSelection = true } = {}) {
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
-        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, generationInput.focusText, generationInput.target);
+        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, capturedInput.focusText, capturedInput.target);
     } catch (error) {
         showGenerationError(error);
     } finally {
@@ -1050,6 +1057,12 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             return validation;
         },
         appendMedia: ({ result, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
+            const previousExtra = currentMessage.extra && typeof currentMessage.extra === 'object'
+                ? {
+                    ...currentMessage.extra,
+                    ...(Array.isArray(currentMessage.extra.media) ? { media: [...currentMessage.extra.media] } : {}),
+                }
+                : null;
             if (!currentMessage.extra || typeof currentMessage.extra !== 'object') {
                 currentMessage.extra = {};
             }
@@ -1069,10 +1082,42 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
             appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+            return () => {
+                if (previousExtra === null) {
+                    delete currentMessage.extra;
+                } else {
+                    currentMessage.extra = {
+                        ...previousExtra,
+                        ...(Array.isArray(previousExtra.media) ? { media: [...previousExtra.media] } : {}),
+                    };
+                }
+                appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+            };
         },
-        saveChat: saveChatConditional,
+        saveChat: async () => {
+            const beforeSave = validateMessageTarget({
+                target: effectiveTarget,
+                currentChatId: getContext().chatId,
+                currentChat: getContext().chat,
+            });
+            if (!beforeSave.safe) return beforeSave;
+
+            // ST's saveChatConditional has no target argument. Re-check after it
+            // completes so an intervening chat switch cannot be reported as a
+            // successful attachment; the helper rolls back the in-memory append
+            // and keeps the file in the gallery when this gate fails.
+            await saveChatConditional();
+            const afterSaveContext = getContext();
+            const afterSave = validateMessageTarget({
+                target: effectiveTarget,
+                currentChatId: afterSaveContext.chatId,
+                currentChat: afterSaveContext.chat,
+            });
+            return afterSave.safe ? { saved: true } : afterSave;
+        },
         addToGallery,
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
+        rollbackMedia: (rollback) => rollback?.(),
     });
 }
 
@@ -1114,7 +1159,8 @@ async function autoGenerateForMessage(messageId) {
     if (settings.auto_generate === 'off') return;
 
     const context = getContext();
-    const message = context.chat[messageId];
+    const autoInput = captureAutoGenerationInput({ context, messageId });
+    const message = autoInput?.message;
     if (!message || !message.mes || message.is_system) return;
 
     // Check if we should generate for this message type
@@ -1122,11 +1168,16 @@ async function autoGenerateForMessage(messageId) {
 
     // Wait for the button to be injected, then click it
     setTimeout(() => {
+        const validation = validateAutoGenerationInput({ input: autoInput, context: getContext() });
+        if (!validation.safe) return;
         const messageElement = $(`.mes[mesid="${messageId}"]`);
         const $icon = messageElement.find('.cig_message_gen');
         if ($icon.length > 0 && !$icon.hasClass('cig_busy')) {
             console.log(`[${extensionName}] Auto-generating image for message ${messageId}`);
-            cigMessageButton($icon, { captureSelection: false });
+            cigMessageButton($icon, {
+                captureSelection: false,
+                generationInput: { ...autoInput, message: validation.message, focusText: null },
+            });
         }
     }, 200);
 }

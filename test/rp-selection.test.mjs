@@ -25,6 +25,22 @@ function makeMessageElement() {
     };
 }
 
+function makeHiddenSelection({ attribute = 'hidden' } = {}) {
+    const hiddenParent = {
+        parentElement: null,
+        hidden: attribute === 'hidden',
+        getAttribute: (name) => attribute === name ? 'true' : null,
+    };
+    const start = { insideText: true, parentElement: hiddenParent };
+    const end = { insideText: true, parentElement: hiddenParent };
+    return {
+        rangeCount: 1,
+        isCollapsed: false,
+        getRangeAt: () => ({ startContainer: start, endContainer: end }),
+        toString: () => 'hidden passage',
+    };
+}
+
 test('normalizes selected plain text and rejects empty or over-limit focus', () => {
     assert.equal(normalizeFocusText('  A\n\t focused   moment  '), 'A focused moment');
     assert.equal(normalizeFocusText('  \n\t '), null);
@@ -43,6 +59,18 @@ test('accepts only a non-collapsed range wholly inside the clicked message text'
     }), false);
     assert.equal(isEligibleMessageSelection({
         selection: makeSelection({ collapsed: true }),
+        clickedMessageElement,
+    }), false);
+});
+
+test('rejects a selection inside hidden or aria-hidden descendants', () => {
+    const clickedMessageElement = makeMessageElement();
+    assert.equal(isEligibleMessageSelection({
+        selection: makeHiddenSelection({ attribute: 'hidden' }),
+        clickedMessageElement,
+    }), false);
+    assert.equal(isEligibleMessageSelection({
+        selection: makeHiddenSelection({ attribute: 'aria-hidden' }),
         clickedMessageElement,
     }), false);
 });

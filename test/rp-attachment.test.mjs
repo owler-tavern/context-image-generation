@@ -53,3 +53,47 @@ test('stale target keeps the artifact in the gallery without touching the active
         { notify: 'Image kept in the gallery because the original message is no longer active.' },
     ]);
 });
+
+test('revalidates immediately before save and rolls back an unsafe append', async () => {
+    const { calls, options } = dependencies({ safe: true, message });
+    let checks = 0;
+    options.getCurrentTarget = () => {
+        checks += 1;
+        return checks === 1 ? { safe: true, message } : { safe: false, reason: 'chat-changed' };
+    };
+    options.rollbackMedia = () => calls.push('rollback');
+    assert.equal(await attachGeneratedImageSafely(options), false);
+    assert.deepEqual(calls, [
+        'append',
+        'rollback',
+        { gallery: 'gallery/cig_1.png', metadata: {
+            source: 'message',
+            chatId: 'mira-chat.jsonl',
+            messageId: 2,
+            messageFingerprint: 'v1-9d8aac7b',
+            attachmentStatus: 'not-attached',
+            reason: 'chat-changed',
+        } },
+        { notify: 'Image kept in the gallery because the original message is no longer active.' },
+    ]);
+});
+
+test('does not save when the save gate reports a target change', async () => {
+    const { calls, options } = dependencies({ safe: true, message });
+    options.saveChat = async () => ({ saved: false, reason: 'chat-changed' });
+    options.rollbackMedia = () => calls.push('rollback');
+    assert.equal(await attachGeneratedImageSafely(options), false);
+    assert.deepEqual(calls, [
+        'append',
+        'rollback',
+        { gallery: 'gallery/cig_1.png', metadata: {
+            source: 'message',
+            chatId: 'mira-chat.jsonl',
+            messageId: 2,
+            messageFingerprint: 'v1-9d8aac7b',
+            attachmentStatus: 'not-attached',
+            reason: 'chat-changed',
+        } },
+        { notify: 'Image kept in the gallery because the original message is no longer active.' },
+    ]);
+});

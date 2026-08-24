@@ -57,3 +57,9 @@ test('attached provider errors expose only the redacted technical message', () =
     assert.equal(error.name, 'ProviderError');
     assert.equal(error.message, '[redacted credential]');
 });
+
+test('redacts common bare provider key prefixes from diagnostics', () => {
+    const normalized = normalizeProviderError(new Error('upstream returned sk-proj-abc123456789 and AIzaSyAbcdefghijklmnop and key-123456789abcdef'), context);
+    assert.doesNotMatch(normalized.technicalMessage, /sk-proj|AIzaSy|abc123456789|Abcdefghijklmnop|key-123456789abcdef/i);
+    assert.match(normalized.technicalMessage, /\[redacted credential\]/);
+});
