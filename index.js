@@ -36,9 +36,10 @@ import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
-import { attachNormalizedProviderError, normalizeProviderError } from './lib/providers/errors.js';
+import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createOperationState } from './lib/operation-state.js';
+import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
@@ -80,6 +81,24 @@ const defaultSettings = {
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createGenerationCoordinator();
 const modelDiscoveryState = createOperationState();
+const chatLifecycleEpoch = createChatLifecycleEpoch();
+
+function setBusyState(control, busy, { busyClass = 'generating', busyTitle = 'Working…' } = {}) {
+    const $control = control?.jquery ? control : $(control);
+    if (!$control?.length) return;
+    if (busy) {
+        if (!$control.attr('data-cig-idle-title')) $control.attr('data-cig-idle-title', $control.attr('title') || '');
+        $control.addClass(busyClass)
+            .attr({ 'aria-busy': 'true', 'aria-disabled': 'true', title: busyTitle })
+            .prop('disabled', true);
+    } else {
+        const idleTitle = $control.attr('data-cig-idle-title');
+        $control.removeClass(busyClass)
+            .attr({ 'aria-busy': 'false', 'aria-disabled': 'false' })
+            .prop('disabled', false);
+        if (idleTitle !== undefined) $control.attr('title', idleTitle).removeAttr('data-cig-idle-title');
+    }
+}
 
 function showGenerationError(error, operation = 'Image generation') {
     const settings = extension_settings[extensionName] || {};
@@ -89,14 +108,7 @@ function showGenerationError(error, operation = 'Image generation') {
             providerId: settings.provider || 'unknown',
             modelId: settings.model,
         });
-    console.error(`[${extensionName}] ${operation} error:`, {
-        category: normalized.category,
-        status: normalized.status,
-        providerId: normalized.providerId,
-        modelId: normalized.modelId,
-        requestId: normalized.requestId,
-        technicalMessage: normalized.technicalMessage,
-    });
+    console.error(`[${extensionName}] ${operation} error:`, getSafeProviderErrorLogFields(normalized));
     toastr.error(normalized.userMessage, 'Context Image Generation');
 }
 
@@ -288,6 +300,9 @@ async function fetchManagedProviderModels() {
     }
 
     const operation = modelDiscoveryState.begin();
+    if (operation === null) return;
+    const fetchButton = $('#cig_fetch_provider_models');
+    setBusyState(fetchButton, true, { busyTitle: 'Fetching models…' });
     try {
         const fetched = await fetchProviderModels({ providerId, apiKey: key });
         const currentSettings = extension_settings[extensionName];
@@ -301,6 +316,7 @@ async function fetchManagedProviderModels() {
         if (modelDiscoveryState.isCurrent(operation)) showGenerationError(error, 'Provider model discovery');
     } finally {
         modelDiscoveryState.finish(operation);
+        setBusyState(fetchButton, false);
     }
 }
 // Dev aid: reach the pure helpers from the DevTools console for verification.
@@ -1132,7 +1148,7 @@ async function generateImage() {
     }
 
     const generateBtn = $('#cig_generate_btn');
-    generateBtn.addClass('generating');
+    setBusyState(generateBtn, true, { busyTitle: 'Generating image…' });
     generateBtn.find('i').removeClass('fa-image').addClass('fa-spinner fa-spin');
 
     const lastMsg = recentMessages[recentMessages.length - 1];
@@ -1151,7 +1167,7 @@ async function generateImage() {
     } catch (error) {
         showGenerationError(error);
     } finally {
-        generateBtn.removeClass('generating');
+        setBusyState(generateBtn, false);
         generateBtn.find('i').removeClass('fa-spinner fa-spin').addClass('fa-image');
     }
 }
@@ -1192,7 +1208,7 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
         captureSelection,
     });
 
-    $icon.addClass('cig_busy');
+    setBusyState($icon, true, { busyClass: 'cig_busy', busyTitle: 'Generating image…' });
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
@@ -1200,7 +1216,8 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
     } catch (error) {
         showGenerationError(error);
     } finally {
-        $icon.removeClass('cig_busy fa-spinner fa-spin').addClass('fa-wand-magic-sparkles');
+        setBusyState($icon, false, { busyClass: 'cig_busy' });
+        $icon.removeClass('fa-spinner fa-spin').addClass('fa-wand-magic-sparkles');
     }
 }
 
@@ -1212,6 +1229,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         messageId,
         message,
     });
+    const attachmentLifecycleEpoch = chatLifecycleEpoch.capture();
     let currentMessageElement = null;
 
     return await attachGeneratedImageSafely({
@@ -1277,18 +1295,22 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             };
         },
         saveChat: async () => {
+            const saveEpoch = attachmentLifecycleEpoch;
             const beforeSave = validateMessageTarget({
                 target: effectiveTarget,
                 currentChatId: getContext().chatId,
                 currentChat: getContext().chat,
             });
-            if (!beforeSave.safe) return beforeSave;
+            if (!beforeSave.safe || !chatLifecycleEpoch.isCurrent(saveEpoch)) {
+                return beforeSave.safe ? { safe: false, reason: 'chat-changed' } : beforeSave;
+            }
 
             // ST's saveChatConditional has no target argument. Re-check after it
             // completes so an intervening chat switch cannot be reported as a
             // successful attachment; the helper rolls back the in-memory append
             // and keeps the file in the gallery when this gate fails.
             await saveChatConditional();
+            if (!chatLifecycleEpoch.isCurrent(saveEpoch)) return { safe: false, reason: 'chat-changed' };
             const afterSaveContext = getContext();
             const afterSave = validateMessageTarget({
                 target: effectiveTarget,
@@ -1604,7 +1626,11 @@ jQuery(async () => {
     $(document).on('click', '.cig_gallery_remember', async function (e) {
         e.stopPropagation();
         const index = $(this).data('index');
-        await rememberGalleryAppearance(index);
+        try {
+            await rememberGalleryAppearance(index);
+        } catch (error) {
+            showGenerationError(error, 'Remember appearance');
+        }
     });
 
     $(document).on('click', '.cig_gallery_delete', function (e) {
@@ -1631,6 +1657,7 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        chatLifecycleEpoch.advance();
         setTimeout(injectAllMessageButtons, 100);
     });
 
@@ -1644,6 +1671,7 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
+        chatLifecycleEpoch.advance();
         setTimeout(injectAllMessageButtons, 100);
     });
 

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { attachNormalizedProviderError, normalizeProviderError } from '../lib/providers/errors.js';
+import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from '../lib/providers/errors.js';
 
 const context = { providerId: 'linkapi', providerLabel: 'LinkAPI', modelId: 'gemini-image', requestId: 'req-42' };
 
@@ -62,4 +62,16 @@ test('redacts common bare provider key prefixes from diagnostics', () => {
     const normalized = normalizeProviderError(new Error('upstream returned sk-proj-abc123456789 and AIzaSyAbcdefghijklmnop and key-123456789abcdef'), context);
     assert.doesNotMatch(normalized.technicalMessage, /sk-proj|AIzaSy|abc123456789|Abcdefghijklmnop|key-123456789abcdef/i);
     assert.match(normalized.technicalMessage, /\[redacted credential\]/);
+});
+
+test('safe error log fields never include provider response text', () => {
+    const normalized = normalizeProviderError(new Error('private roleplay and sk-proj-secret123456'), context);
+    assert.deepEqual(getSafeProviderErrorLogFields(normalized), {
+        category: 'unknown',
+        status: undefined,
+        providerId: 'linkapi',
+        modelId: 'gemini-image',
+        requestId: 'req-42',
+    });
+    assert.equal(Object.hasOwn(getSafeProviderErrorLogFields(normalized), 'technicalMessage'), false);
 });
