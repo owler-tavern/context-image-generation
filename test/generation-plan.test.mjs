@@ -78,3 +78,35 @@ test('zero-capability routes receive no references and retain provider-agnostic 
     assert.equal(plan.invocation, 'wand');
     assert.equal(plan.policy.idempotencyKey, 'manual:plan-1');
 });
+
+test('saved appearance references enter the plan only for a positively capped reference route', () => {
+    const appearanceLibrary = {
+        identities: {
+            'character:ava.png': {
+                id: 'character:ava.png',
+                kind: 'character',
+                label: 'Ava',
+                looks: [{ id: 'look:gallery:ava', assetId: 'asset:gallery:ava', label: 'Window look' }],
+            },
+        },
+        assets: { 'asset:gallery:ava': { id: 'asset:gallery:ava', source: { galleryId: 'gallery:ava' } } },
+    };
+    const gallery = [{ id: 'gallery:ava', url: '/images/ava.png' }];
+    const capped = createGenerationPlan({
+        ...baseInput,
+        references: [],
+        appearanceLibrary,
+        gallery,
+        provider: { ...baseInput.provider, capabilities: { referenceImages: { maxCount: 1 } } },
+    });
+    assert.deepEqual(capped.references.map((reference) => reference.id), ['look:gallery:ava']);
+
+    const unknown = createGenerationPlan({
+        ...baseInput,
+        references: [],
+        appearanceLibrary,
+        gallery,
+        provider: { ...baseInput.provider, capabilities: { referenceImages: {} } },
+    });
+    assert.deepEqual(unknown.references, []);
+});
