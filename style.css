@@ -90,22 +90,46 @@
     position: absolute;
     top: 0;
     right: 0;
+    left: 0;
     padding: 4px;
     opacity: 0;
     transition: opacity 0.2s ease;
+    display: flex;
+    justify-content: flex-end;
+    gap: 4px;
+    pointer-events: none;
 }
 
-.cig_gallery_item:hover .cig_gallery_item_overlay {
+.cig_gallery_item:hover .cig_gallery_item_overlay,
+.cig_gallery_item:focus-within .cig_gallery_item_overlay,
+.cig_gallery_item_overlay:focus-within {
     opacity: 1;
+    pointer-events: auto;
+}
+
+.cig_gallery_action {
+    border: 0;
+    min-width: 30px;
+    min-height: 30px;
+    background: rgba(30, 30, 30, 0.88);
+    color: var(--SmartThemeBodyColor);
+    border-radius: 4px;
+    padding: 4px 6px;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.cig_gallery_action:hover,
+.cig_gallery_action:focus-visible {
+    background: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBodyColor);
+    outline: 2px solid var(--SmartThemeBodyColor);
+    outline-offset: 1px;
 }
 
 .cig_gallery_delete {
     background: rgba(220, 53, 69, 0.9);
     color: white;
-    border-radius: 4px;
-    padding: 4px 6px;
-    cursor: pointer;
-    font-size: 10px;
 }
 
 .cig_gallery_delete:hover {
@@ -125,6 +149,46 @@
 
 .cig_gallery_empty i {
     font-size: 32px;
+}
+
+.cig_appearance_list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+.cig_appearance_item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 6px 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+}
+
+.cig_appearance_item small {
+    opacity: 0.72;
+}
+
+.cig_appearance_remove {
+    flex: 0 0 auto;
+}
+
+@media (hover: none) {
+    .cig_gallery_item_overlay {
+        opacity: 1;
+        pointer-events: auto;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .cig_gallery_item,
+    .cig_gallery_item_overlay,
+    .cig_message_gen {
+        transition: none;
+    }
 }
 
 /* Popup styling for viewing images */

@@ -39,6 +39,16 @@ import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from 
 import { attachNormalizedProviderError, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createOperationState } from './lib/operation-state.js';
+import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
+import {
+    addAppearanceLook,
+    buildAppearanceReferenceCandidates,
+    galleryArtifactKey,
+    listAppearanceIdentityChoices,
+    materializeAppearanceAssets,
+    migrateAppearanceLibrary,
+    removeAppearanceLook,
+} from './lib/rp/appearance-library.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -62,6 +72,7 @@ const defaultSettings = {
     message_depth: 1,
     system_instruction: 'You are an image generation assistant. When reference images are provided, they represent the characters in the story. Generate an illustration that depicts the scene described in the prompt while maintaining the art style and appearance of the reference characters. You are not obligated to include both characters - if the scene depicts only one character alone, illustrate them alone. When available, you can use the internet to search for reference pictures and information to improve the accuracy and quality of your generations.',
     gallery: [],
+    rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -297,6 +308,7 @@ window.cigDebug = Object.assign(window.cigDebug || {}, {
     extractPromptText,
     parseImagesResponse,
     requestLinkApiImage,
+    buildAppearanceReferenceCandidates,
 });
 
 function renderProviderDropdown() {
@@ -333,6 +345,11 @@ function updateModelDropdown() {
     // Restore the single avatar-reference preference. Existing split settings
     // migrate once: either previously enabled avatar keeps references enabled.
     const cigSettings = extension_settings[extensionName];
+    const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
+    if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
+        cigSettings.rp_library = migratedAppearanceLibrary;
+        settingsMigrated = true;
+    }
     if (!cigSettings.provider_keys || typeof cigSettings.provider_keys !== 'object' || Array.isArray(cigSettings.provider_keys)) {
         cigSettings.provider_keys = {};
         settingsMigrated = true;
@@ -378,6 +395,7 @@ function updateModelDropdown() {
     toggleProviderSpecificSettings();
     renderModelManager();
     renderGallery();
+    renderAppearanceList();
 }
 
 function toggleProviderSpecificSettings() {
@@ -893,7 +911,9 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
         }
     }
 
+    const galleryId = sourceMetadata?.galleryId || `gallery:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     settings.gallery.unshift({
+        id: galleryId,
         url: url,
         prompt: prompt.substring(0, 200),
         timestamp: Date.now(),
@@ -932,10 +952,162 @@ function renderGallery() {
             .attr('data-index', i)
             .attr('title', item.prompt || '');
         $('<img>').attr('src', galleryItemSrc(item)).appendTo(thumb);
-        $('<div class="cig_gallery_item_overlay"></div>')
-            .append($('<i class="fa-solid fa-trash cig_gallery_delete"></i>').attr('data-index', i))
-            .appendTo(thumb);
+        const overlay = $('<div class="cig_gallery_item_overlay"></div>');
+        $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember appearance" aria-label="Remember appearance">')
+            .attr('data-index', i)
+            .append($('<i class="fa-solid fa-user-pen" aria-hidden="true"></i>'))
+            .appendTo(overlay);
+        $('<button type="button" class="cig_gallery_action cig_gallery_delete" title="Delete image" aria-label="Delete image">')
+            .attr('data-index', i)
+            .append($('<i class="fa-solid fa-trash" aria-hidden="true"></i>'))
+            .appendTo(overlay);
+        overlay.appendTo(thumb);
         container.append(thumb);
+    }
+}
+
+function getAppearanceIdentityChoices() {
+    const context = getContext();
+    const character = context.characters?.[context.characterId] || null;
+    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
+    const groupMembers = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
+    const chatIdentities = Object.values(extension_settings[extensionName]?.rp_library?.identities || {})
+        .filter((identity) => identity.kind === 'npc' && identity.durable === false && identity.chatId === context.chatId);
+    return listAppearanceIdentityChoices({
+        activeCharacter: character,
+        persona: { avatar: user_avatar, name: name1 || 'User' },
+        groupMembers,
+        chatIdentities,
+    });
+}
+
+function safeNpcId(chatId, name) {
+    const chatPart = String(chatId || 'chat').replace(/[^a-zA-Z0-9_-]/gu, '-').slice(0, 80);
+    const namePart = String(name || 'npc').trim().toLocaleLowerCase('und').replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 60) || 'npc';
+    return `npc:${chatPart}:${namePart}`;
+}
+
+async function chooseAppearanceIdentity() {
+    const context = getContext();
+    const choices = getAppearanceIdentityChoices();
+    const content = document.createElement('div');
+    content.className = 'cig_appearance_dialog';
+
+    const description = document.createElement('p');
+    description.textContent = 'Choose who this whole image represents. The extension will not guess from a multi-person image.';
+    content.appendChild(description);
+
+    const label = document.createElement('label');
+    label.className = 'text_label';
+    label.textContent = 'Identity';
+    const select = document.createElement('select');
+    select.className = 'text_pole';
+    select.id = 'cig_appearance_identity';
+    select.setAttribute('aria-label', 'Identity for saved appearance');
+    for (const identity of choices) {
+        const option = document.createElement('option');
+        option.value = identity.id;
+        option.textContent = identity.label;
+        select.appendChild(option);
+    }
+    const npcOption = document.createElement('option');
+    npcOption.value = '__chat_npc__';
+    npcOption.textContent = 'Named NPC in this chat…';
+    select.appendChild(npcOption);
+    label.appendChild(select);
+    content.appendChild(label);
+
+    const npcLabel = document.createElement('label');
+    npcLabel.className = 'text_label cig_appearance_npc_name';
+    npcLabel.textContent = 'NPC name';
+    npcLabel.hidden = true;
+    const npcInput = document.createElement('input');
+    npcInput.className = 'text_pole';
+    npcInput.type = 'text';
+    npcInput.maxLength = 80;
+    npcInput.placeholder = 'e.g. The guard';
+    npcInput.setAttribute('aria-label', 'Named NPC');
+    npcLabel.appendChild(npcInput);
+    content.appendChild(npcLabel);
+
+    select.addEventListener('change', () => {
+        npcLabel.hidden = select.value !== '__chat_npc__';
+        if (!npcLabel.hidden) npcInput.focus();
+    });
+
+    const popup = new Popup(content, POPUP_TYPE.TEXT, null, {
+        okButton: 'Remember',
+        cancelButton: 'Cancel',
+        animation: 'fast',
+    });
+    const result = await popup.show();
+    if (result !== POPUP_RESULT.AFFIRMATIVE) return null;
+    if (select.value === '__chat_npc__') {
+        const labelText = npcInput.value.trim();
+        if (!labelText) {
+            toastr.warning('Enter a name for the chat NPC.', 'Context Image Generation');
+            return null;
+        }
+        return {
+            id: safeNpcId(context.chatId, labelText),
+            kind: 'npc',
+            label: labelText,
+            aliases: [labelText],
+            chatId: context.chatId || null,
+            durable: false,
+        };
+    }
+    return choices.find((identity) => identity.id === select.value) || null;
+}
+
+async function rememberGalleryAppearance(index) {
+    const settings = extension_settings[extensionName];
+    const item = settings.gallery?.[index];
+    if (!item) return;
+    const identity = await chooseAppearanceIdentity();
+    if (!identity) return;
+
+    // Promote legacy gallery entries to a stable artifact key; no image bytes are copied.
+    if (!item.id) item.id = `gallery:${galleryArtifactKey(item)}`;
+    const result = addAppearanceLook(settings.rp_library, {
+        identity,
+        galleryItem: item,
+        label: item.prompt,
+    });
+    if (!result.look) {
+        toastr.warning('This gallery image cannot be remembered.', 'Context Image Generation');
+        return;
+    }
+    settings.rp_library = result.library;
+    saveSettingsDebounced();
+    renderAppearanceList();
+    toastr.success(`Saved appearance for ${identity.label}.`, 'Context Image Generation');
+}
+
+function renderAppearanceList() {
+    const settings = extension_settings[extensionName] || {};
+    const list = $('#cig_appearance_list').empty();
+    const empty = $('#cig_appearance_empty');
+    const library = migrateAppearanceLibrary(settings.rp_library);
+    const materialized = materializeAppearanceAssets(library, settings.gallery || []);
+    const available = new Set(Object.keys(materialized.assets));
+    const entries = [];
+    for (const identity of Object.values(library.identities)) {
+        for (const look of identity.looks || []) entries.push({ identity, look });
+    }
+    empty.toggle(entries.length === 0);
+    for (const { identity, look } of entries) {
+        const row = $('<div class="cig_appearance_item" role="listitem"></div>')
+            .attr('data-identity-id', identity.id)
+            .attr('data-look-id', look.id);
+        const text = $('<div class="cig_appearance_item_text"></div>');
+        $('<span>').text(`${identity.label}: ${look.label}`).appendTo(text);
+        if (!available.has(look.assetId)) $('<small>').text('Unavailable').appendTo(text);
+        $('<button type="button" class="menu_button cig_appearance_remove" title="Remove saved appearance" aria-label="Remove saved appearance">')
+            .text('Remove')
+            .appendTo(row);
+        row.prepend(text);
+        list.append(row);
     }
 }
 
@@ -1248,6 +1420,7 @@ async function clearGallery() {
     extension_settings[extensionName].gallery = [];
     saveSettingsDebounced();
     renderGallery();
+    renderAppearanceList();
     toastr.info('Gallery cleared.', 'Context Image Generation');
 }
 
@@ -1288,6 +1461,7 @@ function deleteGalleryImage(index) {
     settings.gallery.splice(index, 1);
     saveSettingsDebounced();
     renderGallery();
+    renderAppearanceList();
 }
 
 jQuery(async () => {
@@ -1416,10 +1590,25 @@ jQuery(async () => {
         viewGalleryImage(index);
     });
 
+    $(document).on('click', '.cig_gallery_remember', async function (e) {
+        e.stopPropagation();
+        const index = $(this).data('index');
+        await rememberGalleryAppearance(index);
+    });
+
     $(document).on('click', '.cig_gallery_delete', function (e) {
         e.stopPropagation();
         const index = $(this).data('index');
         deleteGalleryImage(index);
+    });
+
+    $(document).on('click', '.cig_appearance_remove', function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_appearance_item');
+        const settings = extension_settings[extensionName];
+        settings.rp_library = removeAppearanceLook(settings.rp_library, row.data('identity-id'), row.data('look-id'));
+        saveSettingsDebounced();
+        renderAppearanceList();
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {
