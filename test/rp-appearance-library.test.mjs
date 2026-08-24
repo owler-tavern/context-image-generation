@@ -7,6 +7,9 @@ import {
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
     removeAppearanceLook,
+    getProtectedGalleryArtifactIds,
+    trimGalleryToLimit,
+    setActiveAppearanceLook,
 } from '../lib/rp/appearance-library.js';
 
 const galleryItem = {
@@ -109,4 +112,41 @@ test('removing a saved look leaves the identity record valid and removes only th
     const result = removeAppearanceLook(saved, 'character:ava.png', 'look:gallery:one');
     assert.deepEqual(result.identities['character:ava.png'].looks, []);
     assert.deepEqual(result.assets, {});
+});
+
+test('chat-scoped identities are only offered for the active chat', () => {
+    const library = migrateAppearanceLibrary({ identities: {
+        'npc:chat-a:guard': { id: 'npc:chat-a:guard', kind: 'npc', label: 'Guard A', chatId: 'chat-a', durable: false },
+        'npc:chat-b:guard': { id: 'npc:chat-b:guard', kind: 'npc', label: 'Guard B', chatId: 'chat-b', durable: false },
+    } });
+    assert.deepEqual(listAppearanceIdentityChoices({ library, currentChatId: 'chat-a', chatIdentities: Object.values(library.identities) }).map((item) => item.id), ['npc:chat-a:guard']);
+});
+
+test('first saved look becomes active while later looks remain selectable but inactive', () => {
+    const first = addAppearanceLook({}, { identity: { id: 'character:ava', kind: 'character', label: 'Ava' }, galleryItem, now: 1 }).library;
+    const second = addAppearanceLook(first, { identity: { id: 'character:ava', kind: 'character', label: 'Ava' }, galleryItem: { ...galleryItem, id: 'gallery:two', url: '/two.png' }, now: 2 }).library;
+    assert.equal(second.identities['character:ava'].activeLookId, 'look:gallery:one');
+    assert.equal(buildAppearanceReferenceCandidates(second, [galleryItem, { ...galleryItem, id: 'gallery:two', url: '/two.png' }]).map((item) => item.id).join(','), 'look:gallery:one');
+    const switched = setActiveAppearanceLook(second, 'character:ava', 'look:gallery:two');
+    assert.equal(switched.identities['character:ava'].activeLookId, 'look:gallery:two');
+    assert.deepEqual(buildAppearanceReferenceCandidates(switched, [galleryItem, { ...galleryItem, id: 'gallery:two', url: '/two.png' }]).map((item) => item.id), ['look:gallery:two']);
+});
+
+test('protected gallery artifacts survive cap trimming and expose their ids', () => {
+    const library = addAppearanceLook({}, { identity: { id: 'character:ava', kind: 'character', label: 'Ava' }, galleryItem }).library;
+    assert.deepEqual([...getProtectedGalleryArtifactIds(library)], ['gallery:one']);
+    const result = trimGalleryToLimit([
+        { ...galleryItem, timestamp: 1 },
+        { id: 'gallery:two', url: '/two.png', timestamp: 2 },
+        { id: 'gallery:three', url: '/three.png', timestamp: 3 },
+    ], 1, library);
+    assert.deepEqual(result.gallery.map((item) => item.id), ['gallery:one']);
+    assert.equal(result.evictedCount, 2);
+});
+
+test('orphan gallery assets do not protect unrelated gallery items', () => {
+    const library = migrateAppearanceLibrary({ assets: {
+        'asset:orphan': { id: 'asset:orphan', source: { galleryId: 'gallery:orphan' } },
+    } });
+    assert.deepEqual([...getProtectedGalleryArtifactIds(library)], []);
 });

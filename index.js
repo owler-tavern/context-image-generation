@@ -51,6 +51,9 @@ import {
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
     removeAppearanceLook,
+    getProtectedGalleryArtifactIds,
+    trimGalleryToLimit,
+    setActiveAppearanceLook,
 } from './lib/rp/appearance-library.js';
 
 const extensionName = 'context-image-generation';
@@ -670,13 +673,12 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     }
 
     const providerId = settings.provider || 'makersuite';
-    const legacySupportsReferenceImages = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) })?.supportsReferenceImages !== false;
     const capability = getReferenceImageCapability(providerId, settings.model);
     const supportsReferenceImages = Boolean(capability);
     const referenceCandidates = [];
     const referenceAssets = {};
     const appearanceMaterial = materializeAppearanceAssets(settings.rp_library, settings.gallery || []);
-    referenceCandidates.push(...buildAppearanceReferenceCandidates(settings.rp_library, settings.gallery || []));
+    referenceCandidates.push(...buildAppearanceReferenceCandidates(settings.rp_library, settings.gallery || [], { currentChatId: getContext().chatId }));
     Object.assign(referenceAssets, appearanceMaterial.assets);
 
     if (supportsReferenceImages && settings.use_previous_image && settings.gallery?.length > 0) {
@@ -705,7 +707,7 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
         provider: { providerId, modelId: settings.model, transport: resolveProviderRoute(providerId, settings.model).transport, capabilities: { referenceImages: capability || {} } },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: getRecentMessages(settings.message_depth || 1, messageId), intent: 'scene' },
         references: referenceCandidates,
-        referenceContext: { speakerIdentityId: sender ? `character:${sender}` : null },
+        referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settings.aspect_ratio, imageSize: settings.image_size, systemInstruction: settings.system_instruction },
     });
     const materialized = materializeReferences(plan.references, { assets: referenceAssets });
@@ -807,6 +809,18 @@ async function generateLegacyLinkApiImage(settings, messages) {
     }
 
     return await requestSillyTavernImage(requestBody, { providerId: 'linkapi', modelId: settings.model });
+}
+
+function getStableSpeakerIdentityId(sender) {
+    const context = getContext();
+    if (String(sender || '').startsWith('{{user}}')) return user_avatar ? `user:${user_avatar}` : 'user:display';
+    const senderName = String(sender || '').match(/\(([^()]*)\)\s*$/u)?.[1]?.trim();
+    if (senderName) {
+        const matches = getAppearanceIdentityChoices().filter((identity) => identity.label.trim().toLocaleLowerCase('und') === senderName.toLocaleLowerCase('und'));
+        if (matches.length === 1) return matches[0].id;
+    }
+    const character = context.characters?.[context.characterId];
+    return character?.avatar ? `character:${character.avatar}` : null;
 }
 
 function getGenerationKey(prompt, messageId, target = null) {
@@ -947,9 +961,7 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
         ...(sourceMetadata ? { sourceMetadata } : {}),
     });
 
-    if (settings.gallery.length > MAX_GALLERY_SIZE) {
-        settings.gallery = settings.gallery.slice(0, MAX_GALLERY_SIZE);
-    }
+    settings.gallery = trimGalleryToLimit(settings.gallery, MAX_GALLERY_SIZE, settings.rp_library).gallery;
 
     saveSettingsDebounced();
     renderGallery();
@@ -997,13 +1009,16 @@ function getAppearanceIdentityChoices() {
     const character = context.characters?.[context.characterId] || null;
     const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
     const groupMembers = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
-    const chatIdentities = Object.values(extension_settings[extensionName]?.rp_library?.identities || {})
-        .filter((identity) => identity.kind === 'npc' && identity.durable === false && identity.chatId === context.chatId);
+    const library = extension_settings[extensionName]?.rp_library;
+    const chatIdentities = Object.values(library?.identities || {})
+        .filter((identity) => identity.kind === 'npc' && identity.durable === false);
     return listAppearanceIdentityChoices({
         activeCharacter: character,
         persona: { avatar: user_avatar, name: name1 || 'User' },
         groupMembers,
         chatIdentities,
+        library,
+        currentChatId: context.chatId,
     });
 }
 
@@ -1013,7 +1028,7 @@ function safeNpcId(chatId, name) {
     return `npc:${chatPart}:${namePart}`;
 }
 
-async function chooseAppearanceIdentity() {
+async function chooseAppearanceIdentity(defaultLabel = '') {
     const context = getContext();
     const choices = getAppearanceIdentityChoices();
     const content = document.createElement('div');
@@ -1056,6 +1071,19 @@ async function chooseAppearanceIdentity() {
     npcLabel.appendChild(npcInput);
     content.appendChild(npcLabel);
 
+    const lookLabel = document.createElement('label');
+    lookLabel.className = 'text_label';
+    lookLabel.textContent = 'Look name (optional)';
+    const lookInput = document.createElement('input');
+    lookInput.className = 'text_pole';
+    lookInput.type = 'text';
+    lookInput.maxLength = 120;
+    lookInput.value = String(defaultLabel || '').slice(0, 120);
+    lookInput.placeholder = 'e.g. Evening outfit';
+    lookInput.setAttribute('aria-label', 'Optional look name');
+    lookLabel.appendChild(lookInput);
+    content.appendChild(lookLabel);
+
     select.addEventListener('change', () => {
         npcLabel.hidden = select.value !== '__chat_npc__';
         if (!npcLabel.hidden) npcInput.focus();
@@ -1075,30 +1103,28 @@ async function chooseAppearanceIdentity() {
             return null;
         }
         return {
-            id: safeNpcId(context.chatId, labelText),
-            kind: 'npc',
-            label: labelText,
-            aliases: [labelText],
-            chatId: context.chatId || null,
-            durable: false,
+            identity: { id: safeNpcId(context.chatId, labelText), kind: 'npc', label: labelText, aliases: [labelText], chatId: context.chatId || null, durable: false },
+            label: lookInput.value.trim() || defaultLabel || 'Saved appearance',
         };
     }
-    return choices.find((identity) => identity.id === select.value) || null;
+    const identity = choices.find((entry) => entry.id === select.value) || null;
+    return identity ? { identity, label: lookInput.value.trim() || defaultLabel || 'Saved appearance' } : null;
 }
 
 async function rememberGalleryAppearance(index) {
     const settings = extension_settings[extensionName];
     const item = settings.gallery?.[index];
     if (!item) return;
-    const identity = await chooseAppearanceIdentity();
-    if (!identity) return;
+    const selection = await chooseAppearanceIdentity(item.prompt || 'Saved appearance');
+    if (!selection) return;
+    const { identity, label } = selection;
 
     // Promote legacy gallery entries to a stable artifact key; no image bytes are copied.
     if (!item.id) item.id = `gallery:${galleryArtifactKey(item)}`;
     const result = addAppearanceLook(settings.rp_library, {
         identity,
         galleryItem: item,
-        label: item.prompt,
+        label,
     });
     if (!result.look) {
         toastr.warning('This gallery image cannot be remembered.', 'Context Image Generation');
@@ -1128,7 +1154,15 @@ function renderAppearanceList() {
             .attr('data-look-id', look.id);
         const text = $('<div class="cig_appearance_item_text"></div>');
         $('<span>').text(`${identity.label}: ${look.label}`).appendTo(text);
+        if (identity.activeLookId === look.id) {
+            $('<small class="cig_appearance_active">Active</small>').appendTo(text);
+        }
         if (!available.has(look.assetId)) $('<small>').text('Unavailable').appendTo(text);
+        if (identity.activeLookId !== look.id) {
+            $('<button type="button" class="menu_button cig_appearance_use" title="Use this appearance" aria-label="Use this appearance">')
+                .text('Use')
+                .appendTo(row);
+        }
         $('<button type="button" class="menu_button cig_appearance_remove" title="Remove saved appearance" aria-label="Remove saved appearance">')
             .text('Remove')
             .appendTo(row);
@@ -1450,11 +1484,15 @@ async function clearGallery() {
         return;
     }
 
-    extension_settings[extensionName].gallery = [];
+    const settings = extension_settings[extensionName];
+    const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
+    const originalCount = settings.gallery.length;
+    settings.gallery = settings.gallery.filter((item) => !protectedIds.has(galleryArtifactKey(item)));
+    const removedCount = originalCount - settings.gallery.length;
     saveSettingsDebounced();
     renderGallery();
     renderAppearanceList();
-    toastr.info('Gallery cleared.', 'Context Image Generation');
+    toastr.info(removedCount > 0 ? `Gallery cleared. Kept ${settings.gallery.length} referenced image(s).` : 'Gallery already contains only referenced images.', 'Context Image Generation');
 }
 
 function viewGalleryImage(index) {
@@ -1491,6 +1529,12 @@ function viewGalleryImage(index) {
 
 function deleteGalleryImage(index) {
     const settings = extension_settings[extensionName];
+    const item = settings.gallery[index];
+    const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
+    if (item && protectedIds.has(galleryArtifactKey(item))) {
+        toastr.info('This image is remembered as an appearance. Remove that appearance first.', 'Context Image Generation');
+        return;
+    }
     settings.gallery.splice(index, 1);
     saveSettingsDebounced();
     renderGallery();
@@ -1644,6 +1688,15 @@ jQuery(async () => {
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
         settings.rp_library = removeAppearanceLook(settings.rp_library, row.data('identity-id'), row.data('look-id'));
+        saveSettingsDebounced();
+        renderAppearanceList();
+    });
+
+    $(document).on('click', '.cig_appearance_use', function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_appearance_item');
+        const settings = extension_settings[extensionName];
+        settings.rp_library = setActiveAppearanceLook(settings.rp_library, row.attr('data-identity-id'), row.attr('data-look-id'));
         saveSettingsDebounced();
         renderAppearanceList();
     });

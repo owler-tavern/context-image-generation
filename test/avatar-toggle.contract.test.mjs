@@ -14,7 +14,7 @@ test('uses one avatar-reference setting while retaining swipe regeneration', () 
     assert.match(index, /regenerate_on_swipe:\s*false/);
     assert.match(index, /#cig_regenerate_on_swipe/);
     assert.match(settings, /id="cig_use_avatars"/);
-    assert.match(index, /projectProviderUi\(providerId, settings\.model, \{ localEntries: getProviderModelEntries\(settings, providerId\) \}\)\?\.supportsReferenceImages !== false/);
+    assert.match(index, /getReferenceImageCapability\(providerId, settings\.model\)/);
     assert.doesNotMatch(settings, /id="cig_use_char_avatar"/);
     assert.doesNotMatch(settings, /id="cig_use_user_avatar"/);
 });
