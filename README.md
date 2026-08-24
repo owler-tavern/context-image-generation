@@ -111,6 +111,8 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 2. Click the "..." menu on any message
 3. Click the wand icon (✨) to generate an image from that message
 
+You can select a passage inside the rendered message before clicking its wand. A non-empty selection up to 600 characters becomes the primary visual moment while the surrounding message context remains available for continuity. Selections outside that message, or selections longer than the limit, fall back to the normal whole-message generation.
+
 ### Settings Panel
 
 - Select Google AI Studio or OpenRouter to use the active SillyTavern Chat Completion configuration.

@@ -34,5 +34,6 @@ test('dispatches a declarative fixture OpenAI Images provider through its config
         prompt: 'fixture scene',
         size: '1536x1024',
         baseUrl: 'https://fixture.example/v1',
+        providerId: 'fixture',
     }]);
 });

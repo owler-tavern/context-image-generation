@@ -32,6 +32,11 @@ import { fetchProviderModels } from './lib/providers/model-discovery.js';
 import { buildOpenAiImagesRequest, parseOpenAiImagesResponse } from './lib/providers/openai-images.js';
 import { dispatchProviderRoute } from './lib/providers/dispatch.js';
 import { createGenerationCoordinator } from './lib/generation-coordinator.js';
+import { buildFocusedMessageContent } from './lib/rp-selection.js';
+import { captureWandGenerationInput } from './lib/rp-wand.js';
+import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
+import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
+import { attachNormalizedProviderError, normalizeProviderError } from './lib/providers/errors.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -59,6 +64,25 @@ const defaultSettings = {
 
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createGenerationCoordinator();
+
+function showGenerationError(error, operation = 'Image generation') {
+    const settings = extension_settings[extensionName] || {};
+    const normalized = error?.category && error?.userMessage
+        ? error
+        : normalizeProviderError(error, {
+            providerId: settings.provider || 'unknown',
+            modelId: settings.model,
+        });
+    console.error(`[${extensionName}] ${operation} error:`, {
+        category: normalized.category,
+        status: normalized.status,
+        providerId: normalized.providerId,
+        modelId: normalized.modelId,
+        requestId: normalized.requestId,
+        technicalMessage: normalized.technicalMessage,
+    });
+    toastr.error(normalized.userMessage, 'Context Image Generation');
+}
 
 function getProviderApiKey(settings, providerId) {
     const providerKeys = settings.provider_keys;
@@ -152,13 +176,24 @@ async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https:
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[${extensionName}] LinkAPI image error (${response.status}):`, errorText);
         let message = `API Error: ${response.status}`;
         try {
             const j = JSON.parse(errorText);
             message = j.error?.message || j.message || message;
         } catch (e) { /* keep default */ }
-        throw new Error(message);
+        const providerError = attachNormalizedProviderError(new Error(message), {
+            providerId: 'linkapi',
+            modelId: model,
+            status: response.status,
+            responseText: errorText,
+        });
+        console.error(`[${extensionName}] LinkAPI image error:`, {
+            status: providerError.status,
+            providerId: providerError.providerId,
+            modelId: providerError.modelId,
+            technicalMessage: providerError.technicalMessage,
+        });
+        throw providerError;
     }
 
     const json = await response.json();
@@ -176,7 +211,7 @@ async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https:
     throw new Error('No image was returned by the API');
 }
 
-async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl }) {
+async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, providerId = 'unknown' }) {
     const response = await fetch(`${baseUrl}/images/generations`, {
         method: 'POST',
         headers: {
@@ -193,13 +228,24 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl }) {
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[${extensionName}] OpenAI Images error (${response.status}):`, errorText);
         let message = `API Error: ${response.status}`;
         try {
             const json = JSON.parse(errorText);
             message = json.error?.message || json.message || message;
         } catch (e) { /* keep default */ }
-        throw new Error(message);
+        const providerError = attachNormalizedProviderError(new Error(message), {
+            providerId,
+            modelId: model,
+            status: response.status,
+            responseText: errorText,
+        });
+        console.error(`[${extensionName}] OpenAI Images error:`, {
+            status: providerError.status,
+            providerId: providerError.providerId,
+            modelId: providerError.modelId,
+            technicalMessage: providerError.technicalMessage,
+        });
+        throw providerError;
     }
 
     const { b64, url: imageUrl } = parseOpenAiImagesResponse(await response.json());
@@ -233,8 +279,7 @@ async function fetchManagedProviderModels() {
         saveSettingsDebounced();
         toastr.success(`Loaded ${fetched.length} model(s).`, 'Context Image Generation');
     } catch (error) {
-        console.error(`[${extensionName}] Fetch models failed:`, error);
-        toastr.error(`Failed to fetch models: ${error.message}`, 'Context Image Generation');
+        showGenerationError(error, 'Provider model discovery');
     }
 }
 // Dev aid: reach the pure helpers from the DevTools console for verification.
@@ -518,7 +563,7 @@ function getCharacterDescriptions() {
     };
 }
 
-async function buildMessages(prompt, sender = null, messageId = null) {
+async function buildMessages(prompt, sender = null, messageId = null, focusText = null) {
     const settings = extension_settings[extensionName];
     const messages = [];
     const contentParts = [];
@@ -557,10 +602,21 @@ async function buildMessages(prompt, sender = null, messageId = null) {
                 storyContext += `[${senderTag} (${msg.name})]: ${msg.text}\n\n`;
             }
 
-            contentParts.push({ type: 'text', text: storyContext.trim() });
+            contentParts.push({
+                type: 'text',
+                text: buildFocusedMessageContent({
+                    sourceMessage: prompt,
+                    focusText,
+                    sender,
+                    storyContext: storyContext.trim(),
+                }),
+            });
         } else {
             if (sender) {
-                contentParts.push({ type: 'text', text: `[Message from ${sender}]: ${prompt}` });
+                contentParts.push({
+                    type: 'text',
+                    text: buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender }),
+                });
             } else {
                 contentParts.push({ type: 'text', text: prompt });
             }
@@ -612,7 +668,7 @@ async function buildMessages(prompt, sender = null, messageId = null) {
     return messages;
 }
 
-async function requestSillyTavernImage(requestBody) {
+async function requestSillyTavernImage(requestBody, { providerId = requestBody?.chat_completion_source || 'unknown', modelId = requestBody?.model } = {}) {
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST',
         headers: getRequestHeaders(),
@@ -621,13 +677,24 @@ async function requestSillyTavernImage(requestBody) {
 
     if (!response.ok) {
         const errorText = await response.text();
-        console.error(`[${extensionName}] API Error Response:`, errorText);
         let errorMessage = `API Error: ${response.status}`;
         try {
             const errorJson = JSON.parse(errorText);
             errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
         } catch (e) { }
-        throw new Error(errorMessage);
+        const providerError = attachNormalizedProviderError(new Error(errorMessage), {
+            providerId,
+            modelId,
+            status: response.status,
+            responseText: errorText,
+        });
+        console.error(`[${extensionName}] API error:`, {
+            status: providerError.status,
+            providerId: providerError.providerId,
+            modelId: providerError.modelId,
+            technicalMessage: providerError.technicalMessage,
+        });
+        throw providerError;
     }
 
     const result = await response.json();
@@ -688,79 +755,90 @@ async function generateLegacyLinkApiImage(settings, messages) {
         }
     }
 
-    return await requestSillyTavernImage(requestBody);
+    return await requestSillyTavernImage(requestBody, { providerId: 'linkapi', modelId: settings.model });
 }
 
-function getGenerationKey(prompt, messageId) {
-    return messageId === null || messageId === undefined ? 'prompt:' + String(prompt).trim() : 'message:' + messageId;
+function getGenerationKey(prompt, messageId, target = null) {
+    return buildGenerationKey({
+        chatId: target?.chatId ?? getContext().chatId,
+        messageId,
+        prompt,
+    });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null) {
-    return await generationCoordinator.run(getGenerationKey(prompt, messageId), () => generateImageFromPromptInternal(prompt, sender, messageId));
+async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null) {
+    return await generationCoordinator.run(
+        getGenerationKey(prompt, messageId, target),
+        () => generateImageFromPromptInternal(prompt, sender, messageId, focusText, target),
+    );
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null) {
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null) {
     const settings = extension_settings[extensionName];
-    const messages = await buildMessages(prompt, sender, messageId);
     const selectedProvider = settings.provider || 'makersuite';
+    try {
+        const messages = await buildMessages(prompt, sender, messageId, focusText);
 
-    let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
-    const localModel = getProviderModelEntries(settings, selectedProvider).find((entry) => entry.id === settings.model);
-    if (!providerRoute.model && localModel?.transport) {
-        providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transport };
-    }
+        let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
+        const localModel = getProviderModelEntries(settings, selectedProvider).find((entry) => entry.id === settings.model);
+        if (!providerRoute.model && localModel?.transport) {
+            providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transport };
+        }
 
-    if (selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true) {
-        return await generateLegacyLinkApiImage(settings, messages);
-    }
+        if (selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true) {
+            return await generateLegacyLinkApiImage(settings, messages);
+        }
 
-    if (providerRoute.provider && providerRoute.transport) {
-        return await dispatchProviderRoute({
-            route: providerRoute,
-            modelId: settings.model,
+        if (providerRoute.provider && providerRoute.transport) {
+            return await dispatchProviderRoute({
+                route: providerRoute,
+                modelId: settings.model,
+                messages,
+                prompt: extractPromptText(messages),
+                apiKey: getProviderApiKey(settings, selectedProvider),
+                aspectRatio: settings.aspect_ratio,
+                imageSize: settings.image_size,
+                isFlash2: /gemini-3\.1/.test(settings.model),
+                thinkingLevel: settings.thinking_level,
+                useGoogleSearch: settings.use_google_search,
+                mapAspectRatioToSize,
+                requestOpenAiImages,
+                requestSillyTavernImage,
+            });
+        }
+        if (requiresAdapterRoute(providerRoute)) {
+            throw new Error(`No ${providerRoute.provider.id} transport is configured for model: ${settings.model}`);
+        }
+        const isFlash2 = /gemini-3\.1/.test(settings.model);
+        const requestBody = {
+            chat_completion_source: selectedProvider,
+            model: settings.model,
             messages,
-            prompt: extractPromptText(messages),
-            apiKey: getProviderApiKey(settings, selectedProvider),
-            aspectRatio: settings.aspect_ratio,
-            imageSize: settings.image_size,
-            isFlash2: /gemini-3\.1/.test(settings.model),
-            thinkingLevel: settings.thinking_level,
-            useGoogleSearch: settings.use_google_search,
-            mapAspectRatioToSize,
-            requestOpenAiImages,
-            requestSillyTavernImage,
-        });
-    }
-    if (requiresAdapterRoute(providerRoute)) {
-        throw new Error(`No ${providerRoute.provider.id} transport is configured for model: ${settings.model}`);
-    }
-    const isFlash2 = /gemini-3\.1/.test(settings.model);
-    const requestBody = {
-        chat_completion_source: selectedProvider,
-        model: settings.model,
-        messages,
-        max_tokens: 8192,
-        temperature: 1,
-        request_images: true,
-        request_image_aspect_ratio: settings.aspect_ratio || '1:1',
-        request_image_resolution: settings.image_size || undefined,
-        stream: false,
-        reverse_proxy: oai_settings.reverse_proxy || '',
-        proxy_password: oai_settings.proxy_password || '',
-    };
+            max_tokens: 8192,
+            temperature: 1,
+            request_images: true,
+            request_image_aspect_ratio: settings.aspect_ratio || '1:1',
+            request_image_resolution: settings.image_size || undefined,
+            stream: false,
+            reverse_proxy: oai_settings.reverse_proxy || '',
+            proxy_password: oai_settings.proxy_password || '',
+        };
 
-    if (isFlash2) {
-        const thinkingLevel = settings.thinking_level || 'auto';
-        if (thinkingLevel !== 'auto') {
-            requestBody.reasoning_effort = thinkingLevel;
+        if (isFlash2) {
+            const thinkingLevel = settings.thinking_level || 'auto';
+            if (thinkingLevel !== 'auto') {
+                requestBody.reasoning_effort = thinkingLevel;
+            }
+            if (settings.use_google_search) {
+                requestBody.enable_web_search = true;
+            }
         }
-        if (settings.use_google_search) {
-            requestBody.enable_web_search = true;
-        }
-    }
 
-    console.log(`[${extensionName}] Generating image with provider: ${settings.provider}, model:`, settings.model);
-    return await requestSillyTavernImage(requestBody);
+        console.log(`[${extensionName}] Generating image with provider: ${settings.provider}, model:`, settings.model);
+        return await requestSillyTavernImage(requestBody, { providerId: selectedProvider, modelId: settings.model });
+    } catch (error) {
+        throw attachNormalizedProviderError(error, { providerId: selectedProvider, modelId: settings.model });
+    }
 }
 // Resolve the <img> src for a gallery item. Supports new file-based items ({url})
 // and legacy base64 items ({imageData}) so pre-existing galleries keep working.
@@ -789,7 +867,7 @@ async function galleryItemToDataUrl(item) {
     return null;
 }
 
-async function addToGallery(imageData, prompt, messageId = null, existingPath = null) {
+async function addToGallery(imageData, prompt, messageId = null, existingPath = null, sourceMetadata = undefined) {
     const settings = extension_settings[extensionName];
 
     if (!settings.gallery) {
@@ -813,6 +891,7 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
         prompt: prompt.substring(0, 200),
         timestamp: Date.now(),
         messageId: messageId,
+        ...(sourceMetadata ? { sourceMetadata } : {}),
     });
 
     if (settings.gallery.length > MAX_GALLERY_SIZE) {
@@ -881,15 +960,14 @@ async function generateImage() {
         }
 
     } catch (error) {
-        console.error(`[${extensionName}] Generation error:`, error);
-        toastr.error(`Failed to generate image: ${error.message}`, 'Context Image Generation');
+        showGenerationError(error);
     } finally {
         generateBtn.removeClass('generating');
         generateBtn.find('i').removeClass('fa-spinner fa-spin').addClass('fa-image');
     }
 }
 
-async function cigMessageButton($icon) {
+async function cigMessageButton($icon, { captureSelection = true } = {}) {
     const context = getContext();
 
     if ($icon.hasClass('cig_busy')) {
@@ -915,15 +993,23 @@ async function cigMessageButton($icon) {
     const charName = context.name2 || 'Character';
     const userName = name1 || 'User';
     const sender = message.is_user ? `{{user}} (${userName})` : `{{char}} (${charName})`;
+    const generationInput = captureWandGenerationInput({
+        chatId: context.chatId,
+        messageId,
+        message,
+        messageElement: messageElement[0],
+        selection: captureSelection ? document.getSelection?.() : null,
+        sender,
+        captureSelection,
+    });
 
     $icon.addClass('cig_busy');
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
-        await attachGeneratedImage(message, messageElement, prompt, sender, messageId);
+        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, generationInput.focusText, generationInput.target);
     } catch (error) {
-        console.error(`[${extensionName}] Message generation error:`, error);
-        toastr.error(`Failed to generate: ${error.message}`, 'Context Image Generation');
+        showGenerationError(error);
     } finally {
         $icon.removeClass('cig_busy fa-spinner fa-spin').addClass('fa-wand-magic-sparkles');
     }
@@ -931,37 +1017,63 @@ async function cigMessageButton($icon) {
 
 // Generate an image for a message and attach it to that message's media array.
 // Shared by the wand button and the swipe-to-regenerate handler.
-async function attachGeneratedImage(message, messageElement, prompt, sender, messageId) {
-    const result = await generateImageFromPrompt(prompt, sender, messageId);
-    if (!result) return false;
-
-    const fileName = `cig_${Date.now()}`;
-    const filePath = await saveBase64AsFile(result.imageData, extensionName, fileName, 'png');
-    console.log(`[${extensionName}] Image saved to:`, filePath);
-
-    if (!message.extra || typeof message.extra !== 'object') {
-        message.extra = {};
-    }
-    if (!Array.isArray(message.extra.media)) {
-        message.extra.media = [];
-    }
-    if (!message.extra.media_display) {
-        message.extra.media_display = MEDIA_DISPLAY.GALLERY;
-    }
-
-    message.extra.media.push({
-        url: filePath,
-        type: MEDIA_TYPE.IMAGE,
-        title: prompt.substring(0, 100),
-        source: MEDIA_SOURCE.GENERATED,
+async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null) {
+    const effectiveTarget = target || captureMessageTarget({
+        chatId: getContext().chatId,
+        messageId,
+        message,
     });
-    message.extra.media_index = message.extra.media.length - 1;
-    message.extra.inline_image = true;
+    let currentMessageElement = null;
 
-    appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
-    await saveChatConditional();
-    await addToGallery(result.imageData, prompt, messageId, filePath);
-    return true;
+    return await attachGeneratedImageSafely({
+        target: effectiveTarget,
+        prompt,
+        sender,
+        focusText,
+        generate: () => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget),
+        saveImage: async (imageData) => {
+            const fileName = `cig_${Date.now()}`;
+            const filePath = await saveBase64AsFile(imageData, extensionName, fileName, 'png');
+            console.log(`[${extensionName}] Image saved to:`, filePath);
+            return filePath;
+        },
+        getCurrentTarget: () => {
+            const currentContext = getContext();
+            const validation = validateMessageTarget({
+                target: effectiveTarget,
+                currentChatId: currentContext.chatId,
+                currentChat: currentContext.chat,
+            });
+            if (!validation.safe) return validation;
+            currentMessageElement = $(`.mes[mesid="${messageId}"]`);
+            if (currentMessageElement.length === 0) return { safe: false, reason: 'unavailable' };
+            return validation;
+        },
+        appendMedia: ({ result, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
+            if (!currentMessage.extra || typeof currentMessage.extra !== 'object') {
+                currentMessage.extra = {};
+            }
+            if (!Array.isArray(currentMessage.extra.media)) {
+                currentMessage.extra.media = [];
+            }
+            if (!currentMessage.extra.media_display) {
+                currentMessage.extra.media_display = MEDIA_DISPLAY.GALLERY;
+            }
+
+            currentMessage.extra.media.push({
+                url: savedPath,
+                type: MEDIA_TYPE.IMAGE,
+                title: sourcePrompt.substring(0, 100),
+                source: MEDIA_SOURCE.GENERATED,
+            });
+            currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
+            currentMessage.extra.inline_image = true;
+            appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+        },
+        saveChat: saveChatConditional,
+        addToGallery,
+        notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
+    });
 }
 
 // Regenerate a fresh variation when the user swipes RIGHT past the last image of
@@ -991,8 +1103,7 @@ async function onCigImageSwiped({ message, element, direction }) {
         messageMedia.addClass('fa-fade');
         await attachGeneratedImage(message, element, message.mes, sender, messageId);
     } catch (error) {
-        console.error(`[${extensionName}] Swipe-regenerate error:`, error);
-        toastr.error(`Failed to regenerate: ${error.message}`, 'Context Image Generation');
+        showGenerationError(error, 'Swipe regeneration');
     } finally {
         messageMedia.removeClass('fa-fade');
     }
@@ -1015,7 +1126,7 @@ async function autoGenerateForMessage(messageId) {
         const $icon = messageElement.find('.cig_message_gen');
         if ($icon.length > 0 && !$icon.hasClass('cig_busy')) {
             console.log(`[${extensionName}] Auto-generating image for message ${messageId}`);
-            cigMessageButton($icon);
+            cigMessageButton($icon, { captureSelection: false });
         }
     }, 200);
 }
@@ -1039,8 +1150,7 @@ async function slashCommandHandler(args, prompt) {
             return imageDataUrl;
         }
     } catch (error) {
-        console.error(`[${extensionName}] Slash command generation error:`, error);
-        toastr.error(`Failed to generate: ${error.message}`, 'Context Image Generation');
+        showGenerationError(error, 'Slash command generation');
     }
 
     return '';

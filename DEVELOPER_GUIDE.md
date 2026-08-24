@@ -144,3 +144,5 @@ The Model Manager now records the route for a manually added model. For provider
 TokenReply model discovery keeps only `grok-imagine-image*` IDs. A model-list response containing ordinary chat models therefore cannot add them to the image-model selector.
 
 Generation requests are coordinated by their target. Starting the same message or prompt again while it is already in progress is rejected before a second provider request is sent.
+
+RP message generation captures selected plain text synchronously from the existing message wand. The focus limit is 600 normalized characters; cross-message/control selections fall back to whole-message generation. Message attachment uses the current SillyTavern chat ID plus a message fingerprint to reject stale results, retaining an unsafe result in the extension gallery instead of writing another chat. Provider failures use the normalized category/user-message contract and redacted technical diagnostics across wand, settings, slash, auto, swipe, and model discovery paths.
