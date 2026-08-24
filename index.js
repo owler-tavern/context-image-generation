@@ -25,7 +25,7 @@ import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR, SWIPE_DIRECTI
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
-import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getProviderDefinitions, requiresAdapterRoute } from './lib/providers/registry.js';
+import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
 import { getModelFallback, projectProviderControls, projectProviderOptions, projectProviderUi } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries } from './lib/providers/model-manager.js';
 import { fetchProviderModels } from './lib/providers/model-discovery.js';
@@ -39,6 +39,8 @@ import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from 
 import { attachNormalizedProviderError, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createOperationState } from './lib/operation-state.js';
+import { createGenerationPlan } from './lib/generation-plan.js';
+import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -589,7 +591,7 @@ function getCharacterDescriptions() {
     };
 }
 
-async function buildMessages(prompt, sender = null, messageId = null, focusText = null) {
+async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation = 'settings') {
     const settings = extension_settings[extensionName];
     const messages = [];
     const contentParts = [];
@@ -652,42 +654,50 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     }
 
     const providerId = settings.provider || 'makersuite';
-    const supportsReferenceImages = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) })?.supportsReferenceImages !== false;
+    const legacySupportsReferenceImages = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) })?.supportsReferenceImages !== false;
+    const capability = getReferenceImageCapability(providerId, settings.model);
+    const supportsReferenceImages = Boolean(capability);
+    const referenceCandidates = [];
+    const referenceAssets = {};
+    const appearanceMaterial = materializeAppearanceAssets(settings.rp_library, settings.gallery || []);
+    referenceCandidates.push(...buildAppearanceReferenceCandidates(settings.rp_library, settings.gallery || []));
+    Object.assign(referenceAssets, appearanceMaterial.assets);
 
-    if (supportsReferenceImages && settings.use_previous_image && settings.gallery && settings.gallery.length > 0) {
-        const dataUrl = await galleryItemToDataUrl(settings.gallery[0]);
+    if (supportsReferenceImages && settings.use_previous_image && settings.gallery?.length > 0) {
+        const previous = settings.gallery[0];
+        const dataUrl = await galleryItemToDataUrl(previous);
         if (dataUrl) {
-            console.log(`[${extensionName}] Adding previous generated image as reference`);
-            contentParts.push({ type: 'text', text: '[Reference: Previously generated image for style consistency]' });
-            contentParts.push({
-                type: 'image_url',
-                image_url: { url: dataUrl },
-            });
+            referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
+            referenceAssets['asset:legacy-previous'] = { url: dataUrl, mimeType: 'image/png' };
         }
     }
-
     if (supportsReferenceImages && settings.use_avatars) {
         const charAvatarData = await getCharacterAvatar();
         if (charAvatarData) {
-            console.log(`[${extensionName}] Adding character avatar for: ${charAvatarData.name}`);
-            contentParts.push({ type: 'text', text: `[Reference image for {{char}}]` });
-            contentParts.push({
-                type: 'image_url',
-                image_url: { url: `data:${charAvatarData.mimeType};base64,${charAvatarData.data}` },
-            });
+            referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: charAvatarData.name || 'character' });
+            referenceAssets['asset:host-character'] = { data: charAvatarData.data, mimeType: charAvatarData.mimeType };
         }
-    }
-
-    if (supportsReferenceImages && settings.use_avatars) {
         const userAvatarData = await getUserAvatar();
         if (userAvatarData) {
-            console.log(`[${extensionName}] Adding user avatar for: ${userAvatarData.name}`);
-            contentParts.push({ type: 'text', text: `[Reference image for {{user}}]` });
-            contentParts.push({
-                type: 'image_url',
-                image_url: { url: `data:${userAvatarData.mimeType};base64,${userAvatarData.data}` },
-            });
+            referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: userAvatarData.name || 'user' });
+            referenceAssets['asset:host-user'] = { data: userAvatarData.data, mimeType: userAvatarData.mimeType };
         }
+    }
+    const plan = createGenerationPlan({
+        id: `generation:${providerId}:${settings.model}:${messageId ?? 'prompt'}`,
+        invocation,
+        provider: { providerId, modelId: settings.model, transport: resolveProviderRoute(providerId, settings.model).transport, capabilities: { referenceImages: capability || {} } },
+        prompt: { sourceMessage: prompt, focusText, nearbyMessages: getRecentMessages(settings.message_depth || 1, messageId), intent: 'scene' },
+        references: referenceCandidates,
+        referenceContext: { speakerIdentityId: sender ? `character:${sender}` : null },
+        options: { aspectRatio: settings.aspect_ratio, imageSize: settings.image_size, systemInstruction: settings.system_instruction },
+    });
+    const materialized = materializeReferences(plan.references, { assets: referenceAssets });
+    for (const reference of materialized.references) {
+        contentParts.push({ type: 'text', text: `[Reference image: ${reference.label || reference.role}]` });
+        const asset = reference.asset;
+        const url = asset.url || `data:${asset.mimeType || 'image/png'};base64,${asset.data}`;
+        contentParts.push({ type: 'image_url', image_url: { url } });
     }
 
     messages.push({ role: 'user', content: contentParts });
@@ -791,18 +801,18 @@ function getGenerationKey(prompt, messageId, target = null) {
     });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null) {
+async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
     return await generationCoordinator.run(
         getGenerationKey(prompt, messageId, target),
-        () => generateImageFromPromptInternal(prompt, sender, messageId, focusText, target),
+        () => generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation),
     );
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null) {
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
     const settings = extension_settings[extensionName];
     const selectedProvider = settings.provider || 'makersuite';
     try {
-        const messages = await buildMessages(prompt, sender, messageId, focusText);
+        const messages = await buildMessages(prompt, sender, messageId, focusText, invocation);
 
         let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const localModel = getProviderModelEntries(settings, selectedProvider).find((entry) => entry.id === settings.model);
@@ -1146,7 +1156,7 @@ async function generateImage() {
     }
 }
 
-async function cigMessageButton($icon, { captureSelection = true, generationInput = null } = {}) {
+async function cigMessageButton($icon, { captureSelection = true, generationInput = null, invocation = 'wand' } = {}) {
     const context = getContext();
 
     if ($icon.hasClass('cig_busy')) {
@@ -1186,7 +1196,7 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
-        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, capturedInput.focusText, capturedInput.target);
+        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, capturedInput.focusText, capturedInput.target, invocation);
     } catch (error) {
         showGenerationError(error);
     } finally {
@@ -1196,7 +1206,7 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
 
 // Generate an image for a message and attach it to that message's media array.
 // Shared by the wand button and the swipe-to-regenerate handler.
-async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null) {
+async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null, invocation = 'wand') {
     const effectiveTarget = target || captureMessageTarget({
         chatId: getContext().chatId,
         messageId,
@@ -1209,7 +1219,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         prompt,
         sender,
         focusText,
-        generate: () => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget),
+        generate: () => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation),
         saveImage: async (imageData) => {
             const fileName = `cig_${Date.now()}`;
             const filePath = await saveBase64AsFile(imageData, extensionName, fileName, 'png');
@@ -1318,7 +1328,7 @@ async function onCigImageSwiped({ message, element, direction }) {
 
     try {
         messageMedia.addClass('fa-fade');
-        await attachGeneratedImage(message, element, message.mes, sender, messageId);
+        await attachGeneratedImage(message, element, message.mes, sender, messageId, null, null, 'swipe');
     } catch (error) {
         showGenerationError(error, 'Swipe regeneration');
     } finally {
@@ -1348,6 +1358,7 @@ async function autoGenerateForMessage(messageId) {
             console.log(`[${extensionName}] Auto-generating image for message ${messageId}`);
             cigMessageButton($icon, {
                 captureSelection: false,
+                invocation: 'automation',
                 generationInput: { ...autoInput, message: validation.message, focusText: null },
             });
         }
@@ -1363,7 +1374,7 @@ async function slashCommandHandler(args, prompt) {
     }
 
     try {
-        const result = await generateImageFromPrompt(trimmedPrompt, null, null);
+        const result = await generateImageFromPrompt(trimmedPrompt, null, null, null, null, 'slash');
 
         if (result) {
             const imageDataUrl = `data:${result.mimeType};base64,${result.imageData}`;
