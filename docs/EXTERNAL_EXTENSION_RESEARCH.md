@@ -1,188 +1,167 @@
-# External Extension Research: Provider Architecture and Product Learnings
+# Image-Generation Extension Ecosystem Research
 
-**Status:** Research snapshot, not an implementation plan
-**Date:** 2026-07-28
-**Purpose:** Preserve what this fork can learn from comparable SillyTavern image-generation extensions before changing its provider architecture.
+**Status:** Living research record; source evidence, not release verification
 
-## Scope and evidence
+**Last updated:** 2026-08-24
 
-This document reviews two external repositories as they were publicly available on the date above:
+**Purpose:** Preserve product, architecture, security, and UX lessons from comparable SillyTavern image-generation projects and international community patterns. Feature commitments and sequencing live in [ROADMAP.md](ROADMAP.md).
 
-- [Pawtrait](https://github.com/ThatGirl-me/Pawtrait)
-- [Quick Image Gen](https://github.com/platberlitz/sillytavern-image-gen)
+## Evidence rules
 
-It records observable repository behavior and documentation. It does not claim that either project's live providers, APIs, or current releases have been independently exercised here. No external code is copied into this repository.
+- **Verified in source** means the behavior was found in repository code.
+- **Documented claim** means a README/community source claims it, but it was not exercised.
+- **Observed locally** means it was checked in this extension or local SillyTavern UI.
+- **Not tested** means no live provider, mobile, image-quality, or end-to-end run was performed.
+- Repository snapshots can change; commit-pinned links are used where captured.
+- No external code was copied. Ideas must be independently implemented and licenses respected.
 
-## Current extension baseline
+## Current-extension findings
 
-This extension remains intentionally small: a browser-side SillyTavern extension with a thin integration file, one settings template, one stylesheet, focused Node contract tests, and small provider modules. LinkAPI has two distinct transports:
+### Fetch Models visibility
 
-1. Gemini-compatible routing through SillyTavern's chat-completions backend with a request-scoped proxy override.
-2. A direct browser OpenAI Images API request for `gpt-image*` and `dall-e*` models.
+Observed locally on SillyTavern port 8001: LinkAPI's control exists but is nested inside the collapsed **Manage models** disclosure. A user can reasonably conclude it is absent. This is a discoverability defect, not merely a documentation problem.
 
-That split led to the current curated registry and pure adapter helpers. A new provider must not lead to copied UI, credential, model-list, and generation branches throughout `index.js`.
+Discovery also assumes an OpenAI-style `/models` response and is enabled only for selected providers. A returned ID does not prove image generation, references, editing, sizes, aspect ratios, multiple outputs, or transport support.
 
-## Implementation status after this research
+### Provider and secret boundary
 
-The extension now has a deliberately limited first adapter slice:
+The extension has two LinkAPI transports: Gemini-compatible SillyTavern proxy and direct OpenAI Images. TokenReply is experimental. LinkAPI/TokenReply credentials are held in browser-side extension settings. Server-managed secrets are safer, but migration needs compatibility and rollback planning.
 
-- `lib/providers/registry.js` defines LinkAPI and TokenReply provider/model contracts and resolves `sillyTavernGeminiProxy` or `openAiImages` transport.
-- `lib/providers/gemini-proxy.js` preserves LinkAPI's request-scoped SillyTavern Gemini proxy shape.
-- `lib/providers/openai-images.js` constructs minimal OpenAI Images payloads and normalizes base64 or URL responses.
-- `provider_keys` separates provider credentials while mirroring the legacy LinkAPI key for rollback compatibility.
-- LinkAPI has a manual-only advanced legacy route for recovery; it is never an automatic retry.
-- TokenReply `grok-imagine-image` and `grok-imagine-image-quality` are implemented only as an Experimental, text-only profile. No live provider generation was recorded in this work.
+## Projects reviewed
 
-The authoritative release status and evidence rules live in [PROVIDER_CATALOG.md](PROVIDER_CATALOG.md).
+| Project | Primary lesson | Evidence boundary |
+| --- | --- | --- |
+| [Quick Image Gen](https://github.com/platberlitz/sillytavern-image-gen) | Provider architecture, connection/preset separation, custom API safety | Source/docs reviewed previously; no live UAT |
+| [Pawtrait](https://github.com/ThatGirl-me/Pawtrait) | Curated provider registry, per-provider credentials, capability-driven UX | Source/docs reviewed previously; no live UAT |
+| [SLAYimages](https://github.com/wewwaistyping/SLAYimages) | Character/NPC/wardrobe continuity | `main` reviewed 2026-08-24; no live UAT |
+| [IkarusAutoImage](https://github.com/IkarusV/IkarusAutoImage) | Tag automation and gallery workflows | `main` reviewed 2026-08-24; no live UAT |
+| [Image Generation Suite](https://github.com/maiky93/image-generation-suite/tree/9db8b7dad2a40b2ccc47402cd6bb3de6959b6298) | ComfyUI/A1111 discovery, profiles, LoRAs | `9db8b7d`; syntax checked; no live UAT |
+| [0cyris ImageGen](https://github.com/0cyris/SillyTavern-ImageGen/tree/ea470ddfe8116fa573867cfd645bf413e31b1939) | Provider breadth, prompt profiles, capabilities, cancellation | `ea470dd`; syntax checked; no live UAT |
+| [Contextual Scene Painter](https://github.com/i5031337/sillytavern-contextual-scene-painter/tree/2c3cd30fb53def280ccb90db5a8a7959cfb043fa) | Context selection, anchoring, scene/background tasks | `2c3cd30`; no live UAT |
+| [Picture Prompt](https://github.com/RetroVioletRed/SillyTavern-PicturePrompt/tree/5aa5631d31f1b8d9e0fff7da1b4e7a2b8ebe70f8) | Plan-first references, storage, diagnostics | `5aa5631`; no live UAT; AGPL-3.0 |
+| [SD Proxy](https://github.com/platberlitz/sd-proxy) | Server-side multi-backend normalization, queues, progress, local-network access | `main` reviewed 2026-08-24; no deployment/provider UAT |
 
-## Pawtrait: useful ideas and limits
+## Detailed lessons
 
-Pawtrait presents itself as a multi-provider extension supporting NanoGPT, OpenRouter, LinkAPI, Pollinations, and custom OpenAI-compatible endpoints. Its implementation includes a provider-configuration function, per-provider API keys, fetched model lists, model/runtime profiles, and provider/model transport dispatch.
+### Quick Image Gen
 
-### What to learn
+Borrow connection/credential separation from portable generation recipes; capability contracts; bounded declarative custom APIs; visible readiness, prompt review, cancellation, and diagnostics; bounded redirects, response sizes, and polling; modular source and tests. Do not import its full batch/style/workflow scope into this focused extension.
 
-- **Provider configuration belongs in one registry.** A provider should declare its identity, endpoints, model-discovery behavior, authentication requirements, and default transport in one place.
-- **Credentials should be per provider.** Switching provider should reveal that provider's saved key, rather than overwrite one global key.
-- **Capability drives UX.** Reference-image support, aspect-ratio choices, image-size controls, and transport decisions should derive from a model/profile capability object, not a brand-name condition scattered in UI handlers.
-- **Runtime logging needs redaction.** Pawtrait sanitizes credentials and base64 image data before rendering logs. This is valuable for support and debugging without exposing secrets or huge payloads.
-- **Legacy settings need explicit migration.** Its provider-key migration demonstrates the right general rule: add a stable new structure, migrate once, retain compatibility only as long as necessary, then document it.
+### Pawtrait
 
-### What not to copy
+Borrow centralized provider definitions, per-provider keys, capability-driven controls, redacted diagnostics, and explicit legacy migration. Do not treat model-name heuristics or arbitrary endpoints as authoritative/safe.
 
-- Pawtrait's main implementation is a large, densely coupled file. The registry, model heuristics, UI state, transports, and advanced image tooling are not cleanly isolated. Copying its shape would replace our current small extension with another monolith.
-- Its model-family heuristics are useful only as a fallback. Model IDs are provider-controlled strings and should not be the sole source of truth for reference-image or payload support.
-- A generic custom endpoint is not automatically safe or supportable merely because it is convenient.
+### SLAYimages
 
-## Quick Image Gen: useful ideas and limits
+Source confirms structured inline instructions, character/user/NPC aliases, wardrobe references, multiple looks, cropping, deduplication, reference-aware cleanup, persistent error placeholders, bounded transient retries, mobile transport handling, and `/v1/models` discovery. It sends only real references for characters mentioned in the prompt, with deterministic priority and a five-image cap.
 
-Quick Image Gen (QIG) has a substantially broader product scope: 18 backends, custom APIs, connection profiles, presets, contextual prompting, local generation, batch/automation workflows, documentation, tests, and an optional server plugin.
+Borrow typed reference roles, alias-aware identities, reference-safe deletion, in-flight guards, persistent failures, and mobile handling. Avoid its approximately 8,000-line monolith, concurrent paid `Promise.all`, absent general Cancel, browser-stored keys/recovery data, silent full-context helper calls, and unresolved AGPL documentation mismatch.
 
-### Architecture and product lessons
+### IkarusAutoImage
 
-- **Separate connection from recipe.** QIG keeps provider credentials/model configuration in connection profiles and portable generation settings in presets. For this extension, that means provider endpoints and keys should eventually be separate from prompt/style/image settings.
-- **Treat a provider as a capability contract.** QIG exposes provider-specific route modes, payload modes, reference-image modes, and output controls. This confirms that "proxy" is not one universal behavior.
-- **Make configuration status visible.** Its UI summarizes the active provider/model and flags incomplete configuration. Our provider selector should eventually show a precise readiness state: no key, invalid endpoint, no selected model, or unsupported model capability.
-- **Keep primary workflow simple.** QIG puts the core generation controls first and reveals advanced configuration progressively. We should retain this extension's focused panel rather than surface every adapter option at once.
-- **Review and cancel are product features.** Editable prompt stages and cancellation are valuable future ideas, but are not prerequisites for the provider refactor.
-- **Use modular source and automated tests at scale.** QIG has `lib/`, `tests/`, `docs/`, a package manifest, and optional server-plugin boundaries. If this extension expands beyond a few adapters, extract provider code into modules with contract tests rather than growing `index.js`.
+Source confirms configurable `[pic prompt="..."]` detection, malformed-tag normalization, main-response/separate-planner modes, injection positions, transformation rules, stable avatar-filename keys, multiple insertion modes, and per-chat gallery. Generation delegates to SillyTavern `/sd`.
 
-### Custom API lessons
+Borrow optional planning, stable character keys/migration, tag repair/retrigger, and gallery prompt metadata. Avoid short-lived dedupe, duplicate-prone rescans, temporary chat mutation, and Stop controls that cannot abort active work.
 
-QIG's most relevant design is its declarative Custom API feature:
+### Image Generation Suite
 
-- Request mappings are JSON data, not executable scripts.
-- Supported transport patterns are explicit: OpenAI-compatible image requests, simple JSON REST, multipart upload, and bounded async job polling.
-- JSON Pointer paths describe response extraction.
-- Credentials are stored separately from request templates.
-- Templates cannot embed credentials.
-- Browser-direct requests require CORS support.
-- Redirects, unbounded response sizes, and unbounded polling are rejected or limited.
-- Sensitive custom definitions are excluded from portable exports/imports so imported presets cannot silently redirect a local credential.
+Source confirms modular components, ComfyUI/A1111 discovery, model/VAE/sampler/scheduler/workflow listing, workflow placeholders, nested profiles, regex triggers, manual retrigger, and optional LLM LoRA selection.
 
-Those are strong boundary rules. They should be adopted if this extension ever exposes arbitrary custom endpoints.
+Borrow workflow templates, shared profile components, raw/resolved prompt persistence, and manual recovery. Avoid imported raw-HTML interpolation, credential-bearing exports, full-prompt logging, unused abort signals, silent external classification, unbounded caches, and non-idempotent automation.
 
-### What not to copy yet
+### 0cyris SillyTavern-ImageGen
 
-Do not turn this extension into QIG. Its local A1111/ComfyUI support, batch renderer, style catalog, prompt modes, inject mode, custom workflow execution, and optional server plugin are separate products with separate risk and test burdens. The immediate goal is provider extensibility for the existing Context Image Generation workflow.
+Source confirms broad providers, parallel resource loading, dedicated prompt profiles using their completion presets, dry-run World Info, mode-specific context/reference policies, capability metadata, stoppable loader, abort propagation through most paths, swipe cancellation, and stale-chat checks.
 
-## Recommended target architecture
+Borrow independent prompt profiles, separate prompt-model/image-model reference controls, capability metadata, per-run controllers, stale guards, server secrets, reference validation, and build-artifact verification. Avoid abort-triggered fallback, server work continuing after client cancellation, discarded multi-image outputs, premature migration markers, and monolithic dispatch.
 
-Adopt a small provider-adapter registry with two initial protocol families and an escape hatch for a future native adapter.
+### Contextual Scene Painter
+
+Source confirms `/drawscene`/`/drawbg`, message anchoring, selectable context, SillyTavern World Info selection, natural-language/tag presets, token budgets, prompt review, serialized profile switching, and background persistence.
+
+Borrow task modes, anchoring, native World Info selection, approval, and serialized restoration. Avoid treating XML delimiters as injection defense, missing lifecycle/error controls, false success without artifacts, and global event mutation for request settings.
+
+### Picture Prompt
+
+This project injects visual context rather than generating images. Its key contribution is one plan selecting avatars, gallery, and lorebook images with labels, caps, detail, and placement; that plan drives injection, estimates, and diagnostics. Source also confirms IndexedDB blobs, quota reporting, repair, preprocessing, import/export, lifecycle cleanup, and status commands.
+
+Borrow one-plan/multiple-consumer architecture, per-source controls, IndexedDB, upload validation, preflight/post-run indicators, and lifecycle cleanup. Avoid uncancellable fetches, ambiguous empty caches, substring routing, missing idempotency, weak import atomicity, and direct code reuse under AGPL-3.0.
+
+### SD Proxy
+
+SD Proxy is a standalone Express service and dashboard exposing an OpenAI-compatible image API over many remote and local backends. Source and documentation show server-side provider normalization, A1111/ComfyUI access, queue/history/gallery/cost APIs, session-scoped progress/log streams, local interruption, model proxying, reverse-proxy endpoints, and login protection.
+
+This server boundary is valuable for work a browser extension cannot safely or reliably own: CORS-restricted calls, loopback/local-network backends, provider secrets, long-running job polling, authoritative queues, upstream cancellation, response-size enforcement, and SSRF controls. Its loopback URL restriction and model-proxy host controls are sound directions.
+
+It should not become a mandatory second application for this extension's basic hosted-provider workflow. A standalone service adds another process, port, login/session, data store, configuration surface, updater, health check, log location, and failure domain. SD Proxy also currently defaults to `admin/admin` and a fixed session secret when environment values are absent, accepts JSON bodies up to 100 MB, and keeps substantial routing in one large server file. Those defaults are acceptable only for explicit local development, never for an automatically exposed service.
+
+Architectural lesson: use a **hybrid optional server adapter**. Keep context selection, `GenerationPlan`, capability UX, message attachment, and gallery integration in the SillyTavern extension. Put only privileged/network/runtime responsibilities behind a narrow SillyTavern server plugin or optional companion service. Hosted providers may continue through supported SillyTavern/native routes; local backends, secret-bearing direct providers, async jobs, and cross-origin discovery can opt into the server adapter. The client and server must share a versioned protocol and normalized result/error contract.
+
+## International ecosystem findings
+
+Public discovery was uneven; these findings are directional, not a complete census.
+
+- **Chinese-language spaces:** recurring interest in ComfyUI, structured tag prompts, post-narrative automation, mutually exclusive modes, and reusable workflows. Favor explicit trigger policies, visible queues, and typed prompt inputs.
+- **Korean-language spaces:** publicly indexed SillyTavern material was sparse. Accessible setup, local backends, and fewer hidden steps reinforce localized onboarding and configuration diagnostics; evidence is insufficient for a distinct feature standard.
+- **Japanese-language spaces:** local/private prompt transformation, tag workflows, and fine conversion control support local-first planning and inspectable natural-language/tag transforms.
+- **Russian-language spaces:** strong patterns include per-message state, cancellation, classified errors, and ranked reference/lore selection. SLAYimages adds deep identity/wardrobe handling and bilingual docs.
+- **Spanish/other localized spaces:** localized installation guidance and examples reduce support load. Internationalization should cover UI, provider errors, and docs.
+
+## Cross-project principles
+
+1. **Discovery is not capability.** Normalize model lists and annotate evidence-backed capabilities.
+2. **One request plan.** Preview, validation, dispatch, persistence, retry, and diagnostics consume the same plan.
+3. **One run coordinator.** Every paid run has an ID, controller, state, concurrency policy, and stale guard.
+4. **References are typed assets.** Character, persona, NPC, outfit, lore, and prior-scene assets need role, priority, limit, and provenance.
+5. **Secrets belong server-side where possible.** Never include them in portable presets or diagnostics.
+6. **Outbound context is visible.** Show which text/images go to which provider.
+7. **Automation is opt-in and idempotent.** Repeated events must not repeat paid work.
+8. **Success means persisted artifact.** Completion follows normalization, storage, and correct attachment.
+9. **Mobile and cancellation are lifecycle requirements.**
+10. **Respect licenses.** Independently implement AGPL-derived ideas unless obligations are deliberately adopted.
+11. **Server boundaries are capability-driven.** Do not require a companion service where SillyTavern already provides a safe route; do not force privileged work into the browser merely to avoid one.
+
+## Product North Star and scope filter
+
+The research catalogue is intentionally broader than the planned product. The North Star is: **during roleplay, click the image-generation button and receive a contextually appropriate image**. Provider breadth, reference systems, diagnostics, automation, and backend engineering are valuable only when they preserve or improve that simple interaction.
+
+Near-term provider work is limited to hosted services. ComfyUI, A1111, Forge, local checkpoints, LoRAs, ControlNet, and workflow execution remain useful research sources but are outside the current planning horizon. Their presence in reviewed projects is not a commitment to expose them in this extension.
+
+Feature evaluation follows progressive disclosure:
+
+- Primary roleplay surface: one obvious Generate action and clear progress/result.
+- Selected-text variation: highlighting part of a roleplay message makes that passage the primary image subject; the same wand is used and nearby context still supplies characters, location, and continuity.
+- Normal setup: provider, credential, automatic connection/model retrieval, ready state.
+- Advanced: custom hosted-provider format, endpoint details, capability overrides, diagnostics.
+- Internal only: adapter selection, request normalization, queues, retry policy, and capability evidence mechanics.
+
+## Target architecture
 
 ```text
-selected provider + selected model
-          |
-          v
-provider definition + model capability
-          |
-          +-- OpenAI Images adapter
-          +-- Gemini-compatible proxy adapter
-          +-- Native adapter (only when neither contract fits)
+Context selection + typed references
+                 |
+          GenerationPlan
+                 |
+        capability validation
+                 |
+       provider adapter registry
+                 |
+          RunCoordinator
+                 |
+     normalized artifact/error
+                 |
+ message attachment + gallery + diagnostics
 ```
 
-A provider definition should be data-first and should not contain UI logic:
+Provider definitions own discovery, authentication mode, transports, and normalization. Model entries own capability claims and evidence. The plan owns intent. The coordinator owns time, cancellation, idempotency, and persistence boundaries.
 
-```js
-{
-  id: 'linkapi',
-  label: 'LinkAPI',
-  credentials: { kind: 'apiKey', storageKey: 'linkapi' },
-  models: {
-    builtIn: [...],
-    discovery: { endpoint: '...', filter: ... },
-  },
-  transports: {
-    geminiProxy: { baseUrl: 'https://api.linkapi.ai' },
-    openAiImages: { baseUrl: 'https://linkapi.ai/v1' },
-  },
-}
-```
+## Research gaps
 
-A model capability should select transport and constrain the UI:
+- Live LinkAPI and TokenReply model/request verification with non-production keys.
+- Browser/mobile UAT for the six newly reviewed projects.
+- Current SillyTavern server-secret integration design for third-party extensions.
+- Provider pricing/cost-estimate availability.
+- Measured generation-quality comparisons.
+- Broader discovery in private or poorly indexed Asian communities.
 
-```js
-{
-  transport: 'openAiImages' | 'geminiProxy' | 'native',
-  supportsReferenceImages: boolean,
-  aspectRatios: ['1:1', '3:4', ...],
-  imageSizes: [...],
-}
-```
-
-The adapter owns request construction, response parsing, and normalized errors. The rest of the extension receives the existing normalized result:
-
-```js
-{ imageData, mimeType }
-```
-
-## Configuration policy
-
-1. Start with curated provider definitions. Every addition has a documented endpoint, authentication form, model-discovery behavior, supported request family, and browser/CORS verification.
-2. Provide a generic **OpenAI-compatible image endpoint** only after the adapter contract and validation exist.
-3. Do not initially accept arbitrary endpoint behavior or arbitrary JavaScript request transforms.
-4. If a broader custom API is added later, use declarative JSON templates and typed response pointers, never user-supplied executable code.
-5. Store secrets separately from portable presets. Do not include credentials in logs, exports, image metadata, or imported configuration.
-6. Make endpoint mode explicit where inference is ambiguous: `images/generations` versus `chat/completions`, and strict OpenAI payload versus a documented extended payload.
-7. Treat third-party model lists and response objects as untrusted input. Sanitize model names for rendering and validate data before using it.
-
-## Test and verification implications
-
-Every adapter needs contract tests independent of a live key:
-
-- Given a provider definition and model capability, verify the selected adapter and request URL.
-- Verify the request body and headers never place an API key in logs or prompt text.
-- Verify a direct Images response with base64 and one with a URL normalize to the same result.
-- Verify model discovery cannot inject HTML into the selector.
-- Verify settings migrations preserve a user's selected provider, model, and credential association.
-- Verify unsupported reference images are visibly disabled or excluded from requests.
-- Add a manual browser checklist for each provider: settings, model discovery, successful generation, error rendering, reload persistence, and Network-tab route confirmation.
-
-A live-provider success is release evidence for that provider only; it does not prove all adapters work.
-
-## Product and UX backlog candidates
-
-These are ideas to evaluate after the provider core is stable, not commitments:
-
-- Per-provider connection profiles separate from generation settings.
-- Provider readiness/status line.
-- Redacted runtime log export for support.
-- Model capability badge: references supported, text-only, model discovery available.
-- Prompt review before a paid generation.
-- Cancellation and clear pending-state behavior.
-- Safer file-backed gallery migration and gallery-path validation.
-- Portable presets that omit secrets and private reference images.
-
-## Explicit non-goals for the provider branch
-
-- No local A1111/ComfyUI integration.
-- No generic workflow execution.
-- No arbitrary user JavaScript.
-- No large style-preset catalog or prompt-studio redesign.
-- No batch/inject/automation redesign.
-- No claim of provider compatibility without a live browser verification using a test credential.
-
-## Decision
-
-Use Pawtrait as a reference for curated provider configuration, per-provider keys, capability-driven UI, and redacted diagnostics. Use QIG as the stronger reference for configuration boundaries, declarative custom API safety, connection-profile separation, documentation, and test discipline.
-
-Implement a deliberately smaller adapter registry for the current two LinkAPI transport families first. Add the next proxy only after it can be expressed by the registry contract or after a narrowly-scoped native adapter is specified and tested.
+These gaps remain roadmap acceptance criteria, not compatibility claims.

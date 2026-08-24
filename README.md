@@ -2,7 +2,9 @@
 
 A SillyTavern extension that adds scene-image generation with character context and avatar references.
 
-For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
+The product North Star is simple: during roleplay, click the image-generation button and receive a contextually appropriate image. Advanced provider and model complexity stays out of the primary workflow; see [PRODUCT.md](PRODUCT.md).
+
+For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md). The evidence-backed [ecosystem research](docs/EXTERNAL_EXTENSION_RESEARCH.md) and [feature roadmap](docs/ROADMAP.md) record what was learned, what is planned, and what remains unverified.
 
 Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply is currently experimental.
 

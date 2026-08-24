@@ -2,6 +2,13 @@
 
 This is the standing technical reference for people and agents maintaining this extension. It describes the code currently in this repository; it does not replace SillyTavern's own extension API documentation.
 
+Research and planned features are deliberately separate from current behavior:
+
+- [PRODUCT.md](PRODUCT.md) is the durable product authority: primary user, one-click North Star, hosted-provider scope, and simplicity constraints.
+- [docs/EXTERNAL_EXTENSION_RESEARCH.md](docs/EXTERNAL_EXTENSION_RESEARCH.md) records reviewed projects, international findings, evidence boundaries, and lessons.
+- [docs/ROADMAP.md](docs/ROADMAP.md) maps those lessons to versioned features, dependencies, acceptance evidence, and explicit deferrals.
+- [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md) remains authoritative for current provider release status.
+
 ## Purpose and ownership
 
 Context Image Generation is a SillyTavern third-party extension that creates scene images from chat context. It can include character and persona details, avatar images, previous generated images, and recent messages in a generation prompt.
