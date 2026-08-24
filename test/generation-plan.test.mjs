@@ -41,12 +41,32 @@ test('creates an immutable plan snapshot and trims only to a known positive refe
     assert.throws(() => { plan.prompt.focusText = 'changed'; }, TypeError);
 });
 
-test('unknown caps admit no new RP references while preserving adapter-compatible legacy references', () => {
+test('unknown caps admit no references and preserve omission reasons', () => {
     const plan = createGenerationPlan({
         ...baseInput,
         provider: { ...baseInput.provider, capabilities: { referenceImages: {} } },
     });
-    assert.deepEqual(plan.references.map((reference) => reference.role), ['host-avatar']);
+    assert.deepEqual(plan.references, []);
+    assert.deepEqual(plan.referenceOmissions.map((item) => [item.candidate.id, item.reason]), [
+        ['look:ava', 'unknown-cap'],
+        ['avatar:ava', 'unknown-cap'],
+        ['scene:old', 'unknown-cap'],
+    ]);
+});
+
+test('plan creation ranks candidates before applying the provider cap', () => {
+    const plan = createGenerationPlan({
+        ...baseInput,
+        references: [
+            baseInput.references[2],
+            baseInput.references[1],
+            baseInput.references[0],
+        ],
+    });
+    assert.deepEqual(plan.references.map((reference) => reference.id), ['look:ava', 'avatar:ava']);
+    assert.deepEqual(plan.referenceOmissions.map((item) => [item.candidate.id, item.reason]), [
+        ['scene:old', 'provider-cap'],
+    ]);
 });
 
 test('zero-capability routes receive no references and retain provider-agnostic plan fields', () => {

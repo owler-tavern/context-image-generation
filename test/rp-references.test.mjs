@@ -47,12 +47,15 @@ test('selected looks precede host avatars and cap omissions carry reasons', () =
     ]);
 });
 
-test('unknown caps select no new identity or scene references', () => {
+test('unknown caps select no references, including legacy compatibility references', () => {
     const result = selectReferenceCandidates(candidates, { maxCount: undefined });
-    assert.deepEqual(result.selected.map((candidate) => candidate.id), ['avatar:ava', 'avatar:leo', 'legacy:previous']);
+    assert.deepEqual(result.selected, []);
     assert.deepEqual(result.omitted.map((item) => [item.candidate.id, item.reason]), [
         ['look:ava', 'unknown-cap'],
+        ['avatar:ava', 'unknown-cap'],
+        ['avatar:leo', 'unknown-cap'],
         ['scene:old', 'unknown-cap'],
+        ['legacy:previous', 'unknown-cap'],
     ]);
 });
 
