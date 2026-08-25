@@ -329,7 +329,11 @@ window.cigDebug = Object.assign(window.cigDebug || {}, {
 function renderProviderDropdown() {
     const $providerSelect = $('#cig_provider').empty();
     for (const provider of projectProviderOptions()) {
-        $providerSelect.append($('<option>').val(provider.id).text(provider.label || provider.id));
+        $providerSelect.append($('<option>')
+            .val(provider.id)
+            .text(provider.label || provider.id)
+            .prop('disabled', provider.available === false)
+            .attr('title', provider.available === false ? provider.unavailableReason || 'Available after the optional server adapter is installed.' : undefined));
     }
 }
 

@@ -6,7 +6,7 @@ The product North Star is simple: during roleplay, click the image-generation bu
 
 For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md). The evidence-backed [ecosystem research](docs/EXTERNAL_EXTENSION_RESEARCH.md) and [feature roadmap](docs/ROADMAP.md) record what was learned, what is planned, and what remains unverified.
 
-Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply is currently experimental.
+Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply and the additional hosted profiles are currently experimental until live evidence is recorded.
 
 > **Fork notice** — This is a fork of [elouannd/context-image-generation](https://github.com/elouannd/context-image-generation) by **Elouann**. It was forked to add **LinkAPI provider support** (routing image generation through LinkAPI's Gemini-compatible endpoint) without changing your active SillyTavern Chat Completion profile. All credit for the original extension goes to Elouann; the original is released into the public domain under The Unlicense.
 
@@ -21,6 +21,8 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 - **LinkAPI** keeps its existing Gemini-compatible and OpenAI Images model routes behind provider adapters. This does not change your active SillyTavern Chat Completion profile.
 - **TokenReply (Experimental)** provides the text-only `grok-imagine-image` and `grok-imagine-image-quality` profiles. It sends a minimal request until a live compatibility test confirms TokenReply's supported image-size/resolution field and response format.
+- **Hosted provider wave 1 (Experimental):** registry-driven OpenAI GPT Image, Pollinations paid JSON, NanoGPT, Together AI, Routeway, and Navy.ai profiles reuse the validated OpenAI Images transport. Optional capabilities remain disabled unless the selected model's evidence explicitly supports them.
+- **Future Server Adapter catalog:** Z.AI and async/provider-native profiles such as Fal.ai, Replicate, CivitAI, PixAI, Kie.ai, and Midjourney/LegNext are visible as unavailable records; no unsafe browser calls are attempted.
 - **Manual LinkAPI recovery:** in LinkAPI's **Advanced** settings, **Use legacy LinkAPI routing** lets you deliberately retry using the pre-adapter request path. It is never automatic, so a failed normal request will not make an unrequested second paid generation.
 
 ### Direct-provider troubleshooting
@@ -96,12 +98,13 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 - **LinkAPI Gemini models:** select LinkAPI in this extension and enter a LinkAPI key under Provider API Key. LinkAPI Gemini models use the SillyTavern route with a request-scoped LinkAPI proxy, without changing the active Chat Completion profile.
 - **LinkAPI `gpt-image*`/`dall-e*` models:** select LinkAPI and enter the same LinkAPI key. LinkAPI `gpt-image*`/`dall-e*` models use LinkAPI's direct Images route; they are text-only, and **Manage models → Fetch models** can discover matching image IDs.
 - **TokenReply `grok-imagine-image` (Experimental):** select TokenReply and enter a TokenReply key under Provider API Key. TokenReply is Experimental and text-only; it has two built-in models (`grok-imagine-image` and `grok-imagine-image-quality`), experimental **Manage models → Fetch models** support, no reference-image controls, and no image-size control until a live test verifies its contract.
+- **Wave 1 hosted profiles (Experimental):** select OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, or Navy.ai and enter that provider's key. They use HTTPS Bearer-authenticated Images routes; references and optional size controls remain hidden until route/model evidence enables them.
 
 ## Installation
 
 1. In SillyTavern, open **Extensions** and install this repository.
 2. Open Context Image Generation's settings.
-3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose LinkAPI/TokenReply and enter that provider's key in the extension.
+3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose a direct hosted profile and enter that provider's key in the extension. Future Server Adapter entries are unavailable.
 4. Select a model appropriate to that route, then generate from a message wand or `/proimagine`.
 
 ## Usage
