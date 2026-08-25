@@ -148,7 +148,48 @@ function showGenerationError(error, operation = 'Image generation') {
             modelId: settings.model,
         });
     console.error(`[${extensionName}] ${operation} error:`, getSafeProviderErrorLogFields(normalized));
+    setSetupRuntimeIssue(normalized, operation);
     toastr.error(normalized.userMessage, 'Context Image Generation');
+}
+
+function renderSetupReadiness(settings) {
+    const providerId = settings.provider || 'makersuite';
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const providerUi = projectProviderUi(providerId, settings.model, {
+        localEntries: getProviderModelEntries(settings, providerId),
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+    });
+    const readiness = deriveSetupReadiness({
+        providerUi,
+        providerId,
+        modelId: settings.model,
+        apiKey: getProviderApiKey(settings, providerId),
+    });
+    $('#cig_setup_status').text(readiness.label).attr('data-cig-readiness', readiness.state);
+}
+
+function renderSetupRuntimeIssue() {
+    const $issue = $('#cig_setup_issue');
+    $issue.text(setupRuntimeIssue || '').toggle(Boolean(setupRuntimeIssue));
+    $('#cig_settings_tab_setup').toggleClass('cig-has-issue', Boolean(setupRuntimeIssue));
+}
+
+function setSetupRuntimeIssue(error, context) {
+    const settings = extension_settings[extensionName] || {};
+    const normalized = error?.category && error?.userMessage
+        ? error
+        : normalizeProviderError(error, {
+            providerId: settings.provider || 'unknown',
+            modelId: settings.model,
+        });
+    setupRuntimeIssue = `${context}: ${normalized.userMessage}`;
+    renderSetupRuntimeIssue();
+}
+
+function clearSetupRuntimeIssue() {
+    setupRuntimeIssue = null;
+    renderSetupRuntimeIssue();
 }
 
 function getProviderApiKey(settings, providerId) {
@@ -402,6 +443,7 @@ async function fetchManagedProviderModels() {
         if (result.warning) toastr.warning(`${result.warning.userMessage} Your current model list was kept.`, 'Context Image Generation');
         else toastr.success(`Loaded ${result.models.length} model(s).`, 'Context Image Generation');
     } catch (error) {
+        setSetupRuntimeIssue(error, 'Provider model discovery');
         showGenerationError(error, 'Provider model discovery');
     } finally {
         if (refreshToken === modelDiscoveryUiSequence) {
@@ -468,9 +510,14 @@ function updateModelDropdown() {
     } else if (!discovery.refreshEnabled && discovery.disabledReason) statusParts.push(discovery.disabledReason);
     $('#cig_model_discovery_status').text(statusParts.join(' · '));
     $('#cig_model_refresh')
+        .toggle(discovery.refreshEnabled)
         .prop('disabled', !discovery.refreshEnabled)
         .attr('title', discovery.refreshEnabled ? 'Refresh available models' : discovery.disabledReason || 'Model refresh is unavailable');
+    $('#cig_model_refresh_hint')
+        .text(discovery.refreshEnabled ? '' : discovery.disabledReason || '')
+        .toggle(!discovery.refreshEnabled && Boolean(discovery.disabledReason));
     toggleImageSizeVisibility();
+    renderSetupReadiness(settings);
 }
 
 function activateSettingsTab(tabId, { persist = true } = {}) {
@@ -585,6 +632,8 @@ async function loadSettings() {
     toggleImageSizeVisibility();
     toggleProviderSpecificSettings();
     renderModelManager();
+    renderSetupReadiness(cigSettings);
+    renderSetupRuntimeIssue();
     renderGallery();
     renderAppearanceList();
     selectInitialSettingsTab(cigSettings);
@@ -598,8 +647,13 @@ function toggleProviderSpecificSettings() {
     $('#cig_provider_key_container').toggle(ui.requiresApiKey);
     $('#cig_provider_advanced_container').toggle(ui.showsLegacyRecovery);
     $('#cig_provider_api_key_label').text(ui.apiKeyLabel);
+    $('#cig_provider_api_key').attr('placeholder', ui.apiKeyPlaceholder || `Enter ${ui.apiKeyLabel || 'API key'}`);
     $('#cig_provider_api_key').val(getProviderApiKey(settings, settings.provider));
-    $('#cig_provider_info').text(ui.providerInfo || '').toggle(Boolean(ui.providerInfo));
+    const providerHelp = ui.providerInfo || (ui.requiresApiKey
+        ? ''
+        : `Configure ${ui.label} in SillyTavern's AI Response → Chat Completion Source.`);
+    $('#cig_provider_info').text(providerHelp).toggle(Boolean(providerHelp));
+    renderSetupReadiness(settings);
 }
 
 function renderModelManager() {
@@ -637,6 +691,7 @@ function renderModelManager() {
             : ui.modelDiscovery.disabledReason || ''))
         .toggle(Boolean(ui.modelDiscovery.warning?.userMessage || ui.modelDiscovery.refreshEnabled || ui.modelDiscovery.disabledReason));
     $('#cig_remove_model').prop('disabled', !localEntries.some((entry) => entry.id === settings.model));
+    renderSetupReadiness(settings);
 }
 
 function refreshManagedModels() {
@@ -644,6 +699,7 @@ function refreshManagedModels() {
     toggleImageSizeVisibility();
     toggleProviderSpecificSettings();
     renderModelManager();
+    renderSetupReadiness(extension_settings[extensionName]);
 }
 
 function saveManagedModel(operation) {
@@ -665,6 +721,7 @@ function saveManagedModel(operation) {
     const type = operation === 'save' && localEntries.some((entry) => entry.id === previousId) ? 'replace' : 'upsert';
     setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type, previousId, id, source: 'manual', transportId: transport }, providerId));
     settings.model = id;
+    clearSetupRuntimeIssue();
     refreshManagedModels();
     saveSettingsDebounced();
 }
@@ -680,6 +737,7 @@ function removeManagedModel() {
     }
     setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type: 'remove', id: selectedId }, providerId));
     settings.model = getModelFallback(providerId, settings.model, getProviderModelEntries(settings, providerId));
+    clearSetupRuntimeIssue();
     refreshManagedModels();
     saveSettingsDebounced();
 }
@@ -1663,6 +1721,7 @@ jQuery(async () => {
         cancelModelDiscovery(previousProvider);
         clearExperimentalPreflightForProvider(settings, previousProvider);
         settings.provider = $(this).val();
+        clearSetupRuntimeIssue();
         updateModelDropdown();
         toggleImageSizeVisibility();
         toggleProviderSpecificSettings();
@@ -1676,6 +1735,7 @@ jQuery(async () => {
         cancelModelDiscovery(provider);
         if (projectProviderUi(provider, settings.model)?.requiresApiKey) {
             setProviderApiKey(settings, provider, $(this).val());
+            clearSetupRuntimeIssue();
             saveSettingsDebounced();
         }
     });
@@ -1709,6 +1769,7 @@ jQuery(async () => {
             return;
         }
         setExperimentalPreflight(settings, route, $(this).prop('checked'));
+        renderSetupReadiness(settings);
         saveSettingsDebounced();
         renderExperimentalPreflight(settings, route.modelId);
     });
@@ -1720,6 +1781,7 @@ jQuery(async () => {
         const previousTransport = previousEntry?.transportId || previousEntry?.transport || getProviderDefinition(providerId)?.models?.find((model) => model.id === selectedId)?.transport || '';
         clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: previousTransport });
         clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: $(this).val() || '' });
+        clearSetupRuntimeIssue();
         renderModelManager();
         saveSettingsDebounced();
     });
@@ -1734,6 +1796,7 @@ jQuery(async () => {
         cancelModelDiscovery(previousProvider);
         clearExperimentalPreflightForRoute(settings, previousRoute);
         settings.model = $(this).val();
+        clearSetupRuntimeIssue();
         toggleImageSizeVisibility();
         renderModelManager();
         saveSettingsDebounced();

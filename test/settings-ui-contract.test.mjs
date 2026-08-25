@@ -60,6 +60,22 @@ test('settings keeps one non-nested Advanced disclosure and no Advanced tab', ()
     ]) assert.match(advanced, new RegExp(`id="${id}"`));
 });
 
+test('Setup exposes separate polite readiness and runtime issue status regions before Advanced', () => {
+    const setupStart = settings.indexOf('id="cig_settings_panel_setup"');
+    const setupEnd = settings.indexOf('</section>', setupStart);
+    const setup = settings.slice(setupStart, setupEnd);
+    const status = setup.match(/<[^>]+id="cig_setup_status"[^>]*>/);
+    const issue = setup.match(/<[^>]+id="cig_setup_issue"[^>]*>/);
+    assert.ok(status);
+    assert.ok(issue);
+    for (const element of [status[0], issue[0]]) {
+        assert.match(element, /role="status"/);
+        assert.match(element, /aria-live="polite"/);
+    }
+    assert.ok(setup.indexOf('id="cig_model"') < setup.indexOf('id="cig_setup_status"'));
+    assert.ok(setup.indexOf('id="cig_setup_issue"') < setup.indexOf('id="cig_advanced_setup"'));
+});
+
 test('all index-bound settings controls remain unique in settings markup', () => {
     const boundIds = new Set([...index.matchAll(/#(cig_[\w-]+)/g)].map((match) => match[1]));
     for (const id of boundIds) {

@@ -31,6 +31,22 @@
     opacity: 0.72;
 }
 
+.cig-setup-status,
+.cig-setup-issue {
+    display: block;
+    min-height: 1.2em;
+    margin-top: 4px;
+}
+
+.cig-setup-status {
+    font-weight: 600;
+}
+
+.cig-setup-issue,
+#cig_settings_tab_setup.cig-has-issue {
+    color: var(--SmartThemeWarningColor, #d98c10);
+}
+
 @media (max-width: 480px) {
     .cig-model-row {
         flex-direction: column;
