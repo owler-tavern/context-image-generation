@@ -31,7 +31,7 @@ import { mergeFetchedModelEntries, updateLocalModelEntries, mergeFetchedModelRec
 import { discoverProviderModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { buildOpenAiImagesRequest, parseOpenAiImagesResponse } from './lib/providers/openai-images.js';
 import { dispatchProviderRoute } from './lib/providers/dispatch.js';
-import { createGenerationCoordinator } from './lib/generation-coordinator.js';
+import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
@@ -42,6 +42,7 @@ import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { materializeReferences } from './lib/rp/references.js';
+import { downloadImageData } from './lib/providers/safe-image-download.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -83,7 +84,7 @@ const defaultSettings = {
 };
 
 const MAX_GALLERY_SIZE = 50;
-const generationCoordinator = createGenerationCoordinator();
+const generationCoordinator = createRunCoordinator();
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 const chatLifecycleEpoch = createChatLifecycleEpoch();
@@ -134,6 +135,13 @@ function getProviderModelEntries(settings, providerId) {
     if (Array.isArray(records)) return records;
     const entries = settings.provider_models?.[providerId];
     return Array.isArray(entries) ? entries : [];
+}
+
+// The legacy recovery route remains an explicit manual capability. It is not
+// consulted by the ordinary wand/automation pipeline, which always dispatches
+// through the resolved schema-2 plan.
+function isManualLegacyLinkApiRecovery(selectedProvider, settings) {
+    return selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true;
 }
 
 function setProviderModelRecords(settings, providerId, records) {
@@ -221,7 +229,7 @@ function arrayBufferToBase64(buf) {
     return btoa(binary);
 }
 
-async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https://linkapi.ai' }) {
+async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https://linkapi.ai', signal }) {
     const url = `${host}/v1/images/generations`;
     // Direct browser -> LinkAPI request (does NOT pass through the ST server, so
     // it appears in the browser console/Network tab, not the ST server terminal).
@@ -234,6 +242,7 @@ async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https:
             'Authorization': `Bearer ${apiKey || ''}`,
         },
         body: JSON.stringify({ model, prompt, n: 1, size, response_format: 'b64_json' }),
+        signal,
     });
 
     if (!response.ok) {
@@ -266,14 +275,12 @@ async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https:
     }
     if (imageUrl) {
         console.log(`[${extensionName}] LinkAPI image received (url, fetching bytes, model: ${model})`);
-        const imgResp = await fetch(imageUrl);
-        const buf = await imgResp.arrayBuffer();
-        return { imageData: arrayBufferToBase64(buf), mimeType: 'image/png' };
+        return await downloadImageData(imageUrl, { signal });
     }
     throw new Error('No image was returned by the API');
 }
 
-async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, providerId = 'unknown' }) {
+async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, providerId = 'unknown', signal }) {
     const response = await fetch(`${baseUrl}/images/generations`, {
         method: 'POST',
         headers: {
@@ -286,6 +293,7 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, provi
             size,
             responseFormat: 'b64_json',
         })),
+        signal,
     });
 
     if (!response.ok) {
@@ -315,11 +323,7 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, provi
         return { imageData: b64, mimeType: 'image/png' };
     }
 
-    const imageResponse = await fetch(imageUrl);
-    if (!imageResponse.ok) {
-        throw new Error(`Failed to download generated image: HTTP ${imageResponse.status}`);
-    }
-    return { imageData: arrayBufferToBase64(await imageResponse.arrayBuffer()), mimeType: 'image/png' };
+    return await downloadImageData(imageUrl, { signal });
 }
 async function fetchManagedProviderModels() {
     const settings = extension_settings[extensionName];
@@ -806,11 +810,12 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     return messages;
 }
 
-async function requestSillyTavernImage(requestBody, { providerId = requestBody?.chat_completion_source || 'unknown', modelId = requestBody?.model } = {}) {
+async function requestSillyTavernImage(requestBody, { providerId = requestBody?.chat_completion_source || 'unknown', modelId = requestBody?.model, signal } = {}) {
     const response = await fetch('/api/backends/chat-completions/generate', {
         method: 'POST',
         headers: getRequestHeaders(),
         body: JSON.stringify(requestBody),
+        signal,
     });
 
     if (!response.ok) {
@@ -916,10 +921,7 @@ function getGenerationKey(prompt, messageId, target = null) {
 }
 
 async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
-    return await generationCoordinator.run(
-        getGenerationKey(prompt, messageId, target),
-        () => generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation),
-    );
+    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation);
 }
 
 async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
@@ -934,57 +936,64 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transportId || localModel.transport };
         }
 
-        if (selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true) {
-            return await generateLegacyLinkApiImage(settings, messages);
-        }
-
-        if (providerRoute.provider && providerRoute.transport) {
-            return await dispatchProviderRoute({
-                route: providerRoute,
+        const legacyTransport = providerRoute.transport;
+        const transportId = legacyTransport === 'openAiImages'
+            ? 'openai-images'
+            : legacyTransport === 'sillyTavernGeminiProxy'
+                ? 'sillytavern-gemini-proxy'
+                : 'host-chat-image';
+        const endpoint = providerRoute.provider?.transports?.[legacyTransport]?.baseUrl;
+        const routeModel = providerRoute.model || { id: settings.model, providerId: selectedProvider, transportId };
+        const plan = createGenerationPlan({
+            id: `generation:${getGenerationKey(prompt, messageId, target)}`,
+            idempotencyKey: getGenerationKey(prompt, messageId, target),
+            invocation,
+            target,
+            provider: {
+                providerId: selectedProvider,
                 modelId: settings.model,
-                messages,
-                prompt: extractPromptText(messages),
-                apiKey: getProviderApiKey(settings, selectedProvider),
+                transport: transportId,
+                capabilities: routeModel.capabilities || routeModel,
+            },
+            resolved: {
+                connectionId: `${selectedProvider}:default`,
+                providerId: selectedProvider,
+                modelId: settings.model,
+                transportId,
+                ...(endpoint ? { endpoint } : {}),
+                capabilities: routeModel.capabilities || routeModel,
+            },
+            messages,
+            prompt: { sourceMessage: extractPromptText(messages), focusText, nearbyMessages: getRecentMessages(settings.message_depth || 1, messageId), intent: 'scene' },
+            options: {
                 aspectRatio: settings.aspect_ratio,
                 imageSize: settings.image_size,
-                isFlash2: /gemini-3\.1/.test(settings.model),
                 thinkingLevel: settings.thinking_level,
                 useGoogleSearch: settings.use_google_search,
-                mapAspectRatioToSize,
-                requestOpenAiImages,
-                requestSillyTavernImage,
-            });
-        }
-        if (requiresAdapterRoute(providerRoute)) {
-            throw new Error(`No ${providerRoute.provider.id} transport is configured for model: ${settings.model}`);
-        }
-        const isFlash2 = /gemini-3\.1/.test(settings.model);
-        const requestBody = {
-            chat_completion_source: selectedProvider,
-            model: settings.model,
-            messages,
-            max_tokens: 8192,
-            temperature: 1,
-            request_images: true,
-            request_image_aspect_ratio: settings.aspect_ratio || '1:1',
-            request_image_resolution: settings.image_size || undefined,
-            stream: false,
-            reverse_proxy: oai_settings.reverse_proxy || '',
-            proxy_password: oai_settings.proxy_password || '',
+                systemInstruction: settings.system_instruction,
+            },
+            policy: { source: invocation === 'automation' ? 'automation' : 'manual' },
+        });
+        const connection = {
+            id: `${selectedProvider}:default`,
+            providerId: selectedProvider,
+            kind: providerRoute.provider?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
+            enabled: true,
         };
-
-        if (isFlash2) {
-            const thinkingLevel = settings.thinking_level || 'auto';
-            if (thinkingLevel !== 'auto') {
-                requestBody.reasoning_effort = thinkingLevel;
-            }
-            if (settings.use_google_search) {
-                requestBody.enable_web_search = true;
-            }
-        }
-
-        console.log(`[${extensionName}] Generating image with provider: ${settings.provider}, model:`, settings.model);
-        return await requestSillyTavernImage(requestBody, { providerId: selectedProvider, modelId: settings.model });
+        return await generationCoordinator.enqueue(plan, (signal) => dispatchProviderRoute({
+            plan,
+            connection,
+            signal,
+            transportContext: {
+                apiKey: getProviderApiKey(settings, selectedProvider),
+                messages,
+                reverseProxy: oai_settings.reverse_proxy || '',
+                fetchImpl: fetch,
+                getRequestHeaders,
+                mapAspectRatioToSize,
+                requestSillyTavernImage,
+            },
+        }));
     } catch (error) {
         throw attachNormalizedProviderError(error, { providerId: selectedProvider, modelId: settings.model });
     }
