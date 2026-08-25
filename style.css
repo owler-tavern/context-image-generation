@@ -435,6 +435,10 @@
     padding: 0.1rem 0.3rem;
 }
 
+.cig-setup-tab-status[hidden] {
+    display: none !important;
+}
+
 #cig_settings_tab_setup[data-cig-status="incomplete"] .cig-setup-tab-status,
 #cig_settings_tab_setup[data-cig-status="issue"] .cig-setup-tab-status {
     font-weight: 600;

@@ -189,6 +189,29 @@ test('only confirmed unprotected gallery deletion mutates the gallery', () => {
     assert.deepEqual(confirmed, { decision: 'deleted', gallery: [galleryItem] });
 });
 
+test('confirmed gallery deletion resolves the captured artifact after gallery order changes', () => {
+    const target = { ...galleryItem, id: 'gallery:two', url: '/two.png' };
+    const addedDuringConfirmation = { ...galleryItem, id: 'gallery:three', url: '/three.png' };
+    const reordered = [addedDuringConfirmation, galleryItem, target];
+    const deleted = appearanceLibrary.applyGalleryImageDeletion({
+        gallery: reordered,
+        index: 1,
+        targetArtifactId: 'gallery:two',
+        protectedIds: new Set(),
+        confirmed: true,
+    });
+    const missing = appearanceLibrary.applyGalleryImageDeletion({
+        gallery: [addedDuringConfirmation, galleryItem],
+        index: 1,
+        targetArtifactId: 'gallery:two',
+        protectedIds: new Set(),
+        confirmed: true,
+    });
+
+    assert.deepEqual(deleted, { decision: 'deleted', gallery: [addedDuringConfirmation, galleryItem] });
+    assert.deepEqual(missing, { decision: 'not-found', gallery: [addedDuringConfirmation, galleryItem] });
+});
+
 test('only confirmed visible Appearance look removal mutates the library', () => {
     assert.equal(typeof appearanceLibrary.applyAppearanceLookRemoval, 'function');
     const library = addAppearanceLook({}, {

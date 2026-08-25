@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
 const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
 function setupMarkup() {
     const opening = settings.match(/<section\b[^>]*id="cig_settings_panel_setup"[^>]*>/);
@@ -63,6 +64,11 @@ test('Setup tab presents text and an accessible status for incomplete setup or r
     assert.match(index, /\.attr\('aria-label', status\.accessibleLabel\)/);
     assert.match(index, /#cig_setup_tab_status/);
     assert.doesNotMatch(index, /renderSetupTabStatus[\s\S]{0,800}activateSettingsTab\(/);
+});
+
+test('hidden Setup tab status has an authoritative display-none rule', () => {
+    const hiddenRule = style.match(/\.cig-setup-tab-status\[hidden\]\s*\{[^}]*\}/)?.[0] || '';
+    assert.match(hiddenRule, /display:\s*none\s*!important\s*;/);
 });
 
 test('provider projection controls credential copy and refresh visibility without disabled dead ends', () => {
