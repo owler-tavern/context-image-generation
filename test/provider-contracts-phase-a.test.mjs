@@ -4,6 +4,7 @@ import {
     normalizeCapabilityEvidence,
     normalizeModelDefinition,
     normalizeProviderConnection,
+    isSafeSecretRef,
     normalizeProviderDefinition,
     capabilityIsSupported,
     unknownCapabilities,
@@ -34,9 +35,9 @@ test('normalizes capability evidence and fails closed for unknown claims', () =>
 
 test('normalizes provider, connection, and model definitions without secret material', () => {
     const provider = normalizeProviderDefinition({
-        id: 'fixture', label: 'Fixture', apiKey: 'must-not-survive', models: [{ id: 'fixture-image', transport: 'openAiImages' }],
+        id: 'fixture', label: 'Fixture', credentialKey: 'fixture', apiKey: 'must-not-survive', models: [{ id: 'fixture-image', transport: 'openAiImages' }],
         ui: { providerInfo: 'safe', nested: { token: 'must-not-survive' } },
-        transports: { openAiImages: { baseUrl: 'https://fixture.example/v1', headers: { Authorization: 'secret' } } },
+        transports: { openAiImages: { baseUrl: 'https://fixture.example/v1', headers: { Authorization: 'secret' }, deep: { one: { two: { three: { four: { apiKey: 'secret', safe: 'drop-at-boundary' } } } } } } },
     });
     assert.equal(provider.id, 'fixture');
     assert.deepEqual(provider.transportIds, ['openAiImages']);
@@ -48,6 +49,7 @@ test('normalizes provider, connection, and model definitions without secret mate
     assert.equal('unknown' in provider, false);
     assert.equal('nested' in provider.ui, false);
     assert.equal('headers' in provider.transports.openAiImages, false);
+    assert.equal(provider.transports.openAiImages.deep?.one?.two?.three?.four, undefined);
 
     const connection = normalizeProviderConnection({
         id: 'fixture:default', providerId: 'fixture', kind: 'browser-api-key', secretRef: 'provider_keys.fixture', enabled: true,
@@ -55,6 +57,11 @@ test('normalizes provider, connection, and model definitions without secret mate
     }, provider);
     assert.equal(connection.secretRef, 'provider_keys.fixture');
     assert.equal('apiKey' in connection, false);
+    assert.equal(isSafeSecretRef('provider_keys.fixture', 'browser-api-key', provider), true);
+    assert.equal(isSafeSecretRef('raw-secret', 'browser-api-key', provider), false);
+    assert.equal(isSafeSecretRef('linkapi_key', 'browser-api-key', provider), false);
+    assert.equal(isSafeSecretRef('server-secrets.fixture:default', 'server-adapter', provider), true);
+    assert.equal(isSafeSecretRef('provider_keys.fixture', 'server-adapter', provider), false);
 
     const model = normalizeModelDefinition({ id: 'manual', providerId: 'fixture', transport: 'openAiImages', source: 'manual' }, provider);
     assert.equal(model.source.kind, 'manual');
@@ -83,6 +90,19 @@ test('sanitizes pre-existing contract additions and quarantines malformed record
     assert.equal(migrated.provider_contracts_quarantine.connections.length > 0, true);
     assert.equal(migrated.provider_contracts_quarantine.modelRecords.length > 0, true);
     assert.doesNotMatch(JSON.stringify(migrated), /Bearer secret/);
+});
+
+test('drops raw or wrong-provider secret references during connection migration', () => {
+    const migrated = migrateProviderSettings({
+        connections: {
+            'linkapi:default': { providerId: 'linkapi', kind: 'browser-api-key', secretRef: 'raw-linkapi-secret' },
+            'tokenreply:default': { providerId: 'tokenreply', kind: 'browser-api-key', secretRef: 'provider_keys.linkapi' },
+        },
+    });
+    assert.equal(migrated.connections['linkapi:default'].secretRef, 'provider_keys.linkapi');
+    assert.equal(migrated.connections['tokenreply:default'].secretRef, 'provider_keys.tokenreply');
+    assert.equal(migrated.provider_contracts_quarantine.connections.length >= 2, true);
+    assert.doesNotMatch(JSON.stringify(migrated), /raw-linkapi-secret/);
 });
 
 test('migrates legacy settings additively and idempotently', () => {
