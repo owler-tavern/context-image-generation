@@ -100,9 +100,9 @@ test('projects a persisted custom TokenReply model with conservative image capab
     assert.equal(ui.imageSizeOptions.length, 0);
 });
 
-test('hides reference controls when a provider model has no verified reference cap', () => {
+test('shows reference controls for LinkAPI Gemini routes with verified model caps', () => {
     assert.equal(projectProviderUi('makersuite', 'gemini-2.5-flash-image').supportsReferenceImages, true);
-    assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').supportsReferenceImages, false);
+    assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').supportsReferenceImages, true);
     assert.equal(projectProviderUi('openrouter', 'google/gemini-2.5-flash-image-preview').supportsReferenceImages, false);
 });
 

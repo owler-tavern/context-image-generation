@@ -56,12 +56,15 @@ test('projects reference and size controls from model capabilities', () => {
     assert.equal(flash2.supportsThinking, true);
 });
 
-test('verifies reference caps only for direct Google AI Studio Gemini models', () => {
+test('preserves Gemini reference caps through Google AI Studio and LinkAPI proxy routes', () => {
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-2.5-flash-image'), { maxCount: 3 });
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3-pro-image-preview'), { maxCount: 14 });
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });
-    assert.equal(getReferenceImageCapability('linkapi', 'gemini-2.5-flash-image'), undefined);
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-2.5-flash-image'), { maxCount: 3 });
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-3-pro-image-preview'), { maxCount: 14 });
     assert.equal(projectProviderUi('makersuite', 'gemini-2.5-flash-image').referenceImageMaxCount, 3);
+    assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').referenceImageMaxCount, 3);
 });
 test('resolves a declarative OpenAI Images fixture without a provider-name branch', async () => {
     PROVIDERS.fixture = {
