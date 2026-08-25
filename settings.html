@@ -89,6 +89,11 @@
             <details class="cig_advanced_run_controls" style="margin-top: 5px;">
                 <summary>Advanced run controls</summary>
                 <button id="cig_cancel_generation" class="menu_button" type="button" style="display: none;" disabled>Cancel current generation</button>
+                <div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;">
+                    <button id="cig_show_preflight" class="menu_button" type="button">Inspect last plan</button>
+                    <button id="cig_export_diagnostics" class="menu_button" type="button">Export diagnostics</button>
+                </div>
+                <pre id="cig_preflight_summary" role="status" style="display: none; max-height: 240px; overflow: auto; white-space: pre-wrap; margin-top: 5px;"></pre>
             </details>
             <!-- Aspect Ratio & Image Size -->
             <div class="flex-container">

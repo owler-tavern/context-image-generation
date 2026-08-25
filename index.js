@@ -39,6 +39,8 @@ import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalize
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
+import { inspectGenerationPlan } from './lib/providers/preflight.js';
+import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
@@ -85,6 +87,7 @@ const defaultSettings = {
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createRunCoordinator();
 let currentGenerationRunId = null;
+let lastGenerationPlanInspection = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -94,6 +97,27 @@ generationCoordinator.subscribe((event) => {
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 const chatLifecycleEpoch = createChatLifecycleEpoch();
+
+function renderAdvancedPlanInspector() {
+    const output = $('#cig_preflight_summary');
+    if (!output.length) return;
+    if (!lastGenerationPlanInspection) {
+        output.text('Generate an image first to inspect the captured plan.').show();
+        return;
+    }
+    output.text(JSON.stringify(lastGenerationPlanInspection, null, 2)).show();
+}
+
+function exportDiagnostics() {
+    const settings = extension_settings[extensionName] || {};
+    const blob = new Blob([serializeDiagnosticsExport({ runs: generationCoordinator.list(), discovery: settings.model_discovery })], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = `context-image-generation-diagnostics-${new Date().toISOString().replace(/[:.]/g, '-')}.json`;
+    anchor.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+}
 
 function setBusyState(control, busy, { busyClass = 'generating', busyTitle = 'Working…' } = {}) {
     const $control = control?.jquery ? control : $(control);
@@ -884,6 +908,9 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
         const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions, messages });
+        // Retain only the redacted Advanced projection; prompt/context/assets
+        // must not survive the dispatch lifecycle in extension state.
+        lastGenerationPlanInspection = inspectGenerationPlan(dispatchedPlan);
         const connection = {
             id: dispatchedPlan.resolved.connectionId,
             providerId: dispatchedPlan.resolved.providerId,
@@ -1600,6 +1627,8 @@ jQuery(async () => {
     $('#cig_cancel_generation').on('click', function () {
         if (currentGenerationRunId) generationCoordinator.cancel(currentGenerationRunId);
     });
+    $('#cig_show_preflight').on('click', renderAdvancedPlanInspector);
+    $('#cig_export_diagnostics').on('click', exportDiagnostics);
 
     $('#cig_model_refresh').on('click', fetchManagedProviderModels);
     $('#cig_model_search').on('input', updateModelDropdown);
