@@ -3,7 +3,16 @@ import assert from 'node:assert/strict';
 import { downloadImageData } from '../lib/providers/safe-image-download.js';
 
 function response(body, headers = { 'content-type': 'image/png' }, status = 200) {
-    return { ok: status >= 200 && status < 300, status, headers: new Headers(headers), arrayBuffer: async () => body, text: async () => String(body) };
+    const bytes = new Uint8Array(body);
+    let consumed = false;
+    return {
+        ok: status >= 200 && status < 300,
+        status,
+        headers: new Headers(headers),
+        body: { getReader() { return { async read() { if (consumed) return { done: true }; consumed = true; return { done: false, value: bytes }; }, releaseLock() {} }; } },
+        arrayBuffer: async () => body,
+        text: async () => String(body),
+    };
 }
 
 test('safe image download accepts HTTPS images and forwards AbortSignal', async () => {

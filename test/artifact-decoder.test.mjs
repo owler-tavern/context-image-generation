@@ -28,6 +28,6 @@ test('artifact decoder rejects inline MIME and magic-byte mismatches', async () 
 
 test('artifact decoder validates downloaded URL artifacts through the bounded downloader', async () => {
     await assert.rejects(decodeGenerationArtifact('https://images.example/result.png', {
-        fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'image/png' }), arrayBuffer: async () => Uint8Array.from([1, 2, 3]).buffer }),
+        fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'image/png' }), body: { getReader() { let done = false; return { async read() { if (done) return { done: true }; done = true; return { done: false, value: Uint8Array.from([1, 2, 3]) }; }, releaseLock() {} }; } } }),
     }), /magic|image/i);
 });

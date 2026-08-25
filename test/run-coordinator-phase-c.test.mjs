@@ -67,3 +67,23 @@ test('RunCoordinator does not retain completed artifacts in public terminal reco
     assert.equal('result' in record, false);
     assert.doesNotMatch(JSON.stringify(record), /secret-payload/);
 });
+
+test('RunCoordinator public snapshots project plan metadata without prompt, refs, or secrets', async () => {
+    const coordinator = createRunCoordinator();
+    const sensitivePlan = {
+        ...plan('projection'),
+        resolved: { providerId: 'fixture', modelId: 'image-1', transportId: 'openai-images', endpoint: 'https://provider.example/v1' },
+        prompt: { sourceMessage: 'private prompt', nearbyMessages: [{ content: 'private context' }] },
+        messages: [{ role: 'user', content: [{ type: 'text', text: 'private prompt' }, { type: 'image_url', image_url: { url: 'data:image/png;base64,secret-bytes' } }] }],
+        references: [{ id: 'ref-1', asset: { data: 'secret-bytes' } }],
+        secretRef: 'provider_keys.fixture',
+    };
+    const pending = coordinator.enqueue(sensitivePlan, async () => new Promise(() => {}));
+    const record = coordinator.get('run:1');
+    assert.equal(record.plan.prompt, undefined);
+    assert.equal(record.plan.messages, undefined);
+    assert.equal(record.plan.references, undefined);
+    assert.doesNotMatch(JSON.stringify(record), /private prompt|secret-bytes|provider_keys/);
+    coordinator.cancel('run:1');
+    await assert.rejects(pending, (error) => error.name === 'AbortError');
+});

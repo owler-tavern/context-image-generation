@@ -29,7 +29,6 @@ import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getPro
 import { getModelFallback, projectProviderControls, projectProviderOptions, projectProviderUi } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries, mergeFetchedModelRecords, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
 import { discoverProviderModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
-import { buildOpenAiImagesRequest, parseOpenAiImagesResponse } from './lib/providers/openai-images.js';
 import { dispatchProviderRoute } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
@@ -42,7 +41,6 @@ import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { materializeReferences } from './lib/rp/references.js';
-import { downloadImageData } from './lib/providers/safe-image-download.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -226,67 +224,7 @@ function parseImagesResponse(json) {
     return { b64: (item && item.b64_json) || null, url: (item && item.url) || null };
 }
 
-function arrayBufferToBase64(buf) {
-    const bytes = new Uint8Array(buf);
-    let binary = '';
-    const chunk = 0x8000;
-    for (let i = 0; i < bytes.length; i += chunk) {
-        binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
-    }
-    return btoa(binary);
-}
-
-async function requestLinkApiImage({ apiKey, model, prompt, size, host = 'https://linkapi.ai', signal }) {
-    const url = `${host}/v1/images/generations`;
-    // Direct browser -> LinkAPI request (does NOT pass through the ST server, so
-    // it appears in the browser console/Network tab, not the ST server terminal).
-    console.log(`[${extensionName}] LinkAPI image request:`, { url, model, size, promptLength: (prompt || '').length });
-
-    const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${apiKey || ''}`,
-        },
-        body: JSON.stringify({ model, prompt, n: 1, size, response_format: 'b64_json' }),
-        signal,
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        let message = `API Error: ${response.status}`;
-        try {
-            const j = JSON.parse(errorText);
-            message = j.error?.message || j.message || message;
-        } catch (e) { /* keep default */ }
-        const providerError = attachNormalizedProviderError(new Error(message), {
-            providerId: 'linkapi',
-            modelId: model,
-            status: response.status,
-            responseText: errorText,
-        });
-        console.error(`[${extensionName}] LinkAPI image error:`, {
-            status: providerError.status,
-            providerId: providerError.providerId,
-            modelId: providerError.modelId,
-            technicalMessage: providerError.technicalMessage,
-        });
-        throw providerError;
-    }
-
-    const json = await response.json();
-    const { b64, url: imageUrl } = parseImagesResponse(json);
-    if (b64) {
-        console.log(`[${extensionName}] LinkAPI image received (b64_json, model: ${model})`);
-        return { imageData: b64, mimeType: 'image/png' };
-    }
-    if (imageUrl) {
-        console.log(`[${extensionName}] LinkAPI image received (url, fetching bytes, model: ${model})`);
-        return await downloadImageData(imageUrl, { signal });
-    }
-    throw new Error('No image was returned by the API');
-}
-
+/*
 async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, providerId = 'unknown', signal }) {
     const response = await fetch(`${baseUrl}/images/generations`, {
         method: 'POST',
@@ -309,7 +247,7 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, provi
         try {
             const json = JSON.parse(errorText);
             message = json.error?.message || json.message || message;
-        } catch (e) { /* keep default */ }
+        } catch (e) { }
         const providerError = attachNormalizedProviderError(new Error(message), {
             providerId,
             modelId: model,
@@ -332,6 +270,7 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, provi
 
     return await downloadImageData(imageUrl, { signal });
 }
+*/
 async function fetchManagedProviderModels() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
@@ -384,7 +323,6 @@ window.cigDebug = Object.assign(window.cigDebug || {}, {
     mapAspectRatioToSize,
     extractPromptText,
     parseImagesResponse,
-    requestLinkApiImage,
     buildAppearanceReferenceCandidates,
 });
 
@@ -813,94 +751,12 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     return [{ role: 'user', content: contentParts }];
 }
 
-async function requestSillyTavernImage(requestBody, { providerId = requestBody?.chat_completion_source || 'unknown', modelId = requestBody?.model, signal } = {}) {
-    const response = await fetch('/api/backends/chat-completions/generate', {
-        method: 'POST',
-        headers: getRequestHeaders(),
-        body: JSON.stringify(requestBody),
-        signal,
-    });
-
-    if (!response.ok) {
-        const errorText = await response.text();
-        let errorMessage = `API Error: ${response.status}`;
-        try {
-            const errorJson = JSON.parse(errorText);
-            errorMessage = errorJson.error?.message || errorJson.message || errorMessage;
-        } catch (e) { }
-        const providerError = attachNormalizedProviderError(new Error(errorMessage), {
-            providerId,
-            modelId,
-            status: response.status,
-            responseText: errorText,
-        });
-        console.error(`[${extensionName}] API error:`, {
-            status: providerError.status,
-            providerId: providerError.providerId,
-            modelId: providerError.modelId,
-            technicalMessage: providerError.technicalMessage,
-        });
-        throw providerError;
-    }
-
-    const result = await response.json();
-    const responseContent = result.responseContent;
-
-    if (responseContent?.parts) {
-        for (const part of responseContent.parts) {
-            if (part.inlineData?.data) {
-                const mimeType = part.inlineData.mimeType || 'image/png';
-                return { imageData: part.inlineData.data, mimeType: mimeType };
-            }
-        }
-    }
-
-    const textContent = result.choices?.[0]?.message?.content;
-    if (textContent) {
-        throw new Error('Model returned text instead of image');
-    }
-
-    throw new Error('No image was returned by the API');
-}
-
-// Preserves the pre-adapter LinkAPI behavior for the explicit recovery switch.
+// Retained as a named compatibility marker; recovery is now resolved only by
+// the explicit schema-2 linkapi-legacy-recovery transport adapter.
 async function generateLegacyLinkApiImage(settings, messages) {
-    const isFlash2 = /gemini-3\.1/.test(settings.model);
-
-    if (isOpenAiImageModel(settings.model)) {
-        return await requestLinkApiImage({
-            apiKey: getProviderApiKey(settings, 'linkapi'),
-            model: settings.model,
-            prompt: extractPromptText(messages),
-            size: mapAspectRatioToSize(settings.aspect_ratio),
-        });
-    }
-
-    const requestBody = {
-        chat_completion_source: 'makersuite',
-        model: settings.model,
-        messages,
-        max_tokens: 8192,
-        temperature: 1,
-        request_images: true,
-        request_image_aspect_ratio: settings.aspect_ratio || '1:1',
-        request_image_resolution: settings.image_size || undefined,
-        stream: false,
-        reverse_proxy: 'https://api.linkapi.ai',
-        proxy_password: settings.linkapi_key || '',
-    };
-
-    if (isFlash2) {
-        const thinkingLevel = settings.thinking_level || 'auto';
-        if (thinkingLevel !== 'auto') {
-            requestBody.reasoning_effort = thinkingLevel;
-        }
-        if (settings.use_google_search) {
-            requestBody.enable_web_search = true;
-        }
-    }
-
-    return await requestSillyTavernImage(requestBody, { providerId: 'linkapi', modelId: settings.model });
+    void settings;
+    void messages;
+    throw new Error('Legacy LinkAPI recovery is available only through the explicit plan dispatcher.');
 }
 
 function getStableSpeakerIdentityId(sender) {

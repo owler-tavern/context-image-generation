@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import { createTransportRegistry, dispatchProviderRoute } from '../lib/providers/dispatch.js';
 
+const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+
 function plan(overrides = {}) {
     return createGenerationPlan({
         id: 'plan:dispatch',
@@ -27,7 +29,7 @@ test('dispatch accepts only a resolved plan and registered transport and forward
         'fixture-transport': {
             id: 'fixture-transport',
             executionClass: 'browser',
-            generate: async (input) => { received = input; return { imageData: 'abc', mimeType: 'image/png' }; },
+            generate: async (input) => { received = input; return { imageData: PNG, mimeType: 'image/png' }; },
         },
     });
     const result = await dispatchProviderRoute({
@@ -36,7 +38,7 @@ test('dispatch accepts only a resolved plan and registered transport and forward
         signal: controller.signal,
         transportContext: { transports },
     });
-    assert.equal(result.imageData, 'abc');
+    assert.equal(result.imageData, PNG);
     assert.equal(received.signal, controller.signal);
     assert.equal(received.plan.resolved.endpoint, 'https://fixture.example/v1');
 });
@@ -61,7 +63,7 @@ test('manual LinkAPI recovery is an explicit plan transport, never an argument-b
         generate: async ({ plan, signal }) => {
             assert.equal(plan.resolved.legacyKind, 'openai-images');
             assert.equal(signal, controller.signal);
-            return { imageData: 'abc', mimeType: 'image/png' };
+            return { imageData: PNG, mimeType: 'image/png' };
         },
     });
     const result = await dispatchProviderRoute({
@@ -70,5 +72,5 @@ test('manual LinkAPI recovery is an explicit plan transport, never an argument-b
         signal: controller.signal,
         transportContext: { transports },
     });
-    assert.equal(result.imageData, 'abc');
+    assert.equal(result.imageData, PNG);
 });
