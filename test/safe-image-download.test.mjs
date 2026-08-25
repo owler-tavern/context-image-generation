@@ -31,6 +31,10 @@ test('safe image download checks abort before decoding a data URL', async () => 
     await assert.rejects(downloadImageData('data:image/png;base64,aGVsbG8=', { signal: controller.signal }), (error) => error.name === 'AbortError');
 });
 
+test('safe image downloader does not independently accept data URLs', async () => {
+    await assert.rejects(downloadImageData('data:image/png;base64,aGVsbG8='), /HTTPS|data|decoder/i);
+});
+
 test('safe image download rejects non-HTTPS URLs, non-images, and oversized responses', async () => {
     await assert.rejects(downloadImageData('http://images.example/a.png'), /HTTPS/);
     await assert.rejects(downloadImageData('https://images.example/a.txt', { fetchImpl: async () => response(new ArrayBuffer(1), { 'content-type': 'text/plain' }) }), /image content/);
