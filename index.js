@@ -42,6 +42,7 @@ import { createGenerationPlan } from './lib/generation-plan.js';
 import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
+import { deriveSetupReadiness, normalizeSettingsTab, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -66,6 +67,7 @@ const defaultSettings = {
     linkapi_key: '',
     provider_keys: {},
     provider_models: {},
+    ui_last_settings_tab: 'setup',
     model_discovery: {},
     experimental_model_preflight: {},
     linkapi_use_legacy_routing: false,
@@ -88,6 +90,7 @@ const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createRunCoordinator();
 let currentGenerationRunId = null;
 let lastGenerationPlanInspection = null;
+let setupRuntimeIssue = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
