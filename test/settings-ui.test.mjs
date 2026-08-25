@@ -5,6 +5,7 @@ import {
     normalizeSettingsTab,
     deriveSetupReadiness,
     formatSetupRuntimeIssue,
+    projectImageSizePreference,
     resolveInitialSettingsTab,
 } from '../lib/settings-ui.js';
 
@@ -85,4 +86,28 @@ test('does not use network-health language in readiness labels', () => {
         deriveSetupReadiness({ providerUi: provider(), providerId: 'maker', modelId: 'image-model' }).label,
     ];
     assert.ok(labels.every((label) => !/connected|online|verified/i.test(label)));
+});
+
+test('preserves a saved image size while unsupported models hide it and restores it when capability returns', () => {
+    const saved = '4K';
+    const unsupported = projectImageSizePreference(saved, []);
+    assert.deepEqual(unsupported, {
+        savedValue: '4K',
+        selectedValue: '',
+        showControl: false,
+        note: 'Image size is unavailable for this model; your 4K preference is saved.',
+    });
+
+    const partial = projectImageSizePreference(saved, [{ value: '1K' }, { value: '2K' }]);
+    assert.equal(partial.savedValue, '4K');
+    assert.equal(partial.selectedValue, '');
+    assert.match(partial.note, /4K preference is saved/);
+
+    const restored = projectImageSizePreference(saved, [{ value: '1K' }, { value: '4K' }]);
+    assert.deepEqual(restored, {
+        savedValue: '4K',
+        selectedValue: '4K',
+        showControl: true,
+        note: '',
+    });
 });

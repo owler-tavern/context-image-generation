@@ -29,3 +29,28 @@
 ## Concerns
 
 - Browser UAT is `NOT TESTED`: this extension requires a running SillyTavern host, and no Chrome DevTools/browser session is available in this workspace. Automated contract, RP, and full-suite evidence is green.
+
+## Review round 1/5
+
+### RED -> GREEN evidence
+
+- RED: image-size projection test showed the missing preservation contract for a stored `4K` preference across unsupported, partially-supported, and restored model capability projections.
+- RED: current-chat appearance test could not import visibility/action guards; gallery dialog test could not import a focus controller; content contract lacked the size note and real dialog semantics.
+- RED: final visual contract failed until the gallery preview had an inset focus ring and the dialog close control had a 44px target. A final dialog-name/focus test then failed until the dialog was named and its close control had a visible focus state.
+- GREEN: focused settings/RP/gallery/dialog coverage passed 58/58.
+- GREEN: `node --test test/*.mjs` passed 229/229; `git diff --check` passed.
+
+### Delivered
+
+- Image-size preference projection now keeps the persisted value when a model has no matching size capability, renders a saved-preference note, and restores the selected value when support returns.
+- Appearance memory shows durable identities plus only current-chat NPCs. The same visibility guard prevents use/remove changes for a foreign-chat NPC row.
+- Gallery preview is a labelled modal dialog with focus transfer, Escape and backdrop dismissal, focus trapping, focus restoration, meaningful image text, and a touch-safe close button.
+- Gallery preview focus is inset inside the clipped card, so keyboard focus remains visible.
+
+### Commit
+
+`fix: preserve settings and harden gallery dialog`
+
+### Concern
+
+- Browser UAT remains `NOT TESTED` for the same unavailable SillyTavern host/DevTools session; deterministic behavior and contract coverage are green.

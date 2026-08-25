@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises';
 
 const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
 const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
 function panelMarkup(id) {
     const opening = settings.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>`));
@@ -95,6 +96,25 @@ test('reference capability feedback preserves saved preferences and clears when 
     assert.match(index, /renderReferenceCapabilityNote\(ui\.supportsReferenceImages\)/);
     assert.doesNotMatch(index, /settings\.use_avatars\s*=\s*false/);
     assert.doesNotMatch(index, /settings\.use_previous_image\s*=\s*false/);
+});
+
+test('image-size capability feedback preserves its saved value and the gallery popup is a real dialog', () => {
+    const preferences = panelMarkup('cig_settings_panel_preferences');
+    assert.match(preferences, /id="cig_image_size_capability_note"[^>]*role="status"[^>]*aria-live="polite"/);
+    assert.match(index, /projectImageSizePreference\(settings\.image_size, ui\.imageSizeOptions\)/);
+    assert.doesNotMatch(index, /settings\.image_size\s*=\s*ui\.imageSize/);
+    assert.match(index, /role="dialog" aria-modal="true" aria-labelledby="cig_popup_title"/);
+    assert.match(index, /<button type="button" class="cig_popup_close" aria-label="Close image preview">/);
+    assert.match(index, /createAccessibleDialogController/);
+    assert.match(index, /Image preview —/);
+});
+
+test('gallery and dialog controls retain visible, touch-safe focus affordances', () => {
+    assert.match(style, /\.cig_gallery_preview:focus-visible\s*\{[\s\S]*outline-offset:\s*-4px/);
+    const closeRule = style.match(/\.cig_popup_close\s*\{[\s\S]*?\n\}/)?.[0] || '';
+    assert.match(closeRule, /min-width:\s*44px/);
+    assert.match(closeRule, /min-height:\s*44px/);
+    assert.match(style, /\.cig_popup_close:focus-visible\s*\{[\s\S]*outline:/);
 });
 
 test('plain-language preference UI excludes diagnostic vocabulary and duplicate Retry actions', () => {

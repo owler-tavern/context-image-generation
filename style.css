@@ -241,6 +241,11 @@
     cursor: pointer;
 }
 
+.cig_gallery_preview:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor);
+    outline-offset: -4px;
+}
+
 .cig_gallery_item_overlay {
     position: absolute;
     top: 0;
@@ -380,19 +385,29 @@
     border-bottom: 1px solid var(--SmartThemeBorderColor);
 }
 
-.cig_popup_header span {
+.cig_popup_header h2 {
+    margin: 0;
     font-size: 12px;
     opacity: 0.7;
 }
 
 .cig_popup_close {
     cursor: pointer;
+    min-width: 44px;
+    min-height: 44px;
     padding: 4px;
+    border: 0;
+    background: transparent;
     font-size: 18px;
 }
 
 .cig_popup_close:hover {
     color: var(--SmartThemeQuoteColor);
+}
+
+.cig_popup_close:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor);
+    outline-offset: -2px;
 }
 
 .cig_popup img {

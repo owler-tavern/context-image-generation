@@ -42,7 +42,8 @@ import { createGenerationPlan } from './lib/generation-plan.js';
 import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, resolveInitialSettingsTab } from './lib/settings-ui.js';
+import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, resolveInitialSettingsTab } from './lib/settings-ui.js';
+import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -52,10 +53,11 @@ import {
     listAppearanceIdentityChoices,
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
-    removeAppearanceLook,
+    listVisibleAppearanceEntries,
+    removeVisibleAppearanceLook,
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
-    setActiveAppearanceLook,
+    setVisibleAppearanceLook,
 } from './lib/rp/appearance-library.js';
 
 const extensionName = 'context-image-generation';
@@ -749,13 +751,13 @@ function toggleImageSizeVisibility() {
     const providerId = settings.provider || 'makersuite';
     const ui = projectProviderControls(providerId, settings.model, settings.image_size, { localEntries: getProviderModelEntries(settings, providerId) });
     if (!ui) return;
-    if (settings.image_size !== ui.imageSize) settings.image_size = ui.imageSize;
-    const hasImageSizes = ui.imageSizeOptions.length > 0;
-    $('#cig_image_size_container').toggle(hasImageSizes);
+    const imageSizePreference = projectImageSizePreference(settings.image_size, ui.imageSizeOptions);
+    $('#cig_image_size_container').toggle(imageSizePreference.showControl);
+    $('#cig_image_size_capability_note').text(imageSizePreference.note).prop('hidden', !imageSizePreference.note);
     $('#cig_flash2_options').prop('hidden', !(ui.supportsThinking || ui.supportsGoogleSearch));
     $('#cig_model_note').text(ui.modelNote || '').toggle(Boolean(ui.modelNote));
     renderReferenceCapabilityNote(ui.supportsReferenceImages);
-    if (hasImageSizes) updateSizeDropdown(ui.imageSizeOptions);
+    if (imageSizePreference.showControl) updateSizeDropdown(ui.imageSizeOptions, imageSizePreference.selectedValue);
 }
 
 function renderReferenceCapabilityNote(supportsReferenceImages) {
@@ -763,12 +765,11 @@ function renderReferenceCapabilityNote(supportsReferenceImages) {
     $('#cig_reference_capability_note').text(message).prop('hidden', supportsReferenceImages);
 }
 
-function updateSizeDropdown(imageSizeOptions) {
+function updateSizeDropdown(imageSizeOptions, selectedValue = extension_settings[extensionName].image_size || '') {
     const $sizeSelect = $('#cig_image_size');
-    const currentValue = extension_settings[extensionName].image_size || '';
     $sizeSelect.empty().append('<option value="">Default</option>');
     for (const option of imageSizeOptions) $sizeSelect.append($('<option>').val(option.value).text(option.label));
-    $sizeSelect.val(currentValue);
+    $sizeSelect.val(selectedValue);
 }
 
 async function getUserAvatar() {
@@ -1294,10 +1295,7 @@ function renderAppearanceList() {
     const library = migrateAppearanceLibrary(settings.rp_library);
     const materialized = materializeAppearanceAssets(library, settings.gallery || []);
     const available = new Set(Object.keys(materialized.assets));
-    const entries = [];
-    for (const identity of Object.values(library.identities)) {
-        for (const look of identity.looks || []) entries.push({ identity, look });
-    }
+    const entries = listVisibleAppearanceEntries(library, { currentChatId: getContext().chatId });
     empty.toggle(entries.length === 0);
     for (const { identity, look } of entries) {
         const row = $('<div class="cig_appearance_item" role="listitem"></div>')
@@ -1654,13 +1652,14 @@ function viewGalleryImage(index) {
     const settings = extension_settings[extensionName];
     const item = settings.gallery[index];
     if (!item) return;
+    const opener = document.activeElement;
 
     const popup = $(`
         <div class="cig_popup_overlay">
-            <div class="cig_popup">
+            <div class="cig_popup" role="dialog" aria-modal="true" aria-labelledby="cig_popup_title">
                 <div class="cig_popup_header">
-                    <span></span>
-                    <i class="fa-solid fa-xmark cig_popup_close"></i>
+                    <h2 id="cig_popup_title"></h2>
+                    <button type="button" class="cig_popup_close" aria-label="Close image preview"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
                 </div>
                 <img />
                 <div class="cig_popup_prompt"></div>
@@ -1669,17 +1668,24 @@ function viewGalleryImage(index) {
     `);
 
     // Set text/attributes via jQuery so the prompt is escaped, never injected.
-    popup.find('.cig_popup_header span').text(new Date(item.timestamp).toLocaleString());
-    popup.find('.cig_popup img').attr('src', galleryItemSrc(item));
+    popup.find('.cig_popup_header h2').text(`Image preview — ${new Date(item.timestamp).toLocaleString()}`);
+    popup.find('.cig_popup img').attr({ src: galleryItemSrc(item), alt: item.prompt ? `Generated image: ${item.prompt}` : 'Generated image' });
     popup.find('.cig_popup_prompt').text(item.prompt || '');
+    const controller = createAccessibleDialogController({
+        dialog: popup.find('.cig_popup')[0],
+        opener,
+        onDismiss: () => popup.remove(),
+    });
 
-    popup.on('click', '.cig_popup_close, .cig_popup_overlay', function (e) {
-        if (e.target === this || $(e.target).hasClass('cig_popup_close')) {
-            popup.remove();
-        }
+    popup.on('click', '.cig_popup_close', function () {
+        controller.dismiss();
+    });
+    popup.on('click', '.cig_popup_overlay', function (e) {
+        if (e.target === this) controller.dismiss();
     });
 
     $('body').append(popup);
+    controller.open();
 }
 
 function deleteGalleryImage(index) {
@@ -1906,7 +1912,7 @@ jQuery(async () => {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
-        settings.rp_library = removeAppearanceLook(settings.rp_library, row.data('identity-id'), row.data('look-id'));
+        settings.rp_library = removeVisibleAppearanceLook(settings.rp_library, row.data('identity-id'), row.data('look-id'), { currentChatId: getContext().chatId });
         saveSettingsDebounced();
         renderAppearanceList();
     });
@@ -1915,7 +1921,7 @@ jQuery(async () => {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
-        settings.rp_library = setActiveAppearanceLook(settings.rp_library, row.attr('data-identity-id'), row.attr('data-look-id'));
+        settings.rp_library = setVisibleAppearanceLook(settings.rp_library, row.attr('data-identity-id'), row.attr('data-look-id'), { currentChatId: getContext().chatId });
         saveSettingsDebounced();
         renderAppearanceList();
     });

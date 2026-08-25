@@ -8,6 +8,9 @@ import {
     migrateAppearanceLibrary,
     removeAppearanceLook,
     getProtectedGalleryArtifactIds,
+    listVisibleAppearanceEntries,
+    removeVisibleAppearanceLook,
+    setVisibleAppearanceLook,
     trimGalleryToLimit,
     setActiveAppearanceLook,
 } from '../lib/rp/appearance-library.js';
@@ -53,6 +56,28 @@ test('adding a gallery look creates a stable identity record and deduplicates th
     assert.equal(second.library.identities['character:ava.png'].looks.length, 1);
     assert.equal(second.library.assets['asset:gallery:one'].source.galleryId, 'gallery:one');
     assert.equal('imageData' in second.library.assets['asset:gallery:one'], false);
+});
+
+test('only the current chat can view or act on chat-local NPC appearances', () => {
+    const library = {
+        identities: {
+            'character:ava': { id: 'character:ava', kind: 'character', durable: true, label: 'Ava', activeLookId: 'look:ava', looks: [{ id: 'look:ava', assetId: 'asset:ava', label: 'Day look' }] },
+            'npc:current:guard': { id: 'npc:current:guard', kind: 'npc', durable: false, chatId: 'current', label: 'Guard', activeLookId: 'look:guard', looks: [{ id: 'look:guard', assetId: 'asset:guard', label: 'Uniform' }] },
+            'npc:other:guide': { id: 'npc:other:guide', kind: 'npc', durable: false, chatId: 'other', label: 'Guide', activeLookId: 'look:guide', looks: [{ id: 'look:guide', assetId: 'asset:guide', label: 'Travel look' }] },
+        },
+        assets: {},
+    };
+    const visible = listVisibleAppearanceEntries(library, { currentChatId: 'current' });
+    assert.deepEqual(visible.map(({ identity }) => identity.id), ['character:ava', 'npc:current:guard']);
+
+    const hiddenRemoval = removeVisibleAppearanceLook(library, 'npc:other:guide', 'look:guide', { currentChatId: 'current' });
+    assert.equal(hiddenRemoval.identities['npc:other:guide'].looks.length, 1, 'foreign NPC look cannot be removed');
+    const foreignWithTwoLooks = { ...library, identities: { ...library.identities, 'npc:other:guide': { ...library.identities['npc:other:guide'], looks: [...library.identities['npc:other:guide'].looks, { id: 'look:guide-evening', assetId: 'asset:guide-evening', label: 'Evening look' }] } } };
+    const hiddenActivation = setVisibleAppearanceLook(foreignWithTwoLooks, 'npc:other:guide', 'look:guide-evening', { currentChatId: 'current' });
+    assert.equal(hiddenActivation.identities['npc:other:guide'].activeLookId, 'look:guide', 'foreign NPC look cannot be activated');
+
+    const currentRemoval = removeVisibleAppearanceLook(library, 'npc:current:guard', 'look:guard', { currentChatId: 'current' });
+    assert.equal(currentRemoval.identities['npc:current:guard'].looks.length, 0, 'current chat NPC remains actionable');
 });
 
 test('materialization omits a look when its gallery artifact was removed', () => {
