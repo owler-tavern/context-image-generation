@@ -72,8 +72,7 @@ test('NanoGPT uses the verified v1 Images route and exposes a detailed catalog p
             label: 'Flux Pro',
             transport: 'openAiImages',
             capabilities: {
-                referenceImages: { state: 'supported', source: 'official-docs', confidence: 'high' },
-                multipleOutputs: { state: 'supported', source: 'official-docs', confidence: 'high' },
+                imageGeneration: { state: 'supported', source: 'official-docs', confidence: 'high' },
             },
         },
         {

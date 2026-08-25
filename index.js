@@ -363,6 +363,7 @@ function updateModelDropdown() {
     $modelSelect.val(settings.model);
     const discovery = ui.modelDiscovery;
     const statusParts = [];
+    if (ui.available === false) statusParts.push(ui.unavailableReason || 'This provider is unavailable until a server adapter is available.');
     if (discovery.warning?.userMessage) statusParts.push(discovery.warning.userMessage);
     else if (discovery.evidence) {
         statusParts.push(`Source: ${discovery.evidence.source}`);
@@ -662,10 +663,17 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         providerRoute = { ...providerRoute, model: { id: modelId, ...cloneSnapshot(localModel) }, transport: localModel.transportId || localModel.transport };
     }
     const legacyTransport = providerRoute.transport;
+    if (!providerRoute.provider || !providerRoute.model || !legacyTransport) {
+        throw new Error(`Provider/model route is unresolved: ${providerId}/${modelId}.`);
+    }
+    if (providerRoute.provider.available === false || providerRoute.provider.posture === 'future-server') {
+        throw new Error(`${providerRoute.provider.label || providerId} is unavailable until a server adapter is available.`);
+    }
     const manualLegacyRecovery = invocation !== 'automation' && invocation !== 'swipe' && isManualLegacyLinkApiRecovery(providerId, settings);
     const transportId = manualLegacyRecovery
         ? 'linkapi-legacy-recovery'
-        : legacyTransport === 'openAiImages' ? 'openai-images' : legacyTransport === 'sillyTavernGeminiProxy' ? 'sillytavern-gemini-proxy' : 'host-chat-image';
+        : ({ openAiImages: 'openai-images', sillyTavernGeminiProxy: 'sillytavern-gemini-proxy', 'host-chat-image': 'host-chat-image' }[legacyTransport]);
+    if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
     const recentMessages = cloneSnapshot(getRecentMessages(settings.message_depth || 1, messageId)) || [];
     let messageContent = prompt;

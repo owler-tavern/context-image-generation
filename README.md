@@ -135,9 +135,9 @@ Aliases: `/proimg`, `/geminiimg`
 | Setting | Route-specific behavior |
 |---------|-------------------------|
 | Provider | Google AI Studio/OpenRouter use SillyTavern Chat Completion settings; LinkAPI and TokenReply use a key entered in this extension. |
-| Provider API Key | Shown for LinkAPI and TokenReply only; each provider retains its own credential association. |
-| Model | Gemini controls apply to Gemini models. LinkAPI also offers direct, text-only `gpt-image*`/`dall-e*` models. TokenReply offers experimental `grok-imagine-image` and `grok-imagine-image-quality`. |
-| Fetch models | LinkAPI only; discovers matching `gpt-image*`/`dall-e*` IDs for the current session. TokenReply offers an Experimental standard `/v1/models` attempt; failed fetches leave local IDs unchanged. |
+| Provider API Key | Registry-driven for LinkAPI, TokenReply, OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, and Navy.ai; each provider retains its own credential association. |
+| Model | Gemini controls apply to Gemini models. Direct Wave 1 Images profiles remain text-only with unknown optional capabilities unless model evidence enables them. |
+| Fetch models | LinkAPI/TokenReply use OpenAI-list discovery; Pollinations uses `/image/models`; NanoGPT uses `/api/v1/image-models?detailed=true`; Routeway filters explicit image-output metadata from `/v1/models`; OpenAI/Together/Navy use curated IDs. Failed fetches leave local IDs unchanged. |
 | Aspect ratio / image size | Gemini-compatible controls retain their model-specific behavior. TokenReply hides image size until live verification confirms its accepted field. |
 | Avatar / previous-image references | Available only to models whose provider metadata supports reference images; hidden for TokenReply and direct LinkAPI Images models. |
 | LinkAPI recovery | Advanced, manual-only legacy-routing switch; never an automatic fallback. |
