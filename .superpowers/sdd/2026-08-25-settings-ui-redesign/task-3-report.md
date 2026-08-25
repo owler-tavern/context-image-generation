@@ -55,3 +55,48 @@ Additional checks: `node --check index.js` exited 0 and `git diff --check` found
 ## Concerns
 
 - No browser/live-provider UAT was run. The deterministic UI and provider/model contract suite passes, but live provider behavior requires a configured SillyTavern session and credentials.
+
+## Round 1 follow-up — 2026-08-25
+
+### Findings addressed
+
+- A fulfilled model-discovery result with a normalized warning now updates the separate Setup runtime issue before its toast.
+- Credential input rerenders local readiness immediately after storing the key.
+- Credential projection now exposes bounded `credential` fields (`mode`, `label`, `placeholder`, `setupHelp`, and `advancedHelp`). The Setup consumes only the bounded help; technical provider diagnostics render in `#cig_provider_advanced_info` inside Advanced.
+- Experimental-preflight consent clears stale runtime issue/Setup attention before rerendering.
+- Registry metadata uses `advancedHelp`; the prior `providerInfo` projection is removed. LinkAPI recovery is independently hidden for non-LinkAPI providers.
+
+### RED/GREEN evidence
+
+RED before the first follow-up implementation:
+
+```text
+node --test test/provider-ui-projection.test.mjs test/settings-ui.test.mjs test/settings-readiness.contract.test.mjs
+```
+
+Result: 14 passed, 3 failed. The failures identified the absent credential projection, absent Advanced provider-info target, and absent runtime-issue formatter. A follow-up projection-boundary RED run failed 1/10 because `providerInfo` remained present, and the LinkAPI-recovery isolation RED run failed 1/7 because the recovery control had no provider-specific wrapper.
+
+Focused GREEN verification:
+
+```text
+node --check index.js
+node --test test/settings-readiness.contract.test.mjs test/settings-ui-contract.test.mjs test/settings-ui.test.mjs test/provider-ui-projection.test.mjs test/provider-registry.test.mjs
+```
+
+Result: 42 passed, 0 failed.
+
+The first full-suite attempt found one dependent assertion still reading the retired `ui.providerInfo`; root cause was the intended projection rename. The contract was updated to validate `ui.credential.advancedHelp` instead.
+
+Final full-suite verification:
+
+```text
+node --test test/*.test.mjs
+```
+
+Result: 216 passed, 0 failed. `git diff --check` also passed.
+
+### Follow-up self-review
+
+- Credential projection has no secret value field. The direct-provider projection test rejects common secret prefixes, and only normalized user messages reach the runtime issue renderer.
+- Technical registry explanations are only assigned to `credential.advancedHelp`; Setup’s visible help is bounded default/rule copy.
+- The runtime issue remains module-only and no added path persists it or activates a settings tab.

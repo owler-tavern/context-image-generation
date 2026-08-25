@@ -4,6 +4,7 @@ import {
     SETTINGS_TABS,
     normalizeSettingsTab,
     deriveSetupReadiness,
+    formatSetupRuntimeIssue,
     resolveInitialSettingsTab,
 } from '../lib/settings-ui.js';
 
@@ -13,6 +14,12 @@ const provider = (overrides = {}) => ({
     requiresApiKey: false,
     models: [{ id: 'image-model', label: 'Image model' }],
     ...overrides,
+});
+
+test('formats a distinct Setup runtime issue only from an already safe message', () => {
+    assert.equal(formatSetupRuntimeIssue({ context: 'Provider model discovery', userMessage: 'Could not reach LinkAPI. Check your connection and try again.' }), 'Provider model discovery: Could not reach LinkAPI. Check your connection and try again.');
+    assert.equal(formatSetupRuntimeIssue({ context: 'Provider model discovery', userMessage: '' }), '');
+    assert.equal(formatSetupRuntimeIssue({ context: '', userMessage: 'Model discovery failed. Your current model list was kept.' }), 'Provider issue: Model discovery failed. Your current model list was kept.');
 });
 
 test('normalizes settings tabs and defaults invalid values to setup', () => {

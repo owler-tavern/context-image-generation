@@ -39,6 +39,13 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
             status: undefined,
             requiresApiKey: true,
             apiKeyLabel: 'Fixture API Key',
+            credential: {
+                mode: 'extension-key',
+                label: 'Fixture API Key',
+                placeholder: 'Enter API key',
+                setupHelp: 'Enter the API key for Fixture Images.',
+                advancedHelp: '',
+            },
             supportsModelDiscovery: false,
             modelDiscoveryExperimental: false,
             modelDiscovery: {
@@ -47,7 +54,6 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
                 disabledReason: 'Models are curated for this provider; refresh is not needed.',
             },
             showsLegacyRecovery: false,
-            providerInfo: undefined,
             modelNote: undefined,
             models: [{ id: 'fixture-image', label: 'Fixture Image' }],
             supportsReferenceImages: false,
@@ -55,6 +61,7 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
             supportsThinking: false,
             supportsGoogleSearch: false,
         });
+        assert.equal(Object.hasOwn(projectProviderUi('fixture', 'fixture-image'), 'providerInfo'), false);
         const controls = projectProviderControls('fixture', 'fixture-image', 'large');
         assert.deepEqual(controls.imageSizeOptions, [
             { value: 'small', label: 'Small' },
@@ -98,6 +105,27 @@ test('projects a persisted custom TokenReply model with conservative image capab
     assert.equal(ui.models.at(-1).id, 'custom-tokenreply-image');
     assert.equal(ui.supportsReferenceImages, false);
     assert.equal(ui.imageSizeOptions.length, 0);
+});
+
+test('projects bounded credential copy without provider diagnostics or secrets', () => {
+    const hostCredential = projectProviderUi('makersuite', 'gemini-2.5-flash-image').credential;
+    assert.deepEqual(hostCredential, {
+        mode: 'sillytavern',
+        label: 'Google AI Studio connection',
+        placeholder: '',
+        setupHelp: 'Configure Google AI Studio in SillyTavern’s AI Response → Chat Completion Source.',
+        advancedHelp: '',
+    });
+
+    const directCredential = projectProviderUi('linkapi', 'gemini-2.5-flash-image').credential;
+    assert.deepEqual(directCredential, {
+        mode: 'extension-key',
+        label: 'LinkAPI API Key',
+        placeholder: 'Enter API key',
+        setupHelp: 'Enter the API key for LinkAPI.',
+        advancedHelp: 'Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).',
+    });
+    assert.doesNotMatch(JSON.stringify(directCredential), /sk-|Bearer|api\.linkapi\.ai\/v1/i);
 });
 
 test('shows reference controls for LinkAPI Gemini routes with verified model caps', () => {

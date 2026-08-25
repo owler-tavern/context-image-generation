@@ -56,23 +56,35 @@ test('readiness and runtime issue rendering preserve a local-only readiness mess
 });
 
 test('provider projection controls credential copy and refresh visibility without disabled dead ends', () => {
-    assert.doesNotMatch(setupMarkup(), /placeholder="sk-\.\.\."/);
-    assert.match(index, /#cig_provider_api_key_label[^\n]*\.text\(ui\.apiKeyLabel\)/);
-    assert.match(index, /#cig_provider_api_key[^\n]*\.attr\('placeholder', ui\.apiKeyPlaceholder/);
-    assert.match(index, /const providerHelp = ui\.providerInfo \|\|/);
-    assert.match(index, /#cig_provider_info[^\n]*\.text\(providerHelp\)/);
-    assert.match(index, /Configure \$\{ui\.label\} in SillyTavern's AI Response → Chat Completion Source/);
-    assert.match(index, /#cig_model_refresh[\s\S]{0,200}\.toggle\(discovery\.refreshEnabled\)/);
-    assert.match(index, /renderSetupReadiness\(settings\)/);
-    assert.match(index, /renderSetupRuntimeIssue\(\)/);
+    const setup = setupMarkup();
+    const keyField = setup.match(/<input[^>]+id="cig_provider_api_key"[^>]*>/)?.[0] || '';
+    const refresh = setup.match(/<input[^>]+id="cig_model_refresh"[^>]*>/)?.[0] || '';
+    assert.match(keyField, /placeholder="Enter API key"/);
+    assert.doesNotMatch(keyField, /sk-|Bearer/i);
+    assert.match(refresh, /aria-describedby="cig_model_refresh_hint"/);
+    assert.ok(setup.indexOf('id="cig_provider_info"') < setup.indexOf('id="cig_model"'));
+});
+
+test('Setup keeps technical provider diagnostics inside Advanced and wires updates to the separate issue region', () => {
+    const setup = setupMarkup();
+    const advanced = advancedMarkup();
+    const setupBeforeAdvanced = setup.slice(0, setup.indexOf('<details'));
+    assert.match(advanced, /id="cig_provider_advanced_info"/);
+    assert.doesNotMatch(setupBeforeAdvanced, /api\.linkapi\.ai|grok-imagine-image|OpenAI-compatible|curated CogView/i);
+    assert.match(index, /if \(result\.warning\) \{[\s\S]{0,300}setSetupRuntimeIssue\(result\.warning, 'Provider model discovery'\)/);
+    assert.match(index, /#cig_provider_api_key[\s\S]{0,500}setProviderApiKey[\s\S]{0,500}renderSetupReadiness\(settings\)/);
+    assert.match(index, /#cig_experimental_preflight_checkbox[\s\S]{0,700}setExperimentalPreflight[\s\S]{0,300}clearSetupRuntimeIssue\(\)/);
+});
+
+test('Advanced provider diagnostics do not expose LinkAPI recovery for other providers', () => {
+    const advanced = advancedMarkup();
+    assert.match(advanced, /id="cig_linkapi_legacy_routing_container"/);
+    assert.match(index, /#cig_linkapi_legacy_routing_container'\)\.toggle\(ui\.showsLegacyRecovery\)/);
 });
 
 test('configuration changes clear runtime issues while failures capture their latest safe message', () => {
-    assert.match(index, /function setSetupRuntimeIssue\(error, context\)/);
-    assert.match(index, /function clearSetupRuntimeIssue\(\)/);
-    assert.match(index, /setSetupRuntimeIssue\(error, 'Provider model discovery'\)/);
-    assert.match(index, /clearSetupRuntimeIssue\(\);[\s\S]{0,900}#cig_provider/);
-    assert.match(index, /#cig_provider_api_key[\s\S]{0,900}clearSetupRuntimeIssue\(\)/);
-    assert.match(index, /#cig_model[\s\S]{0,900}clearSetupRuntimeIssue\(\)/);
-    assert.match(index, /catch \(error\) \{[\s\S]{0,300}setSetupRuntimeIssue\(error,/);
+    assert.match(index, /setSetupRuntimeIssue\(normalized, operation\)/);
+    assert.match(index, /setSetupRuntimeIssue\(result\.warning, 'Provider model discovery'\)/);
+    assert.match(index, /setProviderApiKey\(settings, provider, \$\(this\)\.val\(\)\);\s*clearSetupRuntimeIssue\(\);\s*renderSetupReadiness\(settings\)/);
+    assert.match(index, /setExperimentalPreflight\(settings, route, \$\(this\)\.prop\('checked'\)\);\s*clearSetupRuntimeIssue\(\);\s*renderSetupReadiness\(settings\)/);
 });

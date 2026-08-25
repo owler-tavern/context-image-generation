@@ -42,7 +42,7 @@ test('declares TokenReply as an experimental discovery profile', () => {
     assert.equal(ui.supportsModelDiscovery, true);
     assert.equal(ui.modelDiscoveryExperimental, true);
     assert.equal(ui.requiresApiKey, true);
-    assert.match(ui.providerInfo, /images\/generations/);
+    assert.match(ui.credential.advancedHelp, /images\/generations/);
 });
 
 test('projects reference and size controls from model capabilities', () => {

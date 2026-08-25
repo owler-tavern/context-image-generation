@@ -42,7 +42,7 @@ import { createGenerationPlan } from './lib/generation-plan.js';
 import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { deriveSetupReadiness, normalizeSettingsTab, resolveInitialSettingsTab } from './lib/settings-ui.js';
+import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -177,13 +177,13 @@ function renderSetupRuntimeIssue() {
 
 function setSetupRuntimeIssue(error, context) {
     const settings = extension_settings[extensionName] || {};
-    const normalized = error?.category && error?.userMessage
+    const normalized = error?.userMessage
         ? error
         : normalizeProviderError(error, {
-            providerId: settings.provider || 'unknown',
-            modelId: settings.model,
-        });
-    setupRuntimeIssue = `${context}: ${normalized.userMessage}`;
+                providerId: settings.provider || 'unknown',
+                modelId: settings.model,
+            });
+    setupRuntimeIssue = formatSetupRuntimeIssue({ context, userMessage: normalized.userMessage });
     renderSetupRuntimeIssue();
 }
 
@@ -440,7 +440,10 @@ async function fetchManagedProviderModels() {
         updateModelDropdown();
         renderModelManager();
         saveSettingsDebounced();
-        if (result.warning) toastr.warning(`${result.warning.userMessage} Your current model list was kept.`, 'Context Image Generation');
+        if (result.warning) {
+            setSetupRuntimeIssue(result.warning, 'Provider model discovery');
+            toastr.warning(`${result.warning.userMessage} Your current model list was kept.`, 'Context Image Generation');
+        }
         else toastr.success(`Loaded ${result.models.length} model(s).`, 'Context Image Generation');
     } catch (error) {
         setSetupRuntimeIssue(error, 'Provider model discovery');
@@ -644,15 +647,15 @@ function toggleProviderSpecificSettings() {
     const providerId = settings.provider || 'makersuite';
     const ui = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
     if (!ui) return;
-    $('#cig_provider_key_container').toggle(ui.requiresApiKey);
-    $('#cig_provider_advanced_container').toggle(ui.showsLegacyRecovery);
-    $('#cig_provider_api_key_label').text(ui.apiKeyLabel);
-    $('#cig_provider_api_key').attr('placeholder', ui.apiKeyPlaceholder || `Enter ${ui.apiKeyLabel || 'API key'}`);
+    const credential = ui.credential;
+    $('#cig_provider_key_container').toggle(credential.mode === 'extension-key');
+    $('#cig_provider_advanced_container').toggle(ui.showsLegacyRecovery || Boolean(credential.advancedHelp));
+    $('#cig_linkapi_legacy_routing_container').toggle(ui.showsLegacyRecovery);
+    $('#cig_provider_api_key_label').text(credential.label);
+    $('#cig_provider_api_key').attr('placeholder', credential.placeholder);
     $('#cig_provider_api_key').val(getProviderApiKey(settings, settings.provider));
-    const providerHelp = ui.providerInfo || (ui.requiresApiKey
-        ? ''
-        : `Configure ${ui.label} in SillyTavern's AI Response → Chat Completion Source.`);
-    $('#cig_provider_info').text(providerHelp).toggle(Boolean(providerHelp));
+    $('#cig_provider_info').text(credential.setupHelp).toggle(Boolean(credential.setupHelp));
+    $('#cig_provider_advanced_info').text(credential.advancedHelp).toggle(Boolean(credential.advancedHelp));
     renderSetupReadiness(settings);
 }
 
@@ -1736,6 +1739,7 @@ jQuery(async () => {
         if (projectProviderUi(provider, settings.model)?.requiresApiKey) {
             setProviderApiKey(settings, provider, $(this).val());
             clearSetupRuntimeIssue();
+            renderSetupReadiness(settings);
             saveSettingsDebounced();
         }
     });
@@ -1769,6 +1773,7 @@ jQuery(async () => {
             return;
         }
         setExperimentalPreflight(settings, route, $(this).prop('checked'));
+        clearSetupRuntimeIssue();
         renderSetupReadiness(settings);
         saveSettingsDebounced();
         renderExperimentalPreflight(settings, route.modelId);
