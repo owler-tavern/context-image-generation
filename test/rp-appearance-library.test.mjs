@@ -14,6 +14,7 @@ import {
     trimGalleryToLimit,
     setActiveAppearanceLook,
 } from '../lib/rp/appearance-library.js';
+import * as appearanceLibrary from '../lib/rp/appearance-library.js';
 
 const galleryItem = {
     id: 'gallery:one',
@@ -174,4 +175,65 @@ test('orphan gallery assets do not protect unrelated gallery items', () => {
         'asset:orphan': { id: 'asset:orphan', source: { galleryId: 'gallery:orphan' } },
     } });
     assert.deepEqual([...getProtectedGalleryArtifactIds(library)], []);
+});
+
+test('only confirmed unprotected gallery deletion mutates the gallery', () => {
+    assert.equal(typeof appearanceLibrary.applyGalleryImageDeletion, 'function');
+    const gallery = [galleryItem, { ...galleryItem, id: 'gallery:two', url: '/two.png' }];
+    const cancelled = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 1, protectedIds: new Set(['gallery:one']), confirmed: false });
+    const protectedResult = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 0, protectedIds: new Set(['gallery:one']), confirmed: false });
+    const confirmed = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 1, protectedIds: new Set(['gallery:one']), confirmed: true });
+
+    assert.deepEqual(cancelled, { decision: 'cancelled', gallery });
+    assert.deepEqual(protectedResult, { decision: 'protected', gallery });
+    assert.deepEqual(confirmed, { decision: 'deleted', gallery: [galleryItem] });
+});
+
+test('only confirmed visible Appearance look removal mutates the library', () => {
+    assert.equal(typeof appearanceLibrary.applyAppearanceLookRemoval, 'function');
+    const library = addAppearanceLook({}, {
+        identity: { id: 'character:ava', kind: 'character', label: 'Ava' },
+        galleryItem,
+    }).library;
+    const cancelled = appearanceLibrary.applyAppearanceLookRemoval({
+        library,
+        identityId: 'character:ava',
+        lookId: 'look:gallery:one',
+        currentChatId: 'chat-a',
+        confirmed: false,
+    });
+    const confirmed = appearanceLibrary.applyAppearanceLookRemoval({
+        library,
+        identityId: 'character:ava',
+        lookId: 'look:gallery:one',
+        currentChatId: 'chat-a',
+        confirmed: true,
+    });
+
+    assert.equal(cancelled.decision, 'cancelled');
+    assert.deepEqual(cancelled.library, library);
+    assert.equal(confirmed.decision, 'removed');
+    assert.deepEqual(confirmed.library.identities['character:ava'].looks, []);
+});
+
+test('appearance removal keeps the current-chat guard before asking for confirmation', () => {
+    const library = migrateAppearanceLibrary({
+        identities: {
+            'npc:other:guide': {
+                id: 'npc:other:guide', kind: 'npc', label: 'Guide', chatId: 'other', durable: false,
+                looks: [{ id: 'look:guide', assetId: 'asset:guide', label: 'Guide' }],
+            },
+        },
+        assets: { 'asset:guide': { id: 'asset:guide', source: { galleryId: 'gallery:guide' } } },
+    });
+    const result = appearanceLibrary.applyAppearanceLookRemoval({
+        library,
+        identityId: 'npc:other:guide',
+        lookId: 'look:guide',
+        currentChatId: 'current',
+        confirmed: false,
+    });
+
+    assert.equal(result.decision, 'not-found');
+    assert.deepEqual(result.library, library);
 });

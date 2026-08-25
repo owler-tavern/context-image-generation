@@ -37,12 +37,12 @@ import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
-import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
+import { bindAppearanceRerenderOnChatLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, resolveInitialSettingsTab } from './lib/settings-ui.js';
+import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
@@ -54,7 +54,8 @@ import {
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
     listVisibleAppearanceEntries,
-    removeVisibleAppearanceLook,
+    applyAppearanceLookRemoval,
+    applyGalleryImageDeletion,
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
     setVisibleAppearanceLook,
@@ -169,12 +170,26 @@ function renderSetupReadiness(settings) {
         apiKey: getProviderApiKey(settings, providerId),
     });
     $('#cig_setup_status').text(readiness.label).attr('data-cig-readiness', readiness.state);
+    renderSetupTabStatus(readiness);
+}
+
+function renderSetupTabStatus(readiness) {
+    const status = projectSetupTabStatus(readiness, setupRuntimeIssue);
+    const $tab = $('#cig_settings_tab_setup');
+    const $badge = $('#cig_setup_tab_status');
+    $tab
+        .attr('aria-label', status.accessibleLabel)
+        .attr('data-cig-status', status.state)
+        .toggleClass('cig-has-issue', status.state === 'issue');
+    $badge.prop('hidden', !status.text);
+    $badge.find('i').attr('class', status.icon ? `fa-solid ${status.icon}` : 'fa-solid');
+    $badge.find('span').text(status.text);
 }
 
 function renderSetupRuntimeIssue() {
     const $issue = $('#cig_setup_issue');
     $issue.text(setupRuntimeIssue || '').toggle(Boolean(setupRuntimeIssue));
-    $('#cig_settings_tab_setup').toggleClass('cig-has-issue', Boolean(setupRuntimeIssue));
+    renderSetupReadiness(extension_settings[extensionName] || {});
 }
 
 function setSetupRuntimeIssue(error, context) {
@@ -744,13 +759,19 @@ function toggleImageSizeVisibility() {
     $('#cig_image_size_capability_note').text(imageSizePreference.note).prop('hidden', !imageSizePreference.note);
     $('#cig_flash2_options').prop('hidden', !(ui.supportsThinking || ui.supportsGoogleSearch));
     $('#cig_model_note').text(ui.modelNote || '').toggle(Boolean(ui.modelNote));
-    renderReferenceCapabilityNote(ui.supportsReferenceImages);
+    renderReferenceCapabilityControls(ui.supportsReferenceImages);
     if (imageSizePreference.showControl) updateSizeDropdown(ui.imageSizeOptions, imageSizePreference.selectedValue);
 }
 
-function renderReferenceCapabilityNote(supportsReferenceImages) {
-    const message = supportsReferenceImages ? '' : 'Avatar references are unavailable for this model; your preference is saved.';
-    $('#cig_reference_capability_note').text(message).prop('hidden', supportsReferenceImages);
+function renderReferenceCapabilityControls(supportsReferenceImages) {
+    const settings = extension_settings[extensionName] || {};
+    const referencePreferences = projectReferencePreferences({
+        useAvatars: settings.use_avatars,
+        usePreviousImage: settings.use_previous_image,
+    }, supportsReferenceImages);
+    $('#cig_avatar_reference_option').toggle(referencePreferences.showAvatarControl);
+    $('#cig_previous_image_reference_option').toggle(referencePreferences.showPreviousImageControl);
+    $('#cig_reference_capability_note').text(referencePreferences.note).prop('hidden', !referencePreferences.note);
 }
 
 function updateSizeDropdown(imageSizeOptions, selectedValue = extension_settings[extensionName].image_size || '') {
@@ -1676,15 +1697,27 @@ function viewGalleryImage(index) {
     controller.open();
 }
 
-function deleteGalleryImage(index) {
+async function confirmDestructiveAction(message, confirmLabel) {
+    const popup = new Popup(message, POPUP_TYPE.CONFIRM, null, {
+        okButton: confirmLabel,
+        cancelButton: 'Cancel',
+        animation: 'fast',
+    });
+    return (await popup.show()) === POPUP_RESULT.AFFIRMATIVE;
+}
+
+async function deleteGalleryImage(index) {
     const settings = extension_settings[extensionName];
-    const item = settings.gallery[index];
     const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
-    if (item && protectedIds.has(galleryArtifactKey(item))) {
+    const decision = applyGalleryImageDeletion({ gallery: settings.gallery, index, protectedIds, confirmed: false });
+    if (decision.decision === 'protected') {
         toastr.info('This image is remembered as an appearance. Remove that appearance first.', 'Context Image Generation');
         return;
     }
-    settings.gallery.splice(index, 1);
+    if (decision.decision !== 'cancelled' || !await confirmDestructiveAction('Delete this generated image? This cannot be undone.', 'Delete image')) return;
+    const confirmed = applyGalleryImageDeletion({ gallery: settings.gallery, index, protectedIds, confirmed: true });
+    if (confirmed.decision !== 'deleted') return;
+    settings.gallery = confirmed.gallery;
     saveSettingsDebounced();
     renderGallery();
     renderAppearanceList();
@@ -1890,17 +1923,34 @@ jQuery(async () => {
         }
     });
 
-    $(document).on('click', '.cig_gallery_delete', function (e) {
+    $(document).on('click', '.cig_gallery_delete', async function (e) {
         e.stopPropagation();
         const index = $(this).data('index');
-        deleteGalleryImage(index);
+        await deleteGalleryImage(index);
     });
 
-    $(document).on('click', '.cig_appearance_remove', function (e) {
+    $(document).on('click', '.cig_appearance_remove', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
-        settings.rp_library = removeVisibleAppearanceLook(settings.rp_library, row.data('identity-id'), row.data('look-id'), { currentChatId: getContext().chatId });
+        const currentChatId = getContext().chatId;
+        const pending = applyAppearanceLookRemoval({
+            library: settings.rp_library,
+            identityId: row.data('identity-id'),
+            lookId: row.data('look-id'),
+            currentChatId,
+            confirmed: false,
+        });
+        if (pending.decision !== 'cancelled' || !await confirmDestructiveAction('Remove this saved appearance? This cannot be undone.', 'Remove appearance')) return;
+        const confirmed = applyAppearanceLookRemoval({
+            library: settings.rp_library,
+            identityId: row.data('identity-id'),
+            lookId: row.data('look-id'),
+            currentChatId,
+            confirmed: true,
+        });
+        if (confirmed.decision !== 'removed') return;
+        settings.rp_library = confirmed.library;
         saveSettingsDebounced();
         renderAppearanceList();
     });
@@ -1917,6 +1967,8 @@ jQuery(async () => {
     $(document).on('click', '.cig_message_gen', function (e) {
         cigMessageButton($(e.currentTarget));
     });
+
+    bindAppearanceRerenderOnChatLifecycle(eventSource, event_types, renderAppearanceList);
 
     eventSource.on(event_types.MESSAGE_RENDERED, (messageId) => {
         injectMessageButton(messageId);

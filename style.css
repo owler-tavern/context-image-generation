@@ -425,3 +425,17 @@
     overflow-y: auto;
     border-top: 1px solid var(--SmartThemeBorderColor);
 }
+#cig_settings_tab_setup .cig-setup-tab-status {
+    align-items: center;
+    border: 1px solid currentColor;
+    border-radius: 0.25rem;
+    display: inline-flex;
+    gap: 0.25rem;
+    margin-left: 0.35rem;
+    padding: 0.1rem 0.3rem;
+}
+
+#cig_settings_tab_setup[data-cig-status="incomplete"] .cig-setup-tab-status,
+#cig_settings_tab_setup[data-cig-status="issue"] .cig-setup-tab-status {
+    font-weight: 600;
+}

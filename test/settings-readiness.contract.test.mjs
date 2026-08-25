@@ -55,6 +55,16 @@ test('readiness and runtime issue rendering preserve a local-only readiness mess
     assert.doesNotMatch(index, /cig_setup_status[^\n]{0,180}(?:Connected|Online|Verified)/i);
 });
 
+test('Setup tab presents text and an accessible status for incomplete setup or runtime errors without changing the selected tab', () => {
+    const setupTab = settings.match(/<button\b[^>]*id="cig_settings_tab_setup"[^>]*>[\s\S]*?<\/button>/)?.[0] || '';
+    assert.match(setupTab, /id="cig_setup_tab_status"/);
+    assert.match(index, /function renderSetupTabStatus\(readiness\)/);
+    assert.match(index, /projectSetupTabStatus\(readiness, setupRuntimeIssue\)/);
+    assert.match(index, /\.attr\('aria-label', status\.accessibleLabel\)/);
+    assert.match(index, /#cig_setup_tab_status/);
+    assert.doesNotMatch(index, /renderSetupTabStatus[\s\S]{0,800}activateSettingsTab\(/);
+});
+
 test('provider projection controls credential copy and refresh visibility without disabled dead ends', () => {
     const setup = setupMarkup();
     const keyField = setup.match(/<input[^>]+id="cig_provider_api_key"[^>]*>/)?.[0] || '';

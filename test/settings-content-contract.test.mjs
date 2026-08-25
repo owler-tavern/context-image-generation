@@ -90,10 +90,12 @@ test('gallery preview and appearance actions are semantic and identify their out
 test('reference capability feedback preserves saved preferences and clears when support returns', () => {
     const preferences = panelMarkup('cig_settings_panel_preferences');
     assert.match(preferences, /id="cig_reference_capability_note"[^>]*role="status"[^>]*aria-live="polite"/);
-    assert.match(index, /function renderReferenceCapabilityNote\(supportsReferenceImages\)/);
-    assert.match(index, /Avatar references are unavailable for this model; your preference is saved\./);
-    assert.match(index, /#cig_reference_capability_note'\)\.text\(message\)\.prop\('hidden', supportsReferenceImages\)/);
-    assert.match(index, /renderReferenceCapabilityNote\(ui\.supportsReferenceImages\)/);
+    assert.match(preferences, /id="cig_avatar_reference_option"/);
+    assert.match(preferences, /id="cig_previous_image_reference_option"/);
+    assert.match(index, /projectReferencePreferences\(/);
+    assert.match(index, /#cig_avatar_reference_option'\)\.toggle\(referencePreferences\.showAvatarControl\)/);
+    assert.match(index, /#cig_previous_image_reference_option'\)\.toggle\(referencePreferences\.showPreviousImageControl\)/);
+    assert.match(index, /#cig_reference_capability_note'\)\.text\(referencePreferences\.note\)\.prop\('hidden', !referencePreferences\.note\)/);
     assert.doesNotMatch(index, /settings\.use_avatars\s*=\s*false/);
     assert.doesNotMatch(index, /settings\.use_previous_image\s*=\s*false/);
 });

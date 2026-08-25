@@ -8,6 +8,7 @@ import {
     projectImageSizePreference,
     resolveInitialSettingsTab,
 } from '../lib/settings-ui.js';
+import * as settingsUi from '../lib/settings-ui.js';
 
 const provider = (overrides = {}) => ({
     id: 'makersuite',
@@ -109,5 +110,48 @@ test('preserves a saved image size while unsupported models hide it and restores
         selectedValue: '4K',
         showControl: true,
         note: '',
+    });
+});
+
+test('hides unsupported visual-reference controls without losing saved preferences and restores them when support returns', () => {
+    assert.equal(typeof settingsUi.projectReferencePreferences, 'function');
+    const saved = Object.freeze({ useAvatars: true, usePreviousImage: true });
+    const supported = settingsUi.projectReferencePreferences(saved, true);
+    const unsupported = settingsUi.projectReferencePreferences(saved, false);
+    const restored = settingsUi.projectReferencePreferences(saved, true);
+
+    assert.deepEqual(supported, {
+        showAvatarControl: true,
+        showPreviousImageControl: true,
+        note: '',
+    });
+    assert.deepEqual(unsupported, {
+        showAvatarControl: false,
+        showPreviousImageControl: false,
+        note: 'Visual references are unavailable for this model. Your saved reference preferences will be used when available.',
+    });
+    assert.deepEqual(restored, supported);
+    assert.deepEqual(saved, { useAvatars: true, usePreviousImage: true });
+});
+
+test('projects visible and accessible Setup tab status for readiness and runtime issues', () => {
+    assert.equal(typeof settingsUi.projectSetupTabStatus, 'function');
+    assert.deepEqual(settingsUi.projectSetupTabStatus({ state: 'needs-key', label: 'Add your API key' }, ''), {
+        state: 'incomplete',
+        text: 'Setup incomplete',
+        icon: 'fa-triangle-exclamation',
+        accessibleLabel: 'Setup incomplete: Add your API key',
+    });
+    assert.deepEqual(settingsUi.projectSetupTabStatus({ state: 'ready', label: 'Ready to generate' }, 'Provider model discovery: Try again.'), {
+        state: 'issue',
+        text: 'Setup issue',
+        icon: 'fa-circle-exclamation',
+        accessibleLabel: 'Setup issue: Provider model discovery: Try again.',
+    });
+    assert.deepEqual(settingsUi.projectSetupTabStatus({ state: 'ready', label: 'Ready to generate' }, ''), {
+        state: 'ready',
+        text: '',
+        icon: '',
+        accessibleLabel: 'Setup',
     });
 });

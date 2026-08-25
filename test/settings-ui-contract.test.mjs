@@ -29,7 +29,8 @@ test('settings shell owns exactly three labelled tabs and matching panels', () =
     const tabs = [...settings.matchAll(/<button\b[^>]*role="tab"[^>]*>[\s\S]*?<\/button>/g)];
     assert.equal(tabs.length, 3);
     const tabByValue = new Map(tabs.map((tab) => {
-        const attrs = attributes(tab[0]);
+        const opening = tab[0].match(/^<button\b[^>]*>/)?.[0] || '';
+        const attrs = attributes(opening);
         return [attrs.value, attrs];
     }));
     assert.deepEqual([...tabByValue.keys()].sort(), ['images-cast', 'preferences', 'setup']);
