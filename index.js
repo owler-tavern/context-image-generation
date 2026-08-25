@@ -929,7 +929,6 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                     fetchImpl: fetch,
                     getRequestHeaders,
                     mapAspectRatioToSize,
-                    requestSillyTavernImage,
                 },
             });
             if (typeof finalize !== 'function') return generated;

@@ -11,3 +11,8 @@ test('shared generation path builds one plan and labels invocation sources', asy
     assert.match(index, /'slash'\)/);
     assert.match(index, /'swipe'\);/);
 });
+
+test('runtime dispatch does not reference a removed SillyTavern request callback', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(index, /\brequestSillyTavernImage\b/u);
+});
