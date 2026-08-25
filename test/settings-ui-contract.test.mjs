@@ -4,21 +4,21 @@ import { readFile } from 'node:fs/promises';
 
 const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
 const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
-const requiredBoundIds = [
-    'cig_provider', 'cig_provider_api_key', 'cig_linkapi_use_legacy_routing',
-    'cig_model', 'cig_model_refresh', 'cig_model_search', 'cig_managed_model_list',
-    'cig_managed_model_id', 'cig_managed_model_transport', 'cig_add_model',
-    'cig_save_model', 'cig_remove_model', 'cig_cancel_generation', 'cig_show_preflight',
-    'cig_export_diagnostics', 'cig_aspect_ratio', 'cig_image_size', 'cig_thinking_level',
-    'cig_use_google_search', 'cig_message_depth', 'cig_use_avatars',
-    'cig_include_descriptions', 'cig_use_previous_image', 'cig_regenerate_on_swipe',
-    'cig_auto_generate', 'cig_system_instruction', 'cig_generate_btn',
-    'cig_gallery_container', 'cig_clear_gallery', 'cig_appearance_list',
-];
+// This ID is intentionally created by the appearance dialog at runtime, not by settings.html.
+const DYNAMIC_OR_NON_SETTINGS_IDS = new Set(['cig_appearance_identity']);
 
 function attributes(markup) {
     return Object.fromEntries([...markup.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value]));
+}
+
+function advancedMarkup() {
+    const opening = settings.match(/<details\b[^>]*id="cig_advanced_setup"[^>]*>/);
+    assert.ok(opening, 'missing #cig_advanced_setup opening tag');
+    const closingIndex = settings.indexOf('</details>', opening.index);
+    assert.notEqual(closingIndex, -1, 'missing #cig_advanced_setup closing tag');
+    return settings.slice(opening.index, closingIndex + '</details>'.length);
 }
 
 test('settings shell owns exactly three labelled tabs and matching panels', () => {
@@ -38,10 +38,12 @@ test('settings shell owns exactly three labelled tabs and matching panels', () =
     assert.equal(panels.length, 3);
     for (const [value, tab] of tabByValue) {
         assert.equal(tab.type, 'button');
+        assert.equal(tab['data-cig-tab'], value);
         assert.equal(tab['aria-controls'], `cig_settings_panel_${value.replace('-', '_')}`);
         const panel = panels.find((candidate) => candidate.id === tab['aria-controls']);
         assert.ok(panel, `missing panel for ${value}`);
         assert.equal(panel['aria-labelledby'], tab.id);
+        assert.equal(panel['data-cig-panel'], value);
     }
 });
 
@@ -51,15 +53,17 @@ test('settings keeps one non-nested Advanced disclosure and no Advanced tab', ()
     assert.equal(attributes(details[0][0]).id, 'cig_advanced_setup');
     assert.doesNotMatch(settings, /role="tab"[^>]*(?:value="advanced"|>\s*Advanced\s*<)/i);
 
-    const advanced = settings.slice(details[0].index);
+    const advanced = advancedMarkup();
     for (const id of [
         'cig_provider_advanced_container', 'cig_linkapi_use_legacy_routing', 'cig_model_manager',
         'cig_managed_model_list', 'cig_show_preflight', 'cig_export_diagnostics',
     ]) assert.match(advanced, new RegExp(`id="${id}"`));
 });
 
-test('all existing bound settings controls remain unique', () => {
-    for (const id of requiredBoundIds) {
+test('all index-bound settings controls remain unique in settings markup', () => {
+    const boundIds = new Set([...index.matchAll(/#(cig_[\w-]+)/g)].map((match) => match[1]));
+    for (const id of boundIds) {
+        if (DYNAMIC_OR_NON_SETTINGS_IDS.has(id)) continue;
         assert.equal((settings.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} must occur exactly once`);
     }
 });
@@ -71,6 +75,12 @@ test('settings navigation activates, persists, and supports keyboard roving focu
     assert.match(index, /prop\('hidden', !isActive\)/);
     assert.match(index, /settings\.ui_last_settings_tab = selectedTab/);
     assert.match(index, /\['ArrowLeft', 'ArrowRight', 'Home', 'End'\]/);
+    assert.match(index, /\[data-cig-tab\]/);
+    assert.match(index, /\[data-cig-panel\]/);
     assert.match(index, /resolveInitialSettingsTab\(/);
     assert.match(index, /deriveSetupReadiness\(/);
+});
+
+test('shared settings focus visibility covers standard form controls', () => {
+    assert.match(style, /#cig_settings :is\(button, input, select, textarea, \[role="tab"\]\):focus-visible/);
 });

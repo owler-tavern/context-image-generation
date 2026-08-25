@@ -475,18 +475,18 @@ function updateModelDropdown() {
 
 function activateSettingsTab(tabId, { persist = true } = {}) {
     const selectedTab = normalizeSettingsTab(tabId);
-    const tabs = $('#cig_settings [role="tab"]');
-    const panels = $('#cig_settings [role="tabpanel"]');
+    const tabs = $('#cig_settings [data-cig-tab]');
+    const panels = $('#cig_settings [data-cig-panel]');
     if (!tabs.length || !panels.length) return selectedTab;
 
     tabs.each(function () {
-        const isActive = $(this).val() === selectedTab;
+        const isActive = $(this).attr('data-cig-tab') === selectedTab;
         $(this)
             .attr('aria-selected', isActive.toString())
             .attr('tabindex', isActive ? '0' : '-1');
     });
     panels.each(function () {
-        const isActive = this.id === `cig_settings_panel_${selectedTab.replace('-', '_')}`;
+        const isActive = $(this).attr('data-cig-panel') === selectedTab;
         $(this).prop('hidden', !isActive);
     });
 
@@ -1640,20 +1640,20 @@ jQuery(async () => {
     renderProviderDropdown();
     await loadSettings();
 
-    $('#cig_settings [role="tab"]').on('click', function () {
-        activateSettingsTab($(this).val());
+    $('#cig_settings [data-cig-tab]').on('click', function () {
+        activateSettingsTab($(this).attr('data-cig-tab'));
         this.focus();
     }).on('keydown', function (event) {
         const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
         if (!keys.includes(event.key)) return;
         event.preventDefault();
-        const tabs = $('#cig_settings [role="tab"]');
+        const tabs = $('#cig_settings [data-cig-tab]');
         const currentIndex = tabs.index(this);
         const nextIndex = event.key === 'Home' ? 0
             : event.key === 'End' ? tabs.length - 1
                 : (currentIndex + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length;
         const nextTab = tabs.eq(nextIndex);
-        activateSettingsTab(nextTab.val());
+        activateSettingsTab(nextTab.attr('data-cig-tab'));
         nextTab.trigger('focus');
     });
 

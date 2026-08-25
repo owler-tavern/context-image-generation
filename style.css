@@ -69,7 +69,7 @@
     display: none !important;
 }
 
-#cig_settings :is(button, input[type="button"], input[type="submit"], [role="tab"]):focus-visible {
+#cig_settings :is(button, input, select, textarea, [role="tab"]):focus-visible {
     outline: 2px solid var(--SmartThemeQuoteColor);
     outline-offset: 2px;
 }
