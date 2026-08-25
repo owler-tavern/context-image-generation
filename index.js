@@ -329,9 +329,12 @@ window.cigDebug = Object.assign(window.cigDebug || {}, {
 function renderProviderDropdown() {
     const $providerSelect = $('#cig_provider').empty();
     for (const provider of projectProviderOptions()) {
+        const unavailableLabel = provider.available === false
+            ? ` — ${String(provider.unavailableReason || 'Unavailable until server adapter support').replace(/\s+/g, ' ').slice(0, 96)}`
+            : '';
         $providerSelect.append($('<option>')
             .val(provider.id)
-            .text(provider.label || provider.id)
+            .text(`${provider.label || provider.id}${unavailableLabel}`)
             .prop('disabled', provider.available === false)
             .attr('title', provider.available === false ? provider.unavailableReason || 'Available after the optional server adapter is installed.' : undefined));
     }
@@ -720,7 +723,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         invocation,
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
-        resolved: { connectionId: `${providerId}:default`, providerId, modelId, transportId, ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), ...(manualLegacyRecovery ? { legacyKind: legacyTransport === 'openAiImages' ? 'openai-images' : 'gemini-proxy' } : {}), capabilities: routeModel.capabilities || routeModel },
+        resolved: { connectionId: `${providerId}:default`, providerId, modelId, transportId, modelDefinition: routeModel, ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), ...(manualLegacyRecovery ? { legacyKind: legacyTransport === 'openAiImages' ? 'openai-images' : 'gemini-proxy' } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         references: referenceCandidates,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },

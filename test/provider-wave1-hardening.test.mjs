@@ -88,5 +88,7 @@ test('unavailable reason is projected into the live status adjacent to the model
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /ui\.available === false/);
     assert.match(source, /ui\.unavailableReason/);
+    assert.match(source, /provider\.available === false/);
+    assert.match(source, /unavailableLabel/);
     assert.match(source, /cig_model_discovery_status/);
 });
