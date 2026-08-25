@@ -1708,17 +1708,18 @@ async function confirmDestructiveAction(message, confirmLabel) {
 
 async function deleteGalleryImage(index) {
     const settings = extension_settings[extensionName];
-    const targetArtifactId = galleryArtifactKey(settings.gallery[index]);
-    if (!targetArtifactId) return;
+    const targetItem = settings.gallery[index];
+    if (!targetItem) return;
+    const targetArtifactId = galleryArtifactKey(targetItem);
     const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
-    const decision = applyGalleryImageDeletion({ gallery: settings.gallery, targetArtifactId, protectedIds, confirmed: false });
+    const decision = applyGalleryImageDeletion({ gallery: settings.gallery, targetArtifactId, targetItem, protectedIds, confirmed: false });
     if (decision.decision === 'protected') {
         toastr.info('This image is remembered as an appearance. Remove that appearance first.', 'Context Image Generation');
         return;
     }
     if (decision.decision !== 'cancelled' || !await confirmDestructiveAction('Delete this generated image? This cannot be undone.', 'Delete image')) return;
     const currentProtectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
-    const confirmed = applyGalleryImageDeletion({ gallery: settings.gallery, targetArtifactId, protectedIds: currentProtectedIds, confirmed: true });
+    const confirmed = applyGalleryImageDeletion({ gallery: settings.gallery, targetArtifactId, targetItem, protectedIds: currentProtectedIds, confirmed: true });
     if (confirmed.decision !== 'deleted') return;
     settings.gallery = confirmed.gallery;
     saveSettingsDebounced();

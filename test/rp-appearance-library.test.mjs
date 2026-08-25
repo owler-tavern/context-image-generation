@@ -180,9 +180,9 @@ test('orphan gallery assets do not protect unrelated gallery items', () => {
 test('only confirmed unprotected gallery deletion mutates the gallery', () => {
     assert.equal(typeof appearanceLibrary.applyGalleryImageDeletion, 'function');
     const gallery = [galleryItem, { ...galleryItem, id: 'gallery:two', url: '/two.png' }];
-    const cancelled = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 1, protectedIds: new Set(['gallery:one']), confirmed: false });
-    const protectedResult = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 0, protectedIds: new Set(['gallery:one']), confirmed: false });
-    const confirmed = appearanceLibrary.applyGalleryImageDeletion({ gallery, index: 1, protectedIds: new Set(['gallery:one']), confirmed: true });
+    const cancelled = appearanceLibrary.applyGalleryImageDeletion({ gallery, targetItem: gallery[1], protectedIds: new Set(['gallery:one']), confirmed: false });
+    const protectedResult = appearanceLibrary.applyGalleryImageDeletion({ gallery, targetItem: gallery[0], protectedIds: new Set(['gallery:one']), confirmed: false });
+    const confirmed = appearanceLibrary.applyGalleryImageDeletion({ gallery, targetItem: gallery[1], protectedIds: new Set(['gallery:one']), confirmed: true });
 
     assert.deepEqual(cancelled, { decision: 'cancelled', gallery });
     assert.deepEqual(protectedResult, { decision: 'protected', gallery });
@@ -195,14 +195,12 @@ test('confirmed gallery deletion resolves the captured artifact after gallery or
     const reordered = [addedDuringConfirmation, galleryItem, target];
     const deleted = appearanceLibrary.applyGalleryImageDeletion({
         gallery: reordered,
-        index: 1,
         targetArtifactId: 'gallery:two',
         protectedIds: new Set(),
         confirmed: true,
     });
     const missing = appearanceLibrary.applyGalleryImageDeletion({
         gallery: [addedDuringConfirmation, galleryItem],
-        index: 1,
         targetArtifactId: 'gallery:two',
         protectedIds: new Set(),
         confirmed: true,
@@ -210,6 +208,28 @@ test('confirmed gallery deletion resolves the captured artifact after gallery or
 
     assert.deepEqual(deleted, { decision: 'deleted', gallery: [addedDuringConfirmation, galleryItem] });
     assert.deepEqual(missing, { decision: 'not-found', gallery: [addedDuringConfirmation, galleryItem] });
+});
+
+test('confirmed legacy image-data gallery deletion resolves the captured object after reordering', () => {
+    const legacyTarget = { imageData: 'aGVsbG8=', mimeType: 'image/png', prompt: 'Legacy image' };
+    const other = { ...galleryItem, id: 'gallery:other', url: '/other.png' };
+    const addedDuringConfirmation = { ...galleryItem, id: 'gallery:new', url: '/new.png' };
+    const reordered = [addedDuringConfirmation, other, legacyTarget];
+    const deleted = appearanceLibrary.applyGalleryImageDeletion({
+        gallery: reordered,
+        targetItem: legacyTarget,
+        protectedIds: new Set(),
+        confirmed: true,
+    });
+    const missing = appearanceLibrary.applyGalleryImageDeletion({
+        gallery: [addedDuringConfirmation, other],
+        targetItem: legacyTarget,
+        protectedIds: new Set(),
+        confirmed: true,
+    });
+
+    assert.deepEqual(deleted, { decision: 'deleted', gallery: [addedDuringConfirmation, other] });
+    assert.deepEqual(missing, { decision: 'not-found', gallery: [addedDuringConfirmation, other] });
 });
 
 test('only confirmed visible Appearance look removal mutates the library', () => {
