@@ -2,13 +2,6 @@
 
 This is the standing technical reference for people and agents maintaining this extension. It describes the code currently in this repository; it does not replace SillyTavern's own extension API documentation.
 
-Research and planned features are deliberately separate from current behavior:
-
-- [PRODUCT.md](PRODUCT.md) is the durable product authority: primary user, one-click North Star, hosted-provider scope, and simplicity constraints.
-- [docs/EXTERNAL_EXTENSION_RESEARCH.md](docs/EXTERNAL_EXTENSION_RESEARCH.md) records reviewed projects, international findings, evidence boundaries, and lessons.
-- [docs/ROADMAP.md](docs/ROADMAP.md) maps those lessons to versioned features, dependencies, acceptance evidence, and explicit deferrals.
-- [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md) remains authoritative for current provider release status.
-
 ## Purpose and ownership
 
 Context Image Generation is a SillyTavern third-party extension that creates scene images from chat context. It can include character and persona details, avatar images, previous generated images, and recent messages in a generation prompt.
@@ -61,17 +54,11 @@ Settings are saved through SillyTavern's `saveSettingsDebounced()`. Provider cre
 | LinkAPI + Gemini image model | `sillyTavernGeminiProxy`: Same SillyTavern backend route, forced to `chat_completion_source: 'makersuite'` | Per-provider LinkAPI key as `proxy_password`; `reverse_proxy: 'https://api.linkapi.ai'` | Supported by the normal multimodal message path. |
 | LinkAPI + `gpt-image*` or `dall-e*` model | `openAiImages`: direct browser `POST` to `https://linkapi.ai/v1/images/generations` | Per-provider LinkAPI bearer token | **Not supported.** All built messages are reduced to plain text. |
 | TokenReply + `grok-imagine-image` / `grok-imagine-image-quality` | `openAiImages`: direct browser `POST` to `https://api.tokenreply.com/v1/images/generations` | Per-provider TokenReply bearer token | **Not supported.** Experimental; minimal text-only payload omits image size. |
-| Wave 1 hosted profiles (OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, Navy.ai) | `openAiImages`: provider-specific HTTPS `/images/generations` route | Registry-derived per-provider bearer key | Experimental; optional capabilities remain unknown unless explicit model evidence enables them. Pollinations paid JSON never puts keys in query strings; NanoGPT uses its detailed catalog parser seam. |
-| Z.AI | `zai-native` | Dedicated native HTTPS POST adapter | **Experimental.** Curated CogView/GLM models use the native `size` payload and leave quality at the provider model default; references/editing remain unknown. |
-| ArliAI | `arliai-native` | Dedicated native HTTPS POST adapter | **Experimental.** Curated SD-style model uses source-verified JSON and base64 `images[]`; references/editing are unsupported. |
-| NovelAI, Stability AI, Naistera, Chutes and other provider-native/async inventory entries | No browser transport | Server adapter only | **Unavailable.** Their binary/legacy/async lifecycles, route conflicts, chute-specific routes, secret handling, or SSRF/output policies do not fit the validated browser adapter. |
 
 The LinkAPI Gemini route is intentionally shaped as a Gemini/MakerSuite request because LinkAPI provides a Gemini-compatible proxy. Do not change the active chat-completion profile to make this work; the request-specific `reverse_proxy` and `proxy_password` overrides are the isolation boundary.
 
-The direct OpenAI Images route starts with the minimal `{ model, prompt }` payload. It adds `size`, `n`, or `response_format` only when the selected model's normalized capability evidence positively supports that field. It accepts either `b64_json` or a returned URL; a returned URL is fetched and converted to base64 before the extension continues. TokenReply deliberately has no size metadata until live evidence confirms its accepted field.
-The normal adapter route adds `size` only when the selected model metadata declares `supportsSize: true`; it is capability-gated, not endpoint-wide. Unknown models send only the minimal text prompt, while positive model evidence enables individual optional fields. The retained legacy LinkAPI Images recovery route intentionally maps and sends `size` unconditionally to preserve the pre-adapter request shape. Keep that distinction documented and do not use legacy behavior as evidence that a new provider accepts `size`.
-
-Unknown manual or fetched image models require an explicit **Allow experimental text-only generation** confirmation in Manage models. The warning states that the endpoint/model is unverified and optional features are disabled; the confirmation is stored only under the exact provider/model/transport tuple. Without confirmation, ordinary wand and automation runs fail closed and direct the user to Advanced → Manage models without opening a modal during roleplay.
+The direct OpenAI Images route uses `{ model, prompt, n: 1, response_format: 'b64_json' }`, adding `size` only when the curated model metadata explicitly permits it. It accepts either `b64_json` or a returned URL; a returned URL is fetched and converted to base64 before the extension continues. TokenReply deliberately has no size metadata until live evidence confirms its accepted field.
+The normal adapter route adds `size` only when the selected model metadata declares `supportsSize: true`; this is normal adapter behavior, not an endpoint-wide assumption. The retained legacy LinkAPI Images recovery route intentionally maps and sends `size` unconditionally to preserve the pre-adapter request shape. Keep that distinction documented and do not use legacy behavior as evidence that a new provider accepts `size`.
 
 
 ### Important endpoint distinction
@@ -150,5 +137,3 @@ The Model Manager now records the route for a manually added model. For provider
 TokenReply model discovery keeps only `grok-imagine-image*` IDs. A model-list response containing ordinary chat models therefore cannot add them to the image-model selector.
 
 Generation requests are coordinated by their target. Starting the same message or prompt again while it is already in progress is rejected before a second provider request is sent.
-
-RP message generation captures selected plain text synchronously from the existing message wand. The focus limit is 600 normalized characters; cross-message/control selections fall back to whole-message generation. Message attachment uses the current SillyTavern chat ID plus a message fingerprint to reject stale results, retaining an unsafe result in the extension gallery instead of writing another chat. Provider failures use the normalized category/user-message contract and redacted technical diagnostics across wand, settings, slash, auto, swipe, and model discovery paths.

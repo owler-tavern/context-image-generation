@@ -3,8 +3,6 @@ import assert from 'node:assert/strict';
 import { PROVIDERS, resolveProviderRoute } from '../lib/providers/registry.js';
 import { dispatchProviderRoute } from '../lib/providers/dispatch.js';
 
-const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
-
 test('dispatches a declarative fixture OpenAI Images provider through its configured URL', async () => {
     PROVIDERS.fixture = {
         id: 'fixture',
@@ -23,7 +21,7 @@ test('dispatches a declarative fixture OpenAI Images provider through its config
             apiKey: 'fixture-key',
             aspectRatio: '16:9',
             mapAspectRatioToSize: () => '1536x1024',
-            requestOpenAiImages: async (request) => { calls.push(request); return { imageData: PNG, mimeType: 'image/png' }; },
+            requestOpenAiImages: async (request) => { calls.push(request); return { imageData: 'image', mimeType: 'image/png' }; },
             requestSillyTavernImage: async () => { throw new Error('unexpected Gemini dispatch'); },
         });
     } finally {
@@ -36,6 +34,5 @@ test('dispatches a declarative fixture OpenAI Images provider through its config
         prompt: 'fixture scene',
         size: '1536x1024',
         baseUrl: 'https://fixture.example/v1',
-        providerId: 'fixture',
     }]);
 });

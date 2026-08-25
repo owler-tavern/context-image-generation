@@ -11,7 +11,6 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
         credentialKey: 'fixture',
         ui: {
             requiresApiKey: true,
-            credentialOwnership: 'extension',
             apiKeyLabel: 'Fixture API Key',
             modelDiscovery: false,
             adapterRequired: true,
@@ -40,21 +39,10 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
             status: undefined,
             requiresApiKey: true,
             apiKeyLabel: 'Fixture API Key',
-            credential: {
-                mode: 'extension-key',
-                label: 'Fixture API Key',
-                placeholder: 'Enter API key',
-                setupHelp: 'Enter the API key for Fixture Images.',
-                advancedHelp: '',
-            },
             supportsModelDiscovery: false,
             modelDiscoveryExperimental: false,
-            modelDiscovery: {
-                kind: 'curated-static',
-                refreshEnabled: false,
-                disabledReason: 'Models are curated for this provider; refresh is not needed.',
-            },
             showsLegacyRecovery: false,
+            providerInfo: undefined,
             modelNote: undefined,
             models: [{ id: 'fixture-image', label: 'Fixture Image' }],
             supportsReferenceImages: false,
@@ -62,7 +50,6 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
             supportsThinking: false,
             supportsGoogleSearch: false,
         });
-        assert.equal(Object.hasOwn(projectProviderUi('fixture', 'fixture-image'), 'providerInfo'), false);
         const controls = projectProviderControls('fixture', 'fixture-image', 'large');
         assert.deepEqual(controls.imageSizeOptions, [
             { value: 'small', label: 'Small' },
@@ -108,53 +95,6 @@ test('projects a persisted custom TokenReply model with conservative image capab
     assert.equal(ui.imageSizeOptions.length, 0);
 });
 
-test('projects bounded credential copy without provider diagnostics or secrets', () => {
-    const hostCredential = projectProviderUi('makersuite', 'gemini-2.5-flash-image').credential;
-    assert.deepEqual(hostCredential, {
-        mode: 'sillytavern',
-        label: 'Google AI Studio connection',
-        placeholder: '',
-        setupHelp: 'Configure Google AI Studio in SillyTavern’s AI Response → Chat Completion Source.',
-        advancedHelp: '',
-    });
-
-    const directCredential = projectProviderUi('linkapi', 'gemini-2.5-flash-image').credential;
-    assert.deepEqual(directCredential, {
-        mode: 'extension-key',
-        label: 'LinkAPI API Key',
-        placeholder: 'Enter API key',
-        setupHelp: 'Enter the API key for LinkAPI.',
-        advancedHelp: 'Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).',
-    });
-    assert.doesNotMatch(JSON.stringify(directCredential), /sk-|Bearer|api\.linkapi\.ai\/v1/i);
-});
-
-test('projects explicit credential ownership for host, extension, and unavailable providers', () => {
-    const host = projectProviderUi('openrouter', 'google/gemini-2.5-flash-image-preview').credential;
-    assert.equal(host.mode, 'sillytavern');
-    assert.match(host.setupHelp, /SillyTavern’s AI Response → Chat Completion Source/);
-
-    const extension = projectProviderUi('linkapi', 'gemini-2.5-flash-image').credential;
-    assert.equal(extension.mode, 'extension-key');
-    assert.match(extension.setupHelp, /Enter the API key for LinkAPI\./);
-
-    const unavailable = projectProviderUi('fal', '').credential;
-    assert.deepEqual(unavailable, {
-        mode: 'unavailable',
-        label: 'Fal.ai (Future Server Adapter) unavailable',
-        placeholder: '',
-        setupHelp: '',
-        advancedHelp: 'Future server adapter: Fal requires a server proxy because browser clients cannot safely expose API keys.',
-    });
-    assert.doesNotMatch(JSON.stringify(unavailable), /Chat Completion Source/i);
-});
-
-test('shows reference controls for LinkAPI Gemini routes with verified model caps', () => {
-    assert.equal(projectProviderUi('makersuite', 'gemini-2.5-flash-image').supportsReferenceImages, true);
-    assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').supportsReferenceImages, true);
-    assert.equal(projectProviderUi('openrouter', 'google/gemini-2.5-flash-image-preview').supportsReferenceImages, false);
-});
-
 test('keeps LinkAPI advanced recovery controls separate from generic model discovery', async () => {
     const [index, settings] = await Promise.all([
         readFile(new URL('../index.js', import.meta.url), 'utf8'),
@@ -163,27 +103,4 @@ test('keeps LinkAPI advanced recovery controls separate from generic model disco
 
     assert.doesNotMatch(index, /#cig_linkapi_container'\)\.toggle\(ui\.supportsModelDiscovery \|\| ui\.showsLegacyRecovery\)/);
     assert.match(settings, /id="cig_provider_advanced_container"/);
-});
-
-test('projects discovery affordance and plain disabled reasons for every provider', () => {
-    const staticUi = projectProviderUi('makersuite', 'gemini-2.5-flash-image');
-    assert.equal(staticUi.modelDiscovery.kind, 'curated-static');
-    assert.equal(staticUi.modelDiscovery.refreshEnabled, false);
-    assert.match(staticUi.modelDiscovery.disabledReason, /curated/i);
-
-    const discoverableUi = projectProviderUi('tokenreply', 'grok-imagine-image');
-    assert.equal(discoverableUi.modelDiscovery.kind, 'openai-list');
-    assert.equal(discoverableUi.modelDiscovery.refreshEnabled, true);
-});
-
-test('projects discovery evidence, warning, and last refresh without exposing credentials', () => {
-    const ui = projectProviderUi('tokenreply', 'grok-imagine-image', {
-        discoveryEvidence: { kind: 'openai-list', source: 'provider /models endpoint', observedAt: '2026-08-25T12:00:00.000Z', retryCount: 1 },
-        discoveryWarning: { code: 'DISCOVERY_FAILED', userMessage: 'Bearer sk-live-123456789 draw this prompt' },
-    });
-    assert.equal(ui.modelDiscovery.evidence.source, 'provider /models endpoint');
-    assert.equal(ui.modelDiscovery.evidence.retryCount, 1);
-    assert.equal(ui.modelDiscovery.lastRefresh, '2026-08-25T12:00:00.000Z');
-    assert.equal(ui.modelDiscovery.warning.userMessage, 'Model discovery failed. Your current model list was kept.');
-    assert.doesNotMatch(ui.modelDiscovery.warning.userMessage, /sk-live|Bearer|draw this prompt/i);
 });

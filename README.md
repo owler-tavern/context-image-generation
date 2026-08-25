@@ -2,11 +2,9 @@
 
 A SillyTavern extension that adds scene-image generation with character context and avatar references.
 
-The product North Star is simple: during roleplay, click the image-generation button and receive a contextually appropriate image. Advanced provider and model complexity stays out of the primary workflow; see [PRODUCT.md](PRODUCT.md).
+For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
-For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md). The evidence-backed [ecosystem research](docs/EXTERNAL_EXTENSION_RESEARCH.md) and [feature roadmap](docs/ROADMAP.md) record what was learned, what is planned, and what remains unverified.
-
-Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply and the additional hosted profiles are currently experimental until live evidence is recorded.
+Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply is currently experimental.
 
 > **Fork notice** — This is a fork of [elouannd/context-image-generation](https://github.com/elouannd/context-image-generation) by **Elouann**. It was forked to add **LinkAPI provider support** (routing image generation through LinkAPI's Gemini-compatible endpoint) without changing your active SillyTavern Chat Completion profile. All credit for the original extension goes to Elouann; the original is released into the public domain under The Unlicense.
 
@@ -21,8 +19,6 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 - **LinkAPI** keeps its existing Gemini-compatible and OpenAI Images model routes behind provider adapters. This does not change your active SillyTavern Chat Completion profile.
 - **TokenReply (Experimental)** provides the text-only `grok-imagine-image` and `grok-imagine-image-quality` profiles. It sends a minimal request until a live compatibility test confirms TokenReply's supported image-size/resolution field and response format.
-- **Hosted provider wave 1 (Experimental):** registry-driven OpenAI GPT Image, Pollinations paid JSON, NanoGPT, Together AI, Routeway, and Navy.ai profiles reuse the validated OpenAI Images transport. Optional capabilities remain disabled unless the selected model's evidence explicitly supports them.
-- **Hosted provider catalog:** Z.AI and ArliAI have dedicated Experimental native adapters with curated built-in models; async/binary/conflicting/chute-specific profiles such as Chutes, Fal.ai, Replicate, CivitAI, PixAI, Kie.ai, Midjourney/LegNext, NovelAI, Stability AI, and Naistera remain unavailable Future Server records.
 - **Manual LinkAPI recovery:** in LinkAPI's **Advanced** settings, **Use legacy LinkAPI routing** lets you deliberately retry using the pre-adapter request path. It is never automatic, so a failed normal request will not make an unrequested second paid generation.
 
 ### Direct-provider troubleshooting
@@ -98,14 +94,12 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 - **LinkAPI Gemini models:** select LinkAPI in this extension and enter a LinkAPI key under Provider API Key. LinkAPI Gemini models use the SillyTavern route with a request-scoped LinkAPI proxy, without changing the active Chat Completion profile.
 - **LinkAPI `gpt-image*`/`dall-e*` models:** select LinkAPI and enter the same LinkAPI key. LinkAPI `gpt-image*`/`dall-e*` models use LinkAPI's direct Images route; they are text-only, and **Manage models → Fetch models** can discover matching image IDs.
 - **TokenReply `grok-imagine-image` (Experimental):** select TokenReply and enter a TokenReply key under Provider API Key. TokenReply is Experimental and text-only; it has two built-in models (`grok-imagine-image` and `grok-imagine-image-quality`), experimental **Manage models → Fetch models** support, no reference-image controls, and no image-size control until a live test verifies its contract.
-- **Wave 1 hosted profiles (Experimental):** select OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, or Navy.ai and enter that provider's key. They use HTTPS Bearer-authenticated Images routes; references and optional size controls remain hidden until route/model evidence enables them.
-- **Native hosted profiles (Experimental):** select Z.AI or ArliAI and enter that provider's key. These use dedicated HTTPS Bearer-authenticated native routes with curated built-in models; references and editing remain disabled or unknown until route/model evidence enables them. Chutes remains Future Server because its model routes are chute-specific.
 
 ## Installation
 
 1. In SillyTavern, open **Extensions** and install this repository.
 2. Open Context Image Generation's settings.
-3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose a direct hosted profile and enter that provider's key in the extension. Future Server Adapter entries are unavailable.
+3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose LinkAPI/TokenReply and enter that provider's key in the extension.
 4. Select a model appropriate to that route, then generate from a message wand or `/proimagine`.
 
 ## Usage
@@ -115,8 +109,6 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 2. Click the "..." menu on any message
 3. Click the wand icon (✨) to generate an image from that message
 
-You can select a passage inside the rendered message before clicking its wand. A non-empty selection up to 600 characters becomes the primary visual moment while the surrounding message context remains available for continuity. Selections outside that message, or selections longer than the limit, fall back to the normal whole-message generation.
-
 ### Settings Panel
 
 - Select Google AI Studio or OpenRouter to use the active SillyTavern Chat Completion configuration.
@@ -124,7 +116,6 @@ You can select a passage inside the rendered message before clicking its wand. A
 - Select TokenReply (Experimental) to enter its separate key and choose `grok-imagine-image` or `grok-imagine-image-quality`; it is text-only and hides image-size and reference-image controls.
 - Choose aspect ratio and compatible controls for the selected model, toggle descriptions, customize the system instruction, and manage the gallery.
 - Use **Manage models** to add or edit the actual model ID sent to the selected provider. **Fetch models** merges discovered IDs without deleting your local entries. TokenReply discovery is Experimental and may fail safely until its /v1/models behavior is live-verified.
-- For a manual or fetched model whose image-generation capability is unknown, open **Manage models** and explicitly enable **Allow experimental text-only generation** after reviewing the warning. Optional features stay disabled, and generation remains blocked until this confirmation is present.
 
 ### Slash Command
 ```
@@ -137,9 +128,9 @@ Aliases: `/proimg`, `/geminiimg`
 | Setting | Route-specific behavior |
 |---------|-------------------------|
 | Provider | Google AI Studio/OpenRouter use SillyTavern Chat Completion settings; LinkAPI and TokenReply use a key entered in this extension. |
-| Provider API Key | Registry-driven for LinkAPI, TokenReply, OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, and Navy.ai; each provider retains its own credential association. |
-| Model | Gemini controls apply to Gemini models. Direct Wave 1 Images profiles remain text-only with unknown optional capabilities unless model evidence enables them. |
-| Fetch models | LinkAPI/TokenReply use OpenAI-list discovery; Pollinations uses `/image/models`; NanoGPT uses `/api/v1/image-models?detailed=true`; Routeway filters explicit image-output metadata from `/v1/models`; OpenAI/Together/Navy use curated IDs. Failed fetches leave local IDs unchanged. |
+| Provider API Key | Shown for LinkAPI and TokenReply only; each provider retains its own credential association. |
+| Model | Gemini controls apply to Gemini models. LinkAPI also offers direct, text-only `gpt-image*`/`dall-e*` models. TokenReply offers experimental `grok-imagine-image` and `grok-imagine-image-quality`. |
+| Fetch models | LinkAPI only; discovers matching `gpt-image*`/`dall-e*` IDs for the current session. TokenReply offers an Experimental standard `/v1/models` attempt; failed fetches leave local IDs unchanged. |
 | Aspect ratio / image size | Gemini-compatible controls retain their model-specific behavior. TokenReply hides image size until live verification confirms its accepted field. |
 | Avatar / previous-image references | Available only to models whose provider metadata supports reference images; hidden for TokenReply and direct LinkAPI Images models. |
 | LinkAPI recovery | Advanced, manual-only legacy-routing switch; never an automatic fallback. |
@@ -156,6 +147,7 @@ Aliases: `/proimg`, `/geminiimg`
 
 
 ## To-Do
+[ ] Add Support for other Image generation services like Z-ai and Flux
 
 ## License
 
