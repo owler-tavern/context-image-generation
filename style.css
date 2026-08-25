@@ -85,6 +85,57 @@
     display: none !important;
 }
 
+#cig_settings .cig-settings-panel,
+#cig_settings .cig-preference-group,
+#cig_settings .cig-content-section {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+#cig_settings .cig-settings-panel {
+    gap: 1rem;
+}
+
+#cig_settings .cig-preference-group,
+#cig_settings .cig-content-section {
+    padding: 0.75rem;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 0.5rem;
+}
+
+#cig_settings .cig-preference-group h2,
+#cig_settings .cig-content-section h2 {
+    margin: 0;
+    font-size: 1rem;
+}
+
+.cig-setting-row,
+.cig-action-row {
+    display: flex;
+    align-items: flex-end;
+    gap: 0.75rem;
+}
+
+.cig-action-row > .menu_button {
+    width: 100%;
+    justify-content: center;
+}
+
+.cig-setting-help,
+.cig-capability-note {
+    display: block;
+    opacity: 0.75;
+}
+
+.cig-capability-note {
+    color: var(--SmartThemeWarningColor, #d98c10);
+}
+
+.cig-message-depth {
+    width: 5rem;
+}
+
 #cig_settings :is(button, input, select, textarea, [role="tab"]):focus-visible {
     outline: 2px solid var(--SmartThemeQuoteColor);
     outline-offset: 2px;
@@ -100,25 +151,24 @@
         padding-bottom: 0.25rem;
         scrollbar-width: thin;
     }
+
+    .cig-setting-row {
+        flex-direction: column;
+        align-items: stretch;
+    }
 }
 
-#cig_preview_container {
+.cig-preview-container {
     margin-top: 10px;
     padding: 10px;
     background: var(--SmartThemeBlurTintColor);
     border-radius: 8px;
 }
 
-#cig_preview_image {
+.cig-preview-image {
     max-width: 100%;
     border-radius: 8px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-#cig_generate_btn,
-#cig_clear_gallery {
-    width: 100%;
-    justify-content: center;
 }
 
 #cig_generate_btn.generating {
@@ -179,6 +229,18 @@
     object-fit: cover;
 }
 
+.cig_gallery_preview {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    cursor: pointer;
+}
+
 .cig_gallery_item_overlay {
     position: absolute;
     top: 0;
@@ -202,8 +264,8 @@
 
 .cig_gallery_action {
     border: 0;
-    min-width: 30px;
-    min-height: 30px;
+    min-width: 44px;
+    min-height: 44px;
     background: rgba(30, 30, 30, 0.88);
     color: var(--SmartThemeBodyColor);
     border-radius: 4px;

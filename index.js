@@ -752,11 +752,15 @@ function toggleImageSizeVisibility() {
     if (settings.image_size !== ui.imageSize) settings.image_size = ui.imageSize;
     const hasImageSizes = ui.imageSizeOptions.length > 0;
     $('#cig_image_size_container').toggle(hasImageSizes);
-    $('#cig_flash2_options').toggle(ui.supportsThinking || ui.supportsGoogleSearch);
+    $('#cig_flash2_options').prop('hidden', !(ui.supportsThinking || ui.supportsGoogleSearch));
     $('#cig_model_note').text(ui.modelNote || '').toggle(Boolean(ui.modelNote));
-    $('#cig_avatar_reference_option').toggle(ui.supportsReferenceImages);
-    $('#cig_previous_image_reference_option').toggle(ui.supportsReferenceImages);
+    renderReferenceCapabilityNote(ui.supportsReferenceImages);
     if (hasImageSizes) updateSizeDropdown(ui.imageSizeOptions);
+}
+
+function renderReferenceCapabilityNote(supportsReferenceImages) {
+    const message = supportsReferenceImages ? '' : 'Avatar references are unavailable for this model; your preference is saved.';
+    $('#cig_reference_capability_note').text(message).prop('hidden', supportsReferenceImages);
 }
 
 function updateSizeDropdown(imageSizeOptions) {
@@ -1132,7 +1136,11 @@ function renderGallery() {
         const thumb = $('<div class="cig_gallery_item"></div>')
             .attr('data-index', i)
             .attr('title', item.prompt || '');
-        $('<img>').attr('src', galleryItemSrc(item)).appendTo(thumb);
+        const preview = $('<button type="button" class="cig_gallery_preview" aria-label="View generated image">')
+            .attr('data-index', i)
+            .attr('title', 'View generated image');
+        $('<img>').attr({ src: galleryItemSrc(item), alt: item.prompt ? `Generated image: ${item.prompt}` : 'Generated image' }).appendTo(preview);
+        preview.appendTo(thumb);
         const overlay = $('<div class="cig_gallery_item_overlay"></div>');
         $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember appearance" aria-label="Remember appearance">')
             .attr('data-index', i)
@@ -1302,12 +1310,16 @@ function renderAppearanceList() {
         }
         if (!available.has(look.assetId)) $('<small>').text('Unavailable').appendTo(text);
         if (identity.activeLookId !== look.id) {
+            const useLabel = `Use ${look.label} for ${identity.label}`;
             $('<button type="button" class="menu_button cig_appearance_use" title="Use this appearance" aria-label="Use this appearance">')
                 .text('Use')
+                .attr({ title: useLabel, 'aria-label': useLabel })
                 .appendTo(row);
         }
+        const removeLabel = `Remove ${look.label} for ${identity.label}`;
         $('<button type="button" class="menu_button cig_appearance_remove" title="Remove saved appearance" aria-label="Remove saved appearance">')
             .text('Remove')
+            .attr({ title: removeLabel, 'aria-label': removeLabel })
             .appendTo(row);
         row.prepend(text);
         list.append(row);
@@ -1337,7 +1349,7 @@ async function generateImage() {
         if (result) {
             const imageDataUrl = `data:${result.mimeType};base64,${result.imageData}`;
             $('#cig_preview_image').attr('src', imageDataUrl);
-            $('#cig_preview_container').show();
+            $('#cig_preview_container').prop('hidden', false);
             await addToGallery(result.imageData, lastMsg.text, null);
         }
 
@@ -1578,7 +1590,7 @@ async function slashCommandHandler(args, prompt) {
         if (result) {
             const imageDataUrl = `data:${result.mimeType};base64,${result.imageData}`;
             $('#cig_preview_image').attr('src', imageDataUrl);
-            $('#cig_preview_container').show();
+            $('#cig_preview_container').prop('hidden', false);
             await addToGallery(result.imageData, trimmedPrompt, null);
             return imageDataUrl;
         }
@@ -1869,8 +1881,8 @@ jQuery(async () => {
     $('#cig_generate_btn').on('click', generateImage);
     $('#cig_clear_gallery').on('click', clearGallery);
 
-    $(document).on('click', '.cig_gallery_item img', function () {
-        const index = $(this).closest('.cig_gallery_item').data('index');
+    $(document).on('click', '.cig_gallery_preview', function () {
+        const index = $(this).data('index');
         viewGalleryImage(index);
     });
 
