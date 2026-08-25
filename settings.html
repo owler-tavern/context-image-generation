@@ -1,247 +1,38 @@
 <div id="cig_settings" class="extension_settings">
     <div class="inline-drawer">
-        <div class="inline-drawer-toggle inline-drawer-header">
-            <b>Context Image Generation 🍌</b>
-            <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-        </div>
+        <div class="inline-drawer-toggle inline-drawer-header"><b>Context Image Generation 🍌</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div>
         <div class="inline-drawer-content">
-            <!-- Auth Info -->
-            <div class="flex-container flexFlowColumn">
-                <small>
-                    <i class="fa-solid fa-info-circle"></i>
-                    Google AI Studio and OpenRouter use <b>AI Response → Chat Completion Source</b>. LinkAPI and TokenReply use the Provider API Key field below.
-                </small>
-                <hr>
+            <div class="cig-settings-tabs" role="tablist" aria-label="Context Image Generation settings">
+                <button id="cig_settings_tab_setup" class="menu_button" type="button" role="tab" value="setup" aria-selected="true" aria-controls="cig_settings_panel_setup" tabindex="0">Setup</button>
+                <button id="cig_settings_tab_preferences" class="menu_button" type="button" role="tab" value="preferences" aria-selected="false" aria-controls="cig_settings_panel_preferences" tabindex="-1">Preferences</button>
+                <button id="cig_settings_tab_images_cast" class="menu_button" type="button" role="tab" value="images-cast" aria-selected="false" aria-controls="cig_settings_panel_images_cast" tabindex="-1">Images &amp; Cast</button>
             </div>
-
-            <!-- Provider Selection -->
-            <div class="flex-container">
-                <div class="flex1">
-                    <label for="cig_provider">Provider</label>
-                    <select id="cig_provider" class="cig-setting"></select>
-                </div>
-            </div>
-
-            <!-- Provider API Key -->
-            <div id="cig_provider_key_container" class="flex-container flexFlowColumn" style="display: none;">
-                <label for="cig_provider_api_key" id="cig_provider_api_key_label">Provider API Key</label>
-                <input id="cig_provider_api_key" class="cig-setting text_pole" type="password" placeholder="sk-..." autocomplete="off" />
-            </div>
-
-            <!-- LinkAPI Settings -->
-            <div id="cig_provider_advanced_container" class="flex-container flexFlowColumn" style="display: none;">
-                <small>Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).</small>
-
-                <details class="cig_linkapi_advanced" style="margin-top: 5px;">
-                    <summary>Advanced</summary>
-                    <label class="checkbox_label" title="Manually use the pre-adapter LinkAPI request path for recovery. This is never used automatically.">
-                        <input type="checkbox" id="cig_linkapi_use_legacy_routing" class="cig-setting" />
-                        <span>Use legacy LinkAPI routing</span>
-                    </label>
+            <section id="cig_settings_panel_setup" class="cig-settings-panel" role="tabpanel" aria-labelledby="cig_settings_tab_setup">
+                <div class="flex-container flexFlowColumn"><small><i class="fa-solid fa-info-circle"></i> Google AI Studio and OpenRouter use <b>AI Response → Chat Completion Source</b>. LinkAPI and TokenReply use the Provider API Key field below.</small><hr></div>
+                <div class="flex-container"><div class="flex1"><label for="cig_provider">Provider</label><select id="cig_provider" class="cig-setting"></select></div></div>
+                <div id="cig_provider_key_container" class="flex-container flexFlowColumn" style="display: none;"><label for="cig_provider_api_key" id="cig_provider_api_key_label">Provider API Key</label><input id="cig_provider_api_key" class="cig-setting text_pole" type="password" placeholder="sk-..." autocomplete="off" /></div>
+                <small id="cig_provider_info" style="display: none; opacity: 0.8;"></small>
+                <div class="flex-container"><div class="flex1"><label for="cig_model">Model</label><div class="cig-model-row"><select id="cig_model" class="cig-setting"></select><input id="cig_model_refresh" class="menu_button" type="button" value="Refresh Models" aria-describedby="cig_model_discovery_status" /></div><input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Filter models" aria-label="Filter models" autocomplete="off" /><small id="cig_model_note" style="display: none; opacity: 0.8;"></small><small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small></div></div>
+                <details id="cig_advanced_setup" class="cig_advanced_setup" style="margin-top: 5px;"><summary>Advanced setup</summary>
+                    <div id="cig_provider_advanced_container" class="flex-container flexFlowColumn" style="display: none;"><small>Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).</small><label class="checkbox_label" title="Manually use the pre-adapter LinkAPI request path for recovery. This is never used automatically."><input type="checkbox" id="cig_linkapi_use_legacy_routing" class="cig-setting" /><span>Use legacy LinkAPI routing</span></label></div>
+                    <div id="cig_model_manager" class="cig_model_manager" style="margin-top: 5px;"><h3>Manage models</h3><small>Actual model IDs are sent unchanged. Refresh merges discovered models and keeps your local entries.</small><select id="cig_managed_model_list" size="4" class="text_pole" style="width: 100%; margin-top: 5px;"></select><div class="flex-container" style="margin-top: 5px;"><input id="cig_managed_model_id" class="text_pole flex1" type="text" placeholder="Actual model ID" autocomplete="off" /><div id="cig_managed_model_transport_container" class="flex-container flexFlowColumn" style="margin-top: 5px;"><label for="cig_managed_model_transport">Route for this model</label><select id="cig_managed_model_transport" class="text_pole"></select></div></div><div id="cig_experimental_preflight" class="flex-container flexFlowColumn" style="display: none; margin-top: 5px;"><label class="checkbox_label" title="The endpoint/model is unverified and optional image features remain disabled until verified."><input type="checkbox" id="cig_experimental_preflight_checkbox" /><span>Allow experimental text-only generation</span></label><small id="cig_experimental_preflight_warning">Endpoint/model is unverified; optional features are disabled.</small></div><div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;"><input id="cig_add_model" class="menu_button" type="button" value="Add model" /><input id="cig_save_model" class="menu_button" type="button" value="Save ID" /><input id="cig_remove_model" class="menu_button" type="button" value="Remove local" /></div><small id="cig_model_discovery_note" style="display: none; opacity: 0.8;"></small></div>
+                    <div class="cig_advanced_run_controls" style="margin-top: 5px;"><h3>Advanced run controls</h3><button id="cig_cancel_generation" class="menu_button" type="button" style="display: none;" disabled>Cancel current generation</button><div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;"><button id="cig_show_preflight" class="menu_button" type="button">Inspect last plan</button><button id="cig_export_diagnostics" class="menu_button" type="button">Export diagnostics</button></div><pre id="cig_preflight_summary" role="status" style="display: none; max-height: 240px; overflow: auto; white-space: pre-wrap; margin-top: 5px;"></pre></div>
                 </details>
-            </div>
-
-            <small id="cig_provider_info" style="display: none; opacity: 0.8;"></small>
-
-            <!-- Model Selection -->
-            <div class="flex-container">
-                <div class="flex1">
-                    <label for="cig_model">Model</label>
-                    <div class="cig-model-row">
-                        <select id="cig_model" class="cig-setting">
-                            <!-- Populated dynamically based on provider -->
-                        </select>
-                        <input id="cig_model_refresh" class="menu_button" type="button" value="Refresh Models" aria-describedby="cig_model_discovery_status" />
-                    </div>
-                    <input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Filter models" aria-label="Filter models" autocomplete="off" />
-                    <small id="cig_model_note" style="display: none; opacity: 0.8;"></small>
-                    <small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small>
-                </div>
-            </div>
-
-            <!-- Model Manager -->
-            <details id="cig_model_manager" class="cig_model_manager" style="margin-top: 5px;">
-                <summary>Manage models</summary>
-                <small>Actual model IDs are sent unchanged. Refresh merges discovered models and keeps your local entries.</small>
-                <select id="cig_managed_model_list" size="4" class="text_pole" style="width: 100%; margin-top: 5px;"></select>
-                <div class="flex-container" style="margin-top: 5px;">
-                    <input id="cig_managed_model_id" class="text_pole flex1" type="text" placeholder="Actual model ID" autocomplete="off" />
-                <div id="cig_managed_model_transport_container" class="flex-container flexFlowColumn" style="margin-top: 5px;">
-                    <label for="cig_managed_model_transport">Route for this model</label>
-                    <select id="cig_managed_model_transport" class="text_pole"></select>
-                </div>
-                </div>
-                <div id="cig_experimental_preflight" class="flex-container flexFlowColumn" style="display: none; margin-top: 5px;">
-                    <label class="checkbox_label" title="The endpoint/model is unverified and optional image features remain disabled until verified.">
-                        <input type="checkbox" id="cig_experimental_preflight_checkbox" />
-                        <span>Allow experimental text-only generation</span>
-                    </label>
-                    <small id="cig_experimental_preflight_warning">Endpoint/model is unverified; optional features are disabled.</small>
-                </div>
-                <div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;">
-                    <input id="cig_add_model" class="menu_button" type="button" value="Add model" />
-                    <input id="cig_save_model" class="menu_button" type="button" value="Save ID" />
-                    <input id="cig_remove_model" class="menu_button" type="button" value="Remove local" />
-                </div>
-                <small id="cig_model_discovery_note" style="display: none; opacity: 0.8;"></small>
-            </details>
-
-            <details class="cig_advanced_run_controls" style="margin-top: 5px;">
-                <summary>Advanced run controls</summary>
-                <button id="cig_cancel_generation" class="menu_button" type="button" style="display: none;" disabled>Cancel current generation</button>
-                <div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;">
-                    <button id="cig_show_preflight" class="menu_button" type="button">Inspect last plan</button>
-                    <button id="cig_export_diagnostics" class="menu_button" type="button">Export diagnostics</button>
-                </div>
-                <pre id="cig_preflight_summary" role="status" style="display: none; max-height: 240px; overflow: auto; white-space: pre-wrap; margin-top: 5px;"></pre>
-            </details>
-            <!-- Aspect Ratio & Image Size -->
-            <div class="flex-container">
-                <div class="flex1">
-                    <label for="cig_aspect_ratio">Aspect Ratio</label>
-                    <select id="cig_aspect_ratio" class="cig-setting">
-                        <option value="1:1">1:1 (Square)</option>
-                        <option value="3:4">3:4 (Portrait)</option>
-                        <option value="4:3">4:3 (Landscape)</option>
-                        <option value="9:16">9:16 (Tall)</option>
-                        <option value="16:9">16:9 (Wide)</option>
-                    </select>
-                </div>
-                <div class="flex1" id="cig_image_size_container">
-                    <label for="cig_image_size" id="cig_image_size_label">Image Size</label>
-                    <select id="cig_image_size" class="cig-setting">
-                        <option value="">Default</option>
-                        <option value="1K">1K</option>
-                        <option value="2K">2K</option>
-                        <option value="4K">4K</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- Flash 2 Options (Thinking Level & Google Search) -->
-            <div id="cig_flash2_options" style="display: none;">
-                <div class="flex-container">
-                    <div class="flex1">
-                        <label for="cig_thinking_level">Thinking Level</label>
-                        <select id="cig_thinking_level" class="cig-setting">
-                            <option value="auto">Auto</option>
-                            <option value="minimal">Minimal</option>
-                            <option value="low">Low</option>
-                            <option value="medium">Medium</option>
-                            <option value="high">High</option>
-                        </select>
-                    </div>
-                </div>
-                <div class="flex-container flexFlowColumn">
-                    <label class="checkbox_label"
-                        title="Allow the model to search Google for references before generating">
-                        <input type="checkbox" id="cig_use_google_search" class="cig-setting" />
-                        <span>Use Google Search</span>
-                    </label>
-                </div>
-            </div>
-
-            <!-- Message Depth -->
-            <div class="flex-container">
-                <div class="flex1">
-                    <label for="cig_message_depth">
-                        Message Depth
-                        <small>(1-10 messages as context)</small>
-                    </label>
-                    <input type="number" id="cig_message_depth" class="cig-setting text_pole" min="1" max="10" value="1"
-                        style="width: 80px;" />
-                </div>
-            </div>
-
-            <!-- Reference Options -->
-            <div class="flex-container flexFlowColumn">
-                <label id="cig_avatar_reference_option" class="checkbox_label" title="Include character and persona avatars as reference images">
-                    <input type="checkbox" id="cig_use_avatars" class="cig-setting" />
-                    <span>Use avatar references</span>
-                </label>
-                <label class="checkbox_label" title="Include character and persona descriptions in the prompt">
-                    <input type="checkbox" id="cig_include_descriptions" class="cig-setting" />
-                    <span>Include character descriptions</span>
-                </label>
-                <label id="cig_previous_image_reference_option" class="checkbox_label" title="Use the last generated image as a style reference">
-                    <input type="checkbox" id="cig_use_previous_image" class="cig-setting" />
-                    <span>Use previous image as reference</span>
-                </label>
-                <label class="checkbox_label" title="Swipe right past the last generated image on a message to create a new variation">
-                    <input type="checkbox" id="cig_regenerate_on_swipe" class="cig-setting" />
-                    <span>Regenerate on image swipe</span>
-                </label>
-            </div>
-
-            <!-- Auto Generate -->
-            <div class="flex-container">
-                <div class="flex1">
-                    <label for="cig_auto_generate">Auto Generate</label>
-                    <select id="cig_auto_generate" class="cig-setting">
-                        <option value="off">Off</option>
-                        <option value="bot">Bot messages</option>
-                        <option value="all">All messages</option>
-                    </select>
-                </div>
-            </div>
-
-            <!-- System Instruction -->
-            <div class="flex-container flexFlowColumn">
-                <label for="cig_system_instruction">System Instruction</label>
-                <textarea id="cig_system_instruction" class="cig-setting text_pole textarea_compact" rows="3"
-                    placeholder="Instructions for the image generation model..."></textarea>
-            </div>
-
-            <hr>
-
-            <!-- Generate Button -->
-            <div class="flex-container">
-                <div id="cig_generate_btn" class="menu_button menu_button_icon"
-                    title="Generate image from last message">
-                    <i class="fa-solid fa-image"></i>
-                    <span>Generate Image</span>
-                </div>
-            </div>
-
-            <!-- Output Preview -->
-            <div id="cig_preview_container" class="flex-container flexFlowColumn" style="display: none;">
-                <label>Generated Image</label>
-                <img id="cig_preview_image" style="max-width: 100%; border-radius: 8px;" />
-            </div>
-
-            <hr>
-
-            <!-- Gallery Section -->
-            <div class="inline-drawer">
-                <div class="inline-drawer-toggle inline-drawer-header">
-                    <b>Gallery</b>
-                    <div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div>
-                </div>
-                <div class="inline-drawer-content">
-                    <div id="cig_gallery_container" class="cig_gallery"></div>
-                    <div id="cig_gallery_empty" class="cig_gallery_empty">
-                        <i class="fa-solid fa-images"></i>
-                        <span>No images generated yet.</span>
-                    </div>
-                    <div class="flex-container">
-                        <div id="cig_clear_gallery" class="menu_button menu_button_icon" title="Clear gallery">
-                            <i class="fa-solid fa-trash"></i>
-                            <span>Clear Gallery</span>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Appearance memory stays in the existing settings drawer. -->
-            <details id="cig_appearances" class="cig_appearances" style="margin-top: 5px;">
-                <summary>Appearances</summary>
-                <small>Remember a whole generated image for a character, persona, group member, or named NPC. Missing gallery images are shown as unavailable.</small>
-                <div id="cig_appearance_list" class="cig_appearance_list" role="list" aria-live="polite"></div>
-                <div id="cig_appearance_empty" class="cig_gallery_empty">
-                    <i class="fa-solid fa-user-pen" aria-hidden="true"></i>
-                    <span>No saved appearances yet.</span>
-                </div>
-            </details>
+            </section>
+            <section id="cig_settings_panel_preferences" class="cig-settings-panel" role="tabpanel" aria-labelledby="cig_settings_tab_preferences" hidden>
+                <div class="flex-container"><div class="flex1"><label for="cig_aspect_ratio">Aspect Ratio</label><select id="cig_aspect_ratio" class="cig-setting"><option value="1:1">1:1 (Square)</option><option value="3:4">3:4 (Portrait)</option><option value="4:3">4:3 (Landscape)</option><option value="9:16">9:16 (Tall)</option><option value="16:9">16:9 (Wide)</option></select></div><div class="flex1" id="cig_image_size_container"><label for="cig_image_size" id="cig_image_size_label">Image Size</label><select id="cig_image_size" class="cig-setting"><option value="">Default</option><option value="1K">1K</option><option value="2K">2K</option><option value="4K">4K</option></select></div></div>
+                <div id="cig_flash2_options" style="display: none;"><div class="flex-container"><div class="flex1"><label for="cig_thinking_level">Thinking Level</label><select id="cig_thinking_level" class="cig-setting"><option value="auto">Auto</option><option value="minimal">Minimal</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option></select></div></div><div class="flex-container flexFlowColumn"><label class="checkbox_label" title="Allow the model to search Google for references before generating"><input type="checkbox" id="cig_use_google_search" class="cig-setting" /><span>Use Google Search</span></label></div></div>
+                <div class="flex-container"><div class="flex1"><label for="cig_message_depth">Message Depth <small>(1-10 messages as context)</small></label><input type="number" id="cig_message_depth" class="cig-setting text_pole" min="1" max="10" value="1" style="width: 80px;" /></div></div>
+                <div class="flex-container flexFlowColumn"><label id="cig_avatar_reference_option" class="checkbox_label" title="Include character and persona avatars as reference images"><input type="checkbox" id="cig_use_avatars" class="cig-setting" /><span>Use avatar references</span></label><label class="checkbox_label" title="Include character and persona descriptions in the prompt"><input type="checkbox" id="cig_include_descriptions" class="cig-setting" /><span>Include character descriptions</span></label><label id="cig_previous_image_reference_option" class="checkbox_label" title="Use the last generated image as a style reference"><input type="checkbox" id="cig_use_previous_image" class="cig-setting" /><span>Use previous image as reference</span></label><label class="checkbox_label" title="Swipe right past the last generated image on a message to create a new variation"><input type="checkbox" id="cig_regenerate_on_swipe" class="cig-setting" /><span>Regenerate on image swipe</span></label></div>
+                <div class="flex-container"><div class="flex1"><label for="cig_auto_generate">Auto Generate</label><select id="cig_auto_generate" class="cig-setting"><option value="off">Off</option><option value="bot">Bot messages</option><option value="all">All messages</option></select></div></div>
+                <div class="flex-container flexFlowColumn"><label for="cig_system_instruction">System Instruction</label><textarea id="cig_system_instruction" class="cig-setting text_pole textarea_compact" rows="3" placeholder="Instructions for the image generation model..."></textarea></div>
+            </section>
+            <section id="cig_settings_panel_images_cast" class="cig-settings-panel" role="tabpanel" aria-labelledby="cig_settings_tab_images_cast" hidden>
+                <div class="flex-container"><div id="cig_generate_btn" class="menu_button menu_button_icon" title="Generate image from last message"><i class="fa-solid fa-image"></i><span>Generate Image</span></div></div>
+                <div id="cig_preview_container" class="flex-container flexFlowColumn" style="display: none;"><label>Generated Image</label><img id="cig_preview_image" style="max-width: 100%; border-radius: 8px;" /></div>
+                <div class="inline-drawer"><div class="inline-drawer-toggle inline-drawer-header"><b>Gallery</b><div class="inline-drawer-icon fa-solid fa-circle-chevron-down down"></div></div><div class="inline-drawer-content"><div id="cig_gallery_container" class="cig_gallery"></div><div id="cig_gallery_empty" class="cig_gallery_empty"><i class="fa-solid fa-images"></i><span>No images generated yet.</span></div><div class="flex-container"><div id="cig_clear_gallery" class="menu_button menu_button_icon" title="Clear gallery"><i class="fa-solid fa-trash"></i><span>Clear Gallery</span></div></div></div></div>
+                <section id="cig_appearances" class="cig_appearances" style="margin-top: 5px;"><h3>Appearances</h3><small>Remember a whole generated image for a character, persona, group member, or named NPC. Missing gallery images are shown as unavailable.</small><div id="cig_appearance_list" class="cig_appearance_list" role="list" aria-live="polite"></div><div id="cig_appearance_empty" class="cig_gallery_empty"><i class="fa-solid fa-user-pen" aria-hidden="true"></i><span>No saved appearances yet.</span></div></section>
+            </section>
         </div>
     </div>
 </div>

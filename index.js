@@ -471,7 +471,48 @@ function updateModelDropdown() {
         .prop('disabled', !discovery.refreshEnabled)
         .attr('title', discovery.refreshEnabled ? 'Refresh available models' : discovery.disabledReason || 'Model refresh is unavailable');
     toggleImageSizeVisibility();
-}async function loadSettings() {
+}
+
+function activateSettingsTab(tabId, { persist = true } = {}) {
+    const selectedTab = normalizeSettingsTab(tabId);
+    const tabs = $('#cig_settings [role="tab"]');
+    const panels = $('#cig_settings [role="tabpanel"]');
+    if (!tabs.length || !panels.length) return selectedTab;
+
+    tabs.each(function () {
+        const isActive = $(this).val() === selectedTab;
+        $(this)
+            .attr('aria-selected', isActive.toString())
+            .attr('tabindex', isActive ? '0' : '-1');
+    });
+    panels.each(function () {
+        const isActive = this.id === `cig_settings_panel_${selectedTab.replace('-', '_')}`;
+        $(this).prop('hidden', !isActive);
+    });
+
+    if (persist) {
+        const settings = extension_settings[extensionName];
+        settings.ui_last_settings_tab = selectedTab;
+        saveSettingsDebounced();
+    }
+    return selectedTab;
+}
+
+function selectInitialSettingsTab(settings) {
+    const providerId = settings.provider || 'makersuite';
+    const providerUi = projectProviderUi(providerId, settings.model, {
+        localEntries: getProviderModelEntries(settings, providerId),
+    });
+    const readiness = deriveSetupReadiness({
+        providerUi,
+        providerId,
+        modelId: settings.model,
+        apiKey: getProviderApiKey(settings, providerId),
+    });
+    activateSettingsTab(resolveInitialSettingsTab({ savedTab: settings.ui_last_settings_tab, readiness }), { persist: false });
+}
+
+async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     let settingsMigrated = false;
 
@@ -546,6 +587,7 @@ function updateModelDropdown() {
     renderModelManager();
     renderGallery();
     renderAppearanceList();
+    selectInitialSettingsTab(cigSettings);
 }
 
 function toggleProviderSpecificSettings() {
@@ -1597,6 +1639,23 @@ jQuery(async () => {
 
     renderProviderDropdown();
     await loadSettings();
+
+    $('#cig_settings [role="tab"]').on('click', function () {
+        activateSettingsTab($(this).val());
+        this.focus();
+    }).on('keydown', function (event) {
+        const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
+        if (!keys.includes(event.key)) return;
+        event.preventDefault();
+        const tabs = $('#cig_settings [role="tab"]');
+        const currentIndex = tabs.index(this);
+        const nextIndex = event.key === 'Home' ? 0
+            : event.key === 'End' ? tabs.length - 1
+                : (currentIndex + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length;
+        const nextTab = tabs.eq(nextIndex);
+        activateSettingsTab(nextTab.val());
+        nextTab.trigger('focus');
+    });
 
     $('#cig_provider').on('change', function () {
         const settings = extension_settings[extensionName];

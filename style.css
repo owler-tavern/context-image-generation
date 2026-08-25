@@ -47,6 +47,45 @@
     gap: 10px;
 }
 
+#cig_settings .cig-settings-tabs {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+    border-bottom: 1px solid var(--SmartThemeBorderColor);
+}
+
+#cig_settings .cig-settings-tabs [role="tab"] {
+    flex: 0 0 auto;
+    min-height: 44px;
+    padding-inline: 0.75rem;
+}
+
+#cig_settings .cig-settings-tabs [role="tab"][aria-selected="true"] {
+    border-color: var(--SmartThemeQuoteColor);
+    color: var(--SmartThemeBodyColor);
+}
+
+#cig_settings .cig-settings-panel[hidden] {
+    display: none !important;
+}
+
+#cig_settings :is(button, input[type="button"], input[type="submit"], [role="tab"]):focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor);
+    outline-offset: 2px;
+}
+
+#cig_settings :is(button, input[type="button"], input[type="submit"]) {
+    min-height: 44px;
+}
+
+@media (max-width: 480px) {
+    #cig_settings .cig-settings-tabs {
+        overflow-x: auto;
+        padding-bottom: 0.25rem;
+        scrollbar-width: thin;
+    }
+}
+
 #cig_preview_container {
     margin-top: 10px;
     padding: 10px;
@@ -224,7 +263,8 @@
 @media (prefers-reduced-motion: reduce) {
     .cig_gallery_item,
     .cig_gallery_item_overlay,
-    .cig_message_gen {
+    .cig_message_gen,
+    #cig_settings .cig-settings-tabs [role="tab"] {
         transition: none;
     }
 }

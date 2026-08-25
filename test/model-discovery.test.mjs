@@ -248,13 +248,14 @@ test('allows a fresh refresh after cancellation while the old result is stale', 
     assert.equal((await second).models[0].id, 'grok-imagine-image');
 });
 
-test('keeps Refresh Models beside the selector while Manage Models stays advanced', async () => {
+test('keeps Refresh Models beside the selector while Manage Models stays in the sole Advanced disclosure', async () => {
     const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(settings, /id="cig_model_refresh"/);
     assert.match(settings, /id="cig_model_search"/);
     assert.match(settings, /id="cig_model_discovery_status"/);
-    assert.match(settings, /<details id="cig_model_manager"/);
+    assert.match(settings, /<details id="cig_advanced_setup"/);
+    assert.match(settings, /<div id="cig_model_manager"/);
     assert.doesNotMatch(settings, /cig_fetch_provider_models/);
     assert.match(index, /#cig_model_refresh/);
     assert.match(index, /#cig_model_search/);
