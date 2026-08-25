@@ -85,6 +85,7 @@ const defaultSettings = {
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createGenerationCoordinator();
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
+let modelDiscoveryUiSequence = 0;
 const chatLifecycleEpoch = createChatLifecycleEpoch();
 
 function setBusyState(control, busy, { busyClass = 'generating', busyTitle = 'Working…' } = {}) {
@@ -160,6 +161,13 @@ function setProviderDiscoveryState(settings, providerId, result) {
         },
         ...(result?.warning ? { warning: { code: result.warning.code, userMessage: String(result.warning.userMessage || '').slice(0, 240) } } : {}),
     };
+}
+
+function cancelModelDiscovery(providerId) {
+    modelDiscoveryUiSequence += 1;
+    const cancelled = modelDiscoveryCoordinator.cancel(providerId);
+    if (cancelled) setBusyState($('#cig_model_refresh'), false);
+    return cancelled;
 }
 
 // --- LinkAPI ChatGPT (gpt-image) helpers (pure, text-prompt only) ---
@@ -333,7 +341,8 @@ async function fetchManagedProviderModels() {
         return;
     }
 
-    const fetchButtons = $('#cig_fetch_provider_models, #cig_model_refresh');
+    const refreshToken = ++modelDiscoveryUiSequence;
+    const fetchButtons = $('#cig_model_refresh');
     setBusyState(fetchButtons, true, { busyTitle: 'Refreshing models…' });
     try {
         const result = await modelDiscoveryCoordinator.refresh(providerId, { apiKey: key });
@@ -351,9 +360,11 @@ async function fetchManagedProviderModels() {
     } catch (error) {
         showGenerationError(error, 'Provider model discovery');
     } finally {
-        setBusyState(fetchButtons, false);
-        updateModelDropdown();
-        renderModelManager();
+        if (refreshToken === modelDiscoveryUiSequence) {
+            setBusyState(fetchButtons, false);
+            updateModelDropdown();
+            renderModelManager();
+        }
     }
 }
 // Dev aid: reach the pure helpers from the DevTools console for verification.
@@ -526,7 +537,6 @@ function renderModelManager() {
     }
     $transport.val(selectedEntry?.transportId || selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
     $('#cig_managed_model_transport_container').toggle($transport.children().length > 1);
-    $('#cig_fetch_provider_models').toggle(ui.modelDiscovery.refreshEnabled);
     $('#cig_model_discovery_note')
         .text(ui.modelDiscovery.warning?.userMessage || (ui.modelDiscovery.refreshEnabled
             ? 'Refresh merges discovered models and keeps your local entries.'
@@ -1633,7 +1643,9 @@ jQuery(async () => {
     await loadSettings();
 
     $('#cig_provider').on('change', function () {
-        extension_settings[extensionName].provider = $(this).val();
+        const settings = extension_settings[extensionName];
+        cancelModelDiscovery(settings.provider || 'makersuite');
+        settings.provider = $(this).val();
         updateModelDropdown();
         toggleImageSizeVisibility();
         toggleProviderSpecificSettings();
@@ -1644,6 +1656,7 @@ jQuery(async () => {
     $('#cig_provider_api_key').on('input', function () {
         const settings = extension_settings[extensionName];
         const provider = settings.provider || 'makersuite';
+        cancelModelDiscovery(provider);
         if (projectProviderUi(provider, settings.model)?.requiresApiKey) {
             setProviderApiKey(settings, provider, $(this).val());
             saveSettingsDebounced();
@@ -1655,7 +1668,7 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_fetch_provider_models, #cig_model_refresh').on('click', fetchManagedProviderModels);
+    $('#cig_model_refresh').on('click', fetchManagedProviderModels);
     $('#cig_model_search').on('input', updateModelDropdown);
     $('#cig_managed_model_list').on('change', function () {
         const selectedId = $(this).val() || '';
@@ -1669,7 +1682,9 @@ jQuery(async () => {
     $('#cig_remove_model').on('click', removeManagedModel);
 
     $('#cig_model').on('change', function () {
-        extension_settings[extensionName].model = $(this).val();
+        const settings = extension_settings[extensionName];
+        cancelModelDiscovery(settings.provider || 'makersuite');
+        settings.model = $(this).val();
         toggleImageSizeVisibility();
         renderModelManager();
         saveSettingsDebounced();

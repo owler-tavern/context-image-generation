@@ -41,7 +41,7 @@ test('rejects a failed model fetch without returning partial entries', async () 
             apiKey: 'test-key',
             fetchImpl: async () => new Response(JSON.stringify({ error: { message: 'Upstream unavailable' } }), { status: 503 }),
         }),
-        /503.*Upstream unavailable/,
+        /Provider model discovery failed/,
     );
 });
 test('filters TokenReply discovery to Grok image model IDs', async () => {
@@ -120,7 +120,7 @@ test('returns an unsupported warning without making a request', async () => {
 
     assert.equal(requests, 0);
     assert.deepEqual(result.models, []);
-    assert.deepEqual(result.warning, { code: 'DISCOVERY_UNSUPPORTED', userMessage: 'Available after server adapter.' });
+    assert.deepEqual(result.warning, { code: 'DISCOVERY_UNSUPPORTED', userMessage: 'Model discovery is not available for this provider.' });
     assert.equal(result.evidence.kind, 'unsupported');
 });
 
@@ -157,6 +157,40 @@ test('does not retry authentication or other client failures', async () => {
     assert.equal(result.warning.code, 'DISCOVERY_AUTH_FAILED');
 });
 
+test('normalizes discovery warnings to stable safe messages and redacts echoed secrets and payloads', async () => {
+    const result = await discoverProviderModels({
+        providerId: 'tokenreply',
+        apiKey: 'test-key',
+        fetchImpl: async () => new Response(JSON.stringify({
+            error: {
+                message: 'Bearer sk-live-123456789 echoed prompt: draw this scene data:image/png;base64,AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA',
+            },
+        }), { status: 401 }),
+    });
+    assert.deepEqual(result.warning, {
+        code: 'DISCOVERY_AUTH_FAILED',
+        userMessage: 'TokenReply rejected the API key. Check it in extension settings.',
+    });
+    assert.doesNotMatch(result.warning.userMessage, /sk-live|Bearer|draw this scene|base64/i);
+});
+
+test('does not retry thrown authentication or validation errors without an HTTP status', async () => {
+    for (const thrown of [new Error('invalid api key sk-live-123456789'), new Error('invalid model name')]) {
+        let calls = 0;
+        let delays = 0;
+        const result = await discoverProviderModels({
+            providerId: 'tokenreply',
+            apiKey: 'test-key',
+            sleep: async () => { delays += 1; },
+            fetchImpl: async () => { calls += 1; throw thrown; },
+        });
+        assert.equal(calls, 1);
+        assert.equal(delays, 0);
+        assert.match(result.warning.code, /^DISCOVERY_(AUTH_FAILED|FAILED)$/);
+        assert.doesNotMatch(result.warning.userMessage, /sk-live|invalid api key|invalid model/i);
+    }
+});
+
 test('reports retry count when a retryable request ultimately fails', async () => {
     const result = await discoverProviderModels({
         providerId: 'tokenreply',
@@ -164,7 +198,7 @@ test('reports retry count when a retryable request ultimately fails', async () =
         sleep: async () => {},
         fetchImpl: async () => new Response('', { status: 503 }),
     });
-    assert.equal(result.warning.code, 'DISCOVERY_FAILED');
+    assert.equal(result.warning.code, 'DISCOVERY_PROVIDER_FAILED');
     assert.equal(result.evidence.retryCount, 2);
 });
 
@@ -194,9 +228,8 @@ test('stale and duplicate refreshes cannot overwrite the current operation', asy
         apiKey: 'test-key',
         fetchImpl: () => new Promise((resolve) => { resolveFirst = resolve; }),
     });
-    const duplicate = coordinator.refresh('tokenreply', { apiKey: 'test-key', fetchImpl: async () => { throw new Error('duplicate fetch'); } });
-    assert.equal(duplicate, first);
-    coordinator.cancel('tokenreply');
+    const duplicate = coordinator.refresh('tokenreply', { apiKey: 'test-key', fetchImpl: async () => new Response(JSON.stringify({ data: [] }), { status: 200 }) });
+    assert.notEqual(duplicate, first);
     resolveFirst(new Response(JSON.stringify({ data: [] }), { status: 200 }));
     const result = await first;
     assert.equal(result.stale, true);
@@ -222,6 +255,9 @@ test('keeps Refresh Models beside the selector while Manage Models stays advance
     assert.match(settings, /id="cig_model_search"/);
     assert.match(settings, /id="cig_model_discovery_status"/);
     assert.match(settings, /<details id="cig_model_manager"/);
+    assert.doesNotMatch(settings, /cig_fetch_provider_models/);
     assert.match(index, /#cig_model_refresh/);
     assert.match(index, /#cig_model_search/);
+    assert.doesNotMatch(index, /#cig_fetch_provider_models/);
+    assert.match(index, /modelDiscoveryCoordinator\.cancel/);
 });

@@ -130,10 +130,11 @@ test('projects discovery affordance and plain disabled reasons for every provide
 test('projects discovery evidence, warning, and last refresh without exposing credentials', () => {
     const ui = projectProviderUi('tokenreply', 'grok-imagine-image', {
         discoveryEvidence: { kind: 'openai-list', source: 'provider /models endpoint', observedAt: '2026-08-25T12:00:00.000Z', retryCount: 1 },
-        discoveryWarning: { code: 'DISCOVERY_FAILED', userMessage: 'Model discovery failed. Your current model list was kept.' },
+        discoveryWarning: { code: 'DISCOVERY_FAILED', userMessage: 'Bearer sk-live-123456789 draw this prompt' },
     });
     assert.equal(ui.modelDiscovery.evidence.source, 'provider /models endpoint');
     assert.equal(ui.modelDiscovery.evidence.retryCount, 1);
     assert.equal(ui.modelDiscovery.lastRefresh, '2026-08-25T12:00:00.000Z');
-    assert.equal(ui.modelDiscovery.warning.userMessage.includes('key'), false);
+    assert.equal(ui.modelDiscovery.warning.userMessage, 'Model discovery failed. Your current model list was kept.');
+    assert.doesNotMatch(ui.modelDiscovery.warning.userMessage, /sk-live|Bearer|draw this prompt/i);
 });

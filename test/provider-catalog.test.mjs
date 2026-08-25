@@ -32,7 +32,8 @@ test('exposes the provider Model Manager controls and documents merge-safe disco
     ]);
 
     assert.match(settings, /id="cig_model_manager"/);
-    assert.match(settings, /id="cig_fetch_provider_models"/);
+    assert.match(settings, /id="cig_model_refresh"/);
+    assert.doesNotMatch(settings, /id="cig_fetch_provider_models"/);
     assert.match(settings, /id="cig_managed_model_id"/);
     assert.match(index, /fetchManagedProviderModels/);
     assert.match(index, /updateLocalModelEntries/);
