@@ -30,13 +30,19 @@ test('reports a missing provider as needing provider setup', () => {
 });
 
 test('reports an unavailable provider explicitly', () => {
-    assert.deepEqual(deriveSetupReadiness({ providerUi: provider({ available: false }), providerId: 'missing' }), {
+    assert.deepEqual(deriveSetupReadiness({ providerUi: provider({ available: false }), providerId: 'makersuite' }), {
         state: 'unavailable', label: 'Provider unavailable',
     });
 });
 
+test('rejects a stale provider projection whose identity does not match the selected provider', () => {
+    assert.deepEqual(deriveSetupReadiness({ providerUi: provider({ id: 'makersuite' }), providerId: 'linkapi', modelId: 'image-model' }), {
+        state: 'needs-provider', label: 'Choose a provider',
+    });
+});
+
 test('requires an API key when the provider requires one', () => {
-    assert.deepEqual(deriveSetupReadiness({ providerUi: provider({ requiresApiKey: true }), providerId: 'maker', modelId: 'image-model', apiKey: '  ' }), {
+    assert.deepEqual(deriveSetupReadiness({ providerUi: provider({ requiresApiKey: true }), providerId: 'makersuite', modelId: 'image-model', apiKey: '  ' }), {
         state: 'needs-key', label: 'Add your API key',
     });
 });
@@ -66,9 +72,9 @@ test('forces setup while incomplete and restores saved tab when ready', () => {
 test('does not use network-health language in readiness labels', () => {
     const labels = [
         deriveSetupReadiness({ providerUi: undefined, providerId: '' }).label,
-        deriveSetupReadiness({ providerUi: provider({ available: false }), providerId: 'missing' }).label,
-        deriveSetupReadiness({ providerUi: provider({ requiresApiKey: true }), providerId: 'maker', modelId: 'image-model' }).label,
-        deriveSetupReadiness({ providerUi: provider(), providerId: 'maker', modelId: 'other' }).label,
+        deriveSetupReadiness({ providerUi: provider({ available: false }), providerId: 'makersuite' }).label,
+        deriveSetupReadiness({ providerUi: provider({ requiresApiKey: true }), providerId: 'makersuite', modelId: 'image-model' }).label,
+        deriveSetupReadiness({ providerUi: provider(), providerId: 'makersuite', modelId: 'other' }).label,
         deriveSetupReadiness({ providerUi: provider(), providerId: 'maker', modelId: 'image-model' }).label,
     ];
     assert.ok(labels.every((label) => !/connected|online|verified/i.test(label)));
