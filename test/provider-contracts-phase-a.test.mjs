@@ -9,8 +9,9 @@ import {
     unknownCapabilities,
 } from '../lib/providers/contracts.js';
 import { migrateProviderSettings } from '../lib/providers/settings-migration.js';
-import { normalizeModelRecords } from '../lib/providers/model-manager.js';
+import { normalizeModelRecords, updateModelRecords, toLegacyModelEntries } from '../lib/providers/model-manager.js';
 import { projectCapability } from '../lib/providers/ui-projection.js';
+import { projectProviderUi } from '../lib/providers/ui-projection.js';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import { readFile } from 'node:fs/promises';
 
@@ -25,12 +26,17 @@ test('normalizes capability evidence and fails closed for unknown claims', () =>
     });
     assert.equal(capabilityIsSupported(supported), true);
     assert.equal(projectCapability(supported).enabled, true);
+
+    assert.equal(normalizeCapabilityEvidence({ state: 'supported', source: 'live-sanitized', confidence: 'high' }).state, 'unknown');
+    assert.equal(normalizeCapabilityEvidence({ state: 'supported', source: 'manual-user', confidence: 'high', observedAt: '2026-08-24T00:00:00.000Z' }).state, 'unknown');
+    assert.equal(capabilityIsSupported({ state: 'supported', source: 'live-sanitized' }), false);
 });
 
 test('normalizes provider, connection, and model definitions without secret material', () => {
     const provider = normalizeProviderDefinition({
         id: 'fixture', label: 'Fixture', apiKey: 'must-not-survive', models: [{ id: 'fixture-image', transport: 'openAiImages' }],
-        transports: { openAiImages: { baseUrl: 'https://fixture.example/v1' } },
+        ui: { providerInfo: 'safe', nested: { token: 'must-not-survive' } },
+        transports: { openAiImages: { baseUrl: 'https://fixture.example/v1', headers: { Authorization: 'secret' } } },
     });
     assert.equal(provider.id, 'fixture');
     assert.deepEqual(provider.transportIds, ['openAiImages']);
@@ -38,6 +44,10 @@ test('normalizes provider, connection, and model definitions without secret mate
     assert.equal(provider.discovery.kind, 'unsupported');
     assert.equal('apiKey' in provider, false);
     assert.equal(provider.builtInModels[0].posture, 'experimental');
+    assert.equal('models' in provider, false);
+    assert.equal('unknown' in provider, false);
+    assert.equal('nested' in provider.ui, false);
+    assert.equal('headers' in provider.transports.openAiImages, false);
 
     const connection = normalizeProviderConnection({
         id: 'fixture:default', providerId: 'fixture', kind: 'browser-api-key', secretRef: 'provider_keys.fixture', enabled: true,
@@ -50,6 +60,29 @@ test('normalizes provider, connection, and model definitions without secret mate
     assert.equal(model.source.kind, 'manual');
     assert.equal(model.capabilities.imageGeneration.state, 'unknown');
     assert.deepEqual(unknownCapabilities().imageGeneration.state, 'unknown');
+});
+
+test('sanitizes pre-existing contract additions and quarantines malformed records', () => {
+    const migrated = migrateProviderSettings({
+        connections: {
+            'linkapi:default': { providerId: 'linkapi', kind: 'browser-api-key', secretRef: 'provider_keys.linkapi', headers: { Authorization: 'Bearer secret' }, apiKey: 'secret' },
+            bad: { providerId: 'not-registered', token: 'secret' },
+        },
+        model_records: {
+            linkapi: [
+                { id: 'safe', source: { kind: 'manual' }, transportId: 'openAiImages', headers: { token: 'secret' } },
+                { id: '', apiKey: 'secret' },
+            ],
+        },
+    });
+    assert.deepEqual(migrated.connections['linkapi:default'], {
+        id: 'linkapi:default', providerId: 'linkapi', kind: 'browser-api-key', secretRef: 'provider_keys.linkapi', enabled: true,
+    });
+    assert.equal(migrated.model_records.linkapi[0].id, 'safe');
+    assert.equal('headers' in migrated.model_records.linkapi[0], false);
+    assert.equal(migrated.provider_contracts_quarantine.connections.length > 0, true);
+    assert.equal(migrated.provider_contracts_quarantine.modelRecords.length > 0, true);
+    assert.doesNotMatch(JSON.stringify(migrated), /Bearer secret/);
 });
 
 test('migrates legacy settings additively and idempotently', () => {
@@ -78,6 +111,31 @@ test('retains fetched discovery timestamp and evidence source on structured reco
     assert.equal(records[0].source.discoveredAt, '2026-08-24T01:02:03.000Z');
     assert.equal(records[0].source.sourceLabel, 'fixture /models');
     assert.equal(records[0].capabilities.imageGeneration.state, 'unknown');
+});
+
+test('projects controls from structured model evidence instead of legacy booleans', () => {
+    const ui = projectProviderUi('tokenreply', 'structured-image', {
+        localEntries: [{
+            id: 'structured-image', providerId: 'tokenreply', transportId: 'openAiImages',
+            source: { kind: 'fetched', discoveredAt: '2026-08-24T01:02:03.000Z', sourceLabel: 'provider /models' },
+            capabilities: {
+                imageGeneration: { state: 'supported', source: 'curated-fixture', confidence: 'high' },
+                referenceImages: { state: 'supported', source: 'live-sanitized', confidence: 'high', observedAt: '2026-08-24T01:03:03.000Z' },
+                sizes: { state: 'unsupported', source: 'curated-fixture', confidence: 'high' },
+                maxReferenceImages: 2,
+            },
+        }],
+    });
+    assert.equal(ui.supportsReferenceImages, true);
+    assert.equal(ui.referenceImageMaxCount, 2);
+    assert.deepEqual(ui.imageSizeOptions, []);
+});
+
+test('model manager writes structured authority and a minimal legacy mirror', () => {
+    const records = updateModelRecords([], { type: 'upsert', id: 'manual-image', source: 'manual', transportId: 'openAiImages', supportsReferenceImages: true }, 'tokenreply');
+    assert.equal(records[0].source.kind, 'manual');
+    assert.equal(records[0].capabilities.referenceImages.state, 'unknown');
+    assert.deepEqual(toLegacyModelEntries(records), [{ id: 'manual-image', source: 'manual', transport: 'openAiImages' }]);
 });
 
 test('restores the LinkAPI compatibility mirror when only provider_keys is present', () => {
@@ -124,4 +182,7 @@ test('loads the additive provider migration at the existing settings boundary', 
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /migrateProviderSettings/);
     assert.match(source, /migratedProviderSettings\s*=\s*migrateProviderSettings\(existingProviderSettings\)/);
+    assert.match(source, /settings\.model_records/);
+    assert.match(source, /mergeFetchedModelRecords/);
+    assert.match(source, /setProviderModelRecords/);
 });

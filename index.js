@@ -27,7 +27,7 @@ import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
 import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
 import { getModelFallback, projectProviderControls, projectProviderOptions, projectProviderUi } from './lib/providers/ui-projection.js';
-import { mergeFetchedModelEntries, updateLocalModelEntries } from './lib/providers/model-manager.js';
+import { mergeFetchedModelEntries, updateLocalModelEntries, mergeFetchedModelRecords, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
 import { fetchProviderModels } from './lib/providers/model-discovery.js';
 import { buildOpenAiImagesRequest, parseOpenAiImagesResponse } from './lib/providers/openai-images.js';
 import { dispatchProviderRoute } from './lib/providers/dispatch.js';
@@ -129,15 +129,17 @@ function setProviderApiKey(settings, providerId, value) {
 }
 
 function getProviderModelEntries(settings, providerId) {
+    const records = settings.model_records?.[providerId];
+    if (Array.isArray(records)) return records;
     const entries = settings.provider_models?.[providerId];
     return Array.isArray(entries) ? entries : [];
 }
 
-function setProviderModelEntries(settings, providerId, entries) {
-    if (!settings.provider_models || typeof settings.provider_models !== 'object' || Array.isArray(settings.provider_models)) {
-        settings.provider_models = {};
-    }
-    settings.provider_models[providerId] = entries;
+function setProviderModelRecords(settings, providerId, records) {
+    if (!settings.model_records || typeof settings.model_records !== 'object' || Array.isArray(settings.model_records)) settings.model_records = {};
+    if (!settings.provider_models || typeof settings.provider_models !== 'object' || Array.isArray(settings.provider_models)) settings.provider_models = {};
+    settings.model_records[providerId] = records;
+    settings.provider_models[providerId] = toLegacyModelEntries(records);
 }
 
 // --- LinkAPI ChatGPT (gpt-image) helpers (pure, text-prompt only) ---
@@ -311,7 +313,7 @@ async function fetchManagedProviderModels() {
         const fetched = await fetchProviderModels({ providerId, apiKey: key });
         const currentSettings = extension_settings[extensionName];
         if (!modelDiscoveryState.isCurrent(operation) || (currentSettings.provider || 'makersuite') !== providerId) return;
-        setProviderModelEntries(settings, providerId, mergeFetchedModelEntries(getProviderModelEntries(settings, providerId), fetched.map((entry) => entry.id)));
+        setProviderModelRecords(settings, providerId, mergeFetchedModelRecords(getProviderModelEntries(settings, providerId), fetched, providerId));
         updateModelDropdown();
         renderModelManager();
         saveSettingsDebounced();
@@ -459,7 +461,7 @@ function renderModelManager() {
         const label = transport === 'sillyTavernGeminiProxy' ? 'Gemini-compatible proxy' : transport === 'openAiImages' ? 'OpenAI Images API' : transport;
         $transport.append($('<option>').val(transport).text(label));
     }
-    $transport.val(selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
+    $transport.val(selectedEntry?.transportId || selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
     $('#cig_managed_model_transport_container').toggle($transport.children().length > 1);
     $('#cig_fetch_provider_models').toggle(ui.supportsModelDiscovery);
     $('#cig_model_discovery_note')
@@ -487,7 +489,7 @@ function saveManagedModel(operation) {
     const localEntries = getProviderModelEntries(settings, providerId);
     const transport = $('#cig_managed_model_transport').val() || undefined;
     const type = operation === 'save' && localEntries.some((entry) => entry.id === previousId) ? 'replace' : 'upsert';
-    setProviderModelEntries(settings, providerId, updateLocalModelEntries(localEntries, { type, previousId, id, source: 'manual', transport, supportsReferenceImages: transport === 'sillyTavernGeminiProxy', supportsSize: false }));
+    setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type, previousId, id, source: 'manual', transportId: transport }, providerId));
     settings.model = id;
     refreshManagedModels();
     saveSettingsDebounced();
@@ -502,7 +504,7 @@ function removeManagedModel() {
         toastr.info('Built-in models stay available. Select a different ID or remove a local model.', 'Context Image Generation');
         return;
     }
-    setProviderModelEntries(settings, providerId, updateLocalModelEntries(localEntries, { type: 'remove', id: selectedId }));
+    setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type: 'remove', id: selectedId }, providerId));
     settings.model = getModelFallback(providerId, settings.model, getProviderModelEntries(settings, providerId));
     refreshManagedModels();
     saveSettingsDebounced();
@@ -853,8 +855,8 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
 
         let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const localModel = getProviderModelEntries(settings, selectedProvider).find((entry) => entry.id === settings.model);
-        if (!providerRoute.model && localModel?.transport) {
-            providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transport };
+        if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
+            providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transportId || localModel.transport };
         }
 
         if (selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true) {
