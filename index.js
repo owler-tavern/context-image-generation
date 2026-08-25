@@ -41,6 +41,7 @@ import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/r
 import { createOperationState } from './lib/operation-state.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
+import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -365,6 +366,12 @@ function updateModelDropdown() {
 
     // Restore the single avatar-reference preference. Existing split settings
     // migrate once: either previously enabled avatar keeps references enabled.
+    const existingProviderSettings = extension_settings[extensionName];
+    const migratedProviderSettings = migrateProviderSettings(existingProviderSettings);
+    if (JSON.stringify(existingProviderSettings) !== JSON.stringify(migratedProviderSettings)) {
+        extension_settings[extensionName] = migratedProviderSettings;
+        settingsMigrated = true;
+    }
     const cigSettings = extension_settings[extensionName];
     const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
     if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
