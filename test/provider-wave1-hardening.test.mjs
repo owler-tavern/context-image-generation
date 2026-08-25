@@ -66,7 +66,7 @@ test('Routeway image-capable discovery requires explicit output image metadata',
 });
 
 test('future-server and unresolved providers fail before dispatch can reach host/default transport', async () => {
-    for (const providerId of ['zai', 'not-registered']) {
+    for (const providerId of ['not-registered']) {
         const plan = createGenerationPlan({
             id: `hardening:${providerId}`,
             invocation: 'wand',

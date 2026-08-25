@@ -22,7 +22,7 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 - **LinkAPI** keeps its existing Gemini-compatible and OpenAI Images model routes behind provider adapters. This does not change your active SillyTavern Chat Completion profile.
 - **TokenReply (Experimental)** provides the text-only `grok-imagine-image` and `grok-imagine-image-quality` profiles. It sends a minimal request until a live compatibility test confirms TokenReply's supported image-size/resolution field and response format.
 - **Hosted provider wave 1 (Experimental):** registry-driven OpenAI GPT Image, Pollinations paid JSON, NanoGPT, Together AI, Routeway, and Navy.ai profiles reuse the validated OpenAI Images transport. Optional capabilities remain disabled unless the selected model's evidence explicitly supports them.
-- **Future Server Adapter catalog:** Z.AI and async/provider-native profiles such as Fal.ai, Replicate, CivitAI, PixAI, Kie.ai, and Midjourney/LegNext are visible as unavailable records; no unsafe browser calls are attempted.
+- **Hosted provider catalog:** Z.AI and ArliAI have dedicated Experimental native adapters with curated built-in models; async/binary/conflicting/chute-specific profiles such as Chutes, Fal.ai, Replicate, CivitAI, PixAI, Kie.ai, Midjourney/LegNext, NovelAI, Stability AI, and Naistera remain unavailable Future Server records.
 - **Manual LinkAPI recovery:** in LinkAPI's **Advanced** settings, **Use legacy LinkAPI routing** lets you deliberately retry using the pre-adapter request path. It is never automatic, so a failed normal request will not make an unrequested second paid generation.
 
 ### Direct-provider troubleshooting
@@ -99,6 +99,7 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 - **LinkAPI `gpt-image*`/`dall-e*` models:** select LinkAPI and enter the same LinkAPI key. LinkAPI `gpt-image*`/`dall-e*` models use LinkAPI's direct Images route; they are text-only, and **Manage models → Fetch models** can discover matching image IDs.
 - **TokenReply `grok-imagine-image` (Experimental):** select TokenReply and enter a TokenReply key under Provider API Key. TokenReply is Experimental and text-only; it has two built-in models (`grok-imagine-image` and `grok-imagine-image-quality`), experimental **Manage models → Fetch models** support, no reference-image controls, and no image-size control until a live test verifies its contract.
 - **Wave 1 hosted profiles (Experimental):** select OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, or Navy.ai and enter that provider's key. They use HTTPS Bearer-authenticated Images routes; references and optional size controls remain hidden until route/model evidence enables them.
+- **Native hosted profiles (Experimental):** select Z.AI or ArliAI and enter that provider's key. These use dedicated HTTPS Bearer-authenticated native routes with curated built-in models; references and editing remain disabled or unknown until route/model evidence enables them. Chutes remains Future Server because its model routes are chute-specific.
 
 ## Installation
 
@@ -155,7 +156,6 @@ Aliases: `/proimg`, `/geminiimg`
 
 
 ## To-Do
-[ ] Add Support for other Image generation services like Z-ai and Flux
 
 ## License
 

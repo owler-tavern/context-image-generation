@@ -95,13 +95,13 @@ test('native catalog parsers return IDs without treating exact IDs as generation
     ]);
 });
 
-test('Z.AI stays future-server because its quality/size payload is not OpenAI Images compatible', () => {
+test('Z.AI is registered on its dedicated native transport rather than OpenAI Images', () => {
     const provider = getProviderDefinition('zai');
-    assert.equal(provider.posture, 'future-server');
-    assert.equal(provider.status, 'future-server');
+    assert.equal(provider.posture, 'experimental');
+    assert.equal(provider.status, 'experimental');
+    assert.equal(provider.transports?.['zai-native']?.baseUrl, 'https://api.z.ai/api/paas/v4/images/generations');
     assert.equal(provider.transports?.openAiImages, undefined);
-    assert.equal(provider.unavailableReason, 'Z.AI uses a native quality/size payload; server adapter required.');
-    assert.equal(projectProviderUi('zai').models.length, 0);
+    assert.equal(projectProviderUi('zai').models.length > 0, true);
 });
 
 test('future-server inventory records are visible but cannot resolve a browser transport', () => {
