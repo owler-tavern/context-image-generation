@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { PROVIDERS, getModelDefinition, getProviderDefinition, resolveProviderRoute, resolveTransport } from '../lib/providers/registry.js';
+import { PROVIDERS, getModelDefinition, getProviderDefinition, getReferenceImageCapability, resolveProviderRoute, resolveTransport } from '../lib/providers/registry.js';
 import { projectProviderUi } from '../lib/providers/ui-projection.js';
 
 test('routes LinkAPI Gemini and OpenAI image models by model contract', () => {
@@ -42,7 +42,7 @@ test('declares TokenReply as an experimental discovery profile', () => {
     assert.equal(ui.supportsModelDiscovery, true);
     assert.equal(ui.modelDiscoveryExperimental, true);
     assert.equal(ui.requiresApiKey, true);
-    assert.match(ui.providerInfo, /images\/generations/);
+    assert.match(ui.credential.advancedHelp, /images\/generations/);
 });
 
 test('projects reference and size controls from model capabilities', () => {
@@ -54,6 +54,17 @@ test('projects reference and size controls from model capabilities', () => {
     assert.equal(linkApiImage.supportsReferenceImages, false);
     assert.equal(flash2.imageSizeOptions.length > 0, true);
     assert.equal(flash2.supportsThinking, true);
+});
+
+test('preserves Gemini reference caps through Google AI Studio and LinkAPI proxy routes', () => {
+    assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-2.5-flash-image'), { maxCount: 3 });
+    assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3-pro-image-preview'), { maxCount: 14 });
+    assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-2.5-flash-image'), { maxCount: 3 });
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });
+    assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-3-pro-image-preview'), { maxCount: 14 });
+    assert.equal(projectProviderUi('makersuite', 'gemini-2.5-flash-image').referenceImageMaxCount, 3);
+    assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').referenceImageMaxCount, 3);
 });
 test('resolves a declarative OpenAI Images fixture without a provider-name branch', async () => {
     PROVIDERS.fixture = {
