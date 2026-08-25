@@ -123,6 +123,47 @@ test('migrates legacy settings additively and idempotently', () => {
     assert.deepEqual(migrateProviderSettings(migrated), migrated);
 });
 
+test('sanitizes prior raw model discovery state into an allowlisted idempotent record', () => {
+    const migrated = migrateProviderSettings({
+        model_discovery: {
+            tokenreply: {
+                evidence: {
+                    kind: 'openai-list',
+                    observedAt: '2026-08-25T12:00:00.000Z',
+                    source: 'provider /models endpoint',
+                    retryCount: 2,
+                    prompt: 'draw this scene',
+                    authorization: 'Bearer sk-live-123456789',
+                },
+                warning: {
+                    code: 'DISCOVERY_AUTH_FAILED',
+                    userMessage: 'Bearer sk-live-123456789 draw this prompt data:image/png;base64,AAAA',
+                    nested: { token: 'secret' },
+                },
+                rawBody: 'secret body',
+            },
+            'unknown-provider': {
+                evidence: { kind: 'native', source: 'https://evil.example?token=secret' },
+                warning: { code: 'DISCOVERY_FAILED', userMessage: 'raw' },
+            },
+        },
+    });
+
+    assert.deepEqual(migrated.model_discovery, {
+        tokenreply: {
+            evidence: {
+                kind: 'openai-list',
+                observedAt: '2026-08-25T12:00:00.000Z',
+                source: 'provider /models endpoint',
+                retryCount: 2,
+            },
+            warning: { code: 'DISCOVERY_AUTH_FAILED' },
+        },
+    });
+    assert.doesNotMatch(JSON.stringify(migrated), /sk-live|Bearer|draw this prompt|base64|evil\.example|raw body/i);
+    assert.deepEqual(migrateProviderSettings(migrated).model_discovery, migrated.model_discovery);
+});
+
 test('retains fetched discovery timestamp and evidence source on structured records', () => {
     const records = normalizeModelRecords('fixture', [{
         id: 'fetched-image', source: 'fetched', discoveredAt: '2026-08-24T01:02:03.000Z', sourceLabel: 'fixture /models',

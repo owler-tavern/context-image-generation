@@ -159,7 +159,7 @@ function setProviderDiscoveryState(settings, providerId, result) {
             observedAt: result.evidence.observedAt,
             retryCount: result.evidence.retryCount,
         },
-        ...(result?.warning ? { warning: { code: result.warning.code, userMessage: String(result.warning.userMessage || '').slice(0, 240) } } : {}),
+        ...(result?.warning ? { warning: { code: result.warning.code } } : {}),
     };
 }
 
