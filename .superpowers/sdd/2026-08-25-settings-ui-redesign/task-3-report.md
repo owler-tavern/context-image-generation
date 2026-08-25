@@ -100,3 +100,43 @@ Result: 216 passed, 0 failed. `git diff --check` also passed.
 - Credential projection has no secret value field. The direct-provider projection test rejects common secret prefixes, and only normalized user messages reach the runtime issue renderer.
 - Technical registry explanations are only assigned to `credential.advancedHelp`; Setup’s visible help is bounded default/rule copy.
 - The runtime issue remains module-only and no added path persists it or activates a settings tab.
+
+## Round 2 follow-up — 2026-08-25
+
+### Credential ownership hardening
+
+- Registry UI metadata now declares credential ownership explicitly: `extension` for extension-held keys, `sillytavern` for host-managed credentials, and `unavailable` for future-server adapters.
+- Credential projection no longer treats every `requiresApiKey !== true` provider as SillyTavern-managed. Unknown ownership fails closed to `unavailable`.
+- Tests cover host-managed Google AI Studio/OpenRouter, extension-key LinkAPI, and the Fal future-server adapter. The unavailable projection contains no Chat Completion Source instruction.
+
+### RED/GREEN evidence
+
+RED before the ownership implementation:
+
+```text
+node --test test/provider-ui-projection.test.mjs
+```
+
+Result: 10 passed, 1 failed. Fal was incorrectly projected as `sillytavern` and exposed a Chat Completion Source instruction instead of an unavailable adapter state.
+
+Focused GREEN verification:
+
+```text
+node --test test/provider-ui-projection.test.mjs test/provider-registry.test.mjs test/settings-ui.test.mjs test/settings-readiness.contract.test.mjs
+```
+
+Result: 37 passed, 0 failed.
+
+Final full-suite verification:
+
+```text
+node --test test/*.test.mjs
+```
+
+Result: 217 passed, 0 failed. `git diff --check` also passed.
+
+### Follow-up self-review
+
+- Credential mode derives from the explicit bounded ownership metadata, never key presence or an inverted `requiresApiKey` inference.
+- The projection keeps placeholders and setup guidance empty for unavailable/none ownership, and no secret value is projected or logged.
+- No browser/live-provider UAT was run; deterministic coverage verifies the UI contract only.

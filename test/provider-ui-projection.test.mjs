@@ -11,6 +11,7 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
         credentialKey: 'fixture',
         ui: {
             requiresApiKey: true,
+            credentialOwnership: 'extension',
             apiKeyLabel: 'Fixture API Key',
             modelDiscovery: false,
             adapterRequired: true,
@@ -126,6 +127,26 @@ test('projects bounded credential copy without provider diagnostics or secrets',
         advancedHelp: 'Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).',
     });
     assert.doesNotMatch(JSON.stringify(directCredential), /sk-|Bearer|api\.linkapi\.ai\/v1/i);
+});
+
+test('projects explicit credential ownership for host, extension, and unavailable providers', () => {
+    const host = projectProviderUi('openrouter', 'google/gemini-2.5-flash-image-preview').credential;
+    assert.equal(host.mode, 'sillytavern');
+    assert.match(host.setupHelp, /SillyTavern’s AI Response → Chat Completion Source/);
+
+    const extension = projectProviderUi('linkapi', 'gemini-2.5-flash-image').credential;
+    assert.equal(extension.mode, 'extension-key');
+    assert.match(extension.setupHelp, /Enter the API key for LinkAPI\./);
+
+    const unavailable = projectProviderUi('fal', '').credential;
+    assert.deepEqual(unavailable, {
+        mode: 'unavailable',
+        label: 'Fal.ai (Future Server Adapter) unavailable',
+        placeholder: '',
+        setupHelp: '',
+        advancedHelp: 'Future server adapter: Fal requires a server proxy because browser clients cannot safely expose API keys.',
+    });
+    assert.doesNotMatch(JSON.stringify(unavailable), /Chat Completion Source/i);
 });
 
 test('shows reference controls for LinkAPI Gemini routes with verified model caps', () => {
