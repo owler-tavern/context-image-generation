@@ -13,13 +13,26 @@ test('artifact decoder normalizes data URLs, OpenAI b64_json, and Gemini inlineD
     assert.deepEqual(await decodeGenerationArtifact({ inlineData: { data: PNG, mimeType: 'image/png' } }), data);
 });
 
+test('artifact decoder accepts a valid 4K-class inline image larger than 10 MiB', async () => {
+    const bytes = new Uint8Array((10 * 1024 * 1024) + 1);
+    bytes.set([137, 80, 78, 71, 13, 10, 26, 10]);
+    const encoded = Buffer.from(bytes).toString('base64');
+
+    const decoded = await decodeGenerationArtifact({
+        inlineData: { data: encoded, mimeType: 'image/png' },
+    });
+
+    assert.equal(decoded.bytes, bytes.byteLength);
+    assert.equal(decoded.mimeType, 'image/png');
+});
+
 test('artifact decoder checks abort and rejects invalid or oversized encoded payloads before decoding', async () => {
     const controller = new AbortController();
     controller.abort();
     await assert.rejects(decodeGenerationArtifact(pngDataUrl, { signal: controller.signal }), (error) => error.name === 'AbortError');
     await assert.rejects(decodeGenerationArtifact('data:image/png,%E0%A4%A'), /invalid image data/i);
     await assert.rejects(decodeGenerationArtifact({ b64_json: '%%%not-base64%%%', mimeType: 'image/png' }), /base64/i);
-    await assert.rejects(decodeGenerationArtifact({ b64_json: 'A'.repeat(14 * 1024 * 1024), mimeType: 'image/png' }), /encoded payload/i);
+    await assert.rejects(decodeGenerationArtifact({ b64_json: PNG, mimeType: 'image/png' }, { maxBytes: 8 }), /encoded payload/i);
 });
 
 test('artifact decoder rejects inline MIME and magic-byte mismatches', async () => {

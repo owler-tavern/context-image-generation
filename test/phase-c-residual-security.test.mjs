@@ -25,7 +25,7 @@ test('invalid normalized callback artifacts are rejected instead of bypassing va
 });
 
 test('percent-encoded data URLs are bounded before URI decoding', async () => {
-    await assert.rejects(decodeGenerationArtifact(`data:image/png,${'%41'.repeat(11 * 1024 * 1024)}`), /encoded|size limit/i);
+    await assert.rejects(decodeGenerationArtifact(`data:image/png,${'%41'.repeat(16)}`, { maxBytes: 4 }), /encoded|size limit/i);
 });
 
 test('safe downloader fails closed when no bounded streaming reader exists', async () => {
