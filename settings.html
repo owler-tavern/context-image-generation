@@ -47,10 +47,15 @@
             <div class="flex-container">
                 <div class="flex1">
                     <label for="cig_model">Model</label>
-                    <select id="cig_model" class="cig-setting">
-                        <!-- Populated dynamically based on provider -->
-                    </select>
-<small id="cig_model_note" style="display: none; opacity: 0.8;"></small>
+                    <div class="cig-model-row">
+                        <select id="cig_model" class="cig-setting">
+                            <!-- Populated dynamically based on provider -->
+                        </select>
+                        <input id="cig_model_refresh" class="menu_button" type="button" value="Refresh Models" aria-describedby="cig_model_discovery_status" />
+                    </div>
+                    <input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Filter models" aria-label="Filter models" autocomplete="off" />
+                    <small id="cig_model_note" style="display: none; opacity: 0.8;"></small>
+                    <small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small>
                 </div>
             </div>
 

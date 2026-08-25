@@ -28,7 +28,7 @@ import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/Sla
 import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
 import { getModelFallback, projectProviderControls, projectProviderOptions, projectProviderUi } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries, mergeFetchedModelRecords, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
-import { fetchProviderModels } from './lib/providers/model-discovery.js';
+import { discoverProviderModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { buildOpenAiImagesRequest, parseOpenAiImagesResponse } from './lib/providers/openai-images.js';
 import { dispatchProviderRoute } from './lib/providers/dispatch.js';
 import { createGenerationCoordinator } from './lib/generation-coordinator.js';
@@ -38,7 +38,6 @@ import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
-import { createOperationState } from './lib/operation-state.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan } from './lib/generation-plan.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
@@ -66,6 +65,7 @@ const defaultSettings = {
     linkapi_key: '',
     provider_keys: {},
     provider_models: {},
+    model_discovery: {},
     linkapi_use_legacy_routing: false,
     aspect_ratio: '1:1',
     image_size: '',
@@ -84,7 +84,7 @@ const defaultSettings = {
 
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createGenerationCoordinator();
-const modelDiscoveryState = createOperationState();
+const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 const chatLifecycleEpoch = createChatLifecycleEpoch();
 
 function setBusyState(control, busy, { busyClass = 'generating', busyTitle = 'Working…' } = {}) {
@@ -140,6 +140,26 @@ function setProviderModelRecords(settings, providerId, records) {
     if (!settings.provider_models || typeof settings.provider_models !== 'object' || Array.isArray(settings.provider_models)) settings.provider_models = {};
     settings.model_records[providerId] = records;
     settings.provider_models[providerId] = toLegacyModelEntries(records);
+}
+
+function getProviderDiscoveryState(settings, providerId) {
+    const states = settings.model_discovery;
+    return states && typeof states === 'object' && !Array.isArray(states) && states[providerId] && typeof states[providerId] === 'object'
+        ? states[providerId]
+        : {};
+}
+
+function setProviderDiscoveryState(settings, providerId, result) {
+    if (!settings.model_discovery || typeof settings.model_discovery !== 'object' || Array.isArray(settings.model_discovery)) settings.model_discovery = {};
+    settings.model_discovery[providerId] = {
+        evidence: result?.evidence && {
+            kind: result.evidence.kind,
+            source: result.evidence.source,
+            observedAt: result.evidence.observedAt,
+            retryCount: result.evidence.retryCount,
+        },
+        ...(result?.warning ? { warning: { code: result.warning.code, userMessage: String(result.warning.userMessage || '').slice(0, 240) } } : {}),
+    };
 }
 
 // --- LinkAPI ChatGPT (gpt-image) helpers (pure, text-prompt only) ---
@@ -296,8 +316,16 @@ async function requestOpenAiImages({ apiKey, model, prompt, size, baseUrl, provi
 async function fetchManagedProviderModels() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const ui = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
-    if (!ui?.supportsModelDiscovery) return;
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const ui = projectProviderUi(providerId, settings.model, {
+        localEntries: getProviderModelEntries(settings, providerId),
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+    });
+    if (!ui?.modelDiscovery?.refreshEnabled) {
+        if (ui?.modelDiscovery?.disabledReason) toastr.info(ui.modelDiscovery.disabledReason, 'Context Image Generation');
+        return;
+    }
 
     const key = getProviderApiKey(settings, providerId);
     if (ui.requiresApiKey && !key) {
@@ -305,24 +333,27 @@ async function fetchManagedProviderModels() {
         return;
     }
 
-    const operation = modelDiscoveryState.begin();
-    if (operation === null) return;
-    const fetchButton = $('#cig_fetch_provider_models');
-    setBusyState(fetchButton, true, { busyTitle: 'Fetching models…' });
+    const fetchButtons = $('#cig_fetch_provider_models, #cig_model_refresh');
+    setBusyState(fetchButtons, true, { busyTitle: 'Refreshing models…' });
     try {
-        const fetched = await fetchProviderModels({ providerId, apiKey: key });
+        const result = await modelDiscoveryCoordinator.refresh(providerId, { apiKey: key });
         const currentSettings = extension_settings[extensionName];
-        if (!modelDiscoveryState.isCurrent(operation) || (currentSettings.provider || 'makersuite') !== providerId) return;
-        setProviderModelRecords(settings, providerId, mergeFetchedModelRecords(getProviderModelEntries(settings, providerId), fetched, providerId));
+        if (result?.stale || (currentSettings.provider || 'makersuite') !== providerId) return;
+        setProviderDiscoveryState(currentSettings, providerId, result);
+        if (!result.warning) {
+            setProviderModelRecords(currentSettings, providerId, mergeFetchedModelRecords(getProviderModelEntries(currentSettings, providerId), result.models, providerId));
+        }
         updateModelDropdown();
         renderModelManager();
         saveSettingsDebounced();
-        toastr.success(`Loaded ${fetched.length} model(s).`, 'Context Image Generation');
+        if (result.warning) toastr.warning(`${result.warning.userMessage} Your current model list was kept.`, 'Context Image Generation');
+        else toastr.success(`Loaded ${result.models.length} model(s).`, 'Context Image Generation');
     } catch (error) {
-        if (modelDiscoveryState.isCurrent(operation)) showGenerationError(error, 'Provider model discovery');
+        showGenerationError(error, 'Provider model discovery');
     } finally {
-        modelDiscoveryState.finish(operation);
-        setBusyState(fetchButton, false);
+        setBusyState(fetchButtons, false);
+        updateModelDropdown();
+        renderModelManager();
     }
 }
 // Dev aid: reach the pure helpers from the DevTools console for verification.
@@ -346,14 +377,37 @@ function updateModelDropdown() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
-    const ui = projectProviderUi(providerId, settings.model, { localEntries });
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const ui = projectProviderUi(providerId, settings.model, {
+        localEntries,
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+    });
     if (!ui) return;
+    settings.model = getModelFallback(providerId, settings.model, localEntries);
     const $modelSelect = $('#cig_model').empty();
-    for (const model of ui.models) {
+    const query = String($('#cig_model_search').val() || '').trim().toLowerCase();
+    const filteredModels = query
+        ? ui.models.filter((model) => `${model.id} ${model.label}`.toLowerCase().includes(query))
+        : ui.models;
+    const visibleModels = filteredModels.some((model) => model.id === settings.model) || !settings.model
+        ? filteredModels
+        : [...filteredModels, ...ui.models.filter((model) => model.id === settings.model)];
+    for (const model of visibleModels) {
         $modelSelect.append($('<option>').val(model.id).text(model.label));
     }
-    settings.model = getModelFallback(providerId, settings.model, localEntries);
     $modelSelect.val(settings.model);
+    const discovery = ui.modelDiscovery;
+    const statusParts = [];
+    if (discovery.warning?.userMessage) statusParts.push(discovery.warning.userMessage);
+    else if (discovery.evidence) {
+        statusParts.push(`Source: ${discovery.evidence.source}`);
+        if (discovery.lastRefresh) statusParts.push(`Last refreshed: ${new Date(discovery.lastRefresh).toLocaleString()}`);
+    } else if (!discovery.refreshEnabled && discovery.disabledReason) statusParts.push(discovery.disabledReason);
+    $('#cig_model_discovery_status').text(statusParts.join(' · '));
+    $('#cig_model_refresh')
+        .prop('disabled', !discovery.refreshEnabled)
+        .attr('title', discovery.refreshEnabled ? 'Refresh available models' : discovery.disabledReason || 'Model refresh is unavailable');
     toggleImageSizeVisibility();
 }async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
@@ -386,6 +440,10 @@ function updateModelDropdown() {
     }
     if (!cigSettings.provider_models || typeof cigSettings.provider_models !== 'object' || Array.isArray(cigSettings.provider_models)) {
         cigSettings.provider_models = {};
+        settingsMigrated = true;
+    }
+    if (!cigSettings.model_discovery || typeof cigSettings.model_discovery !== 'object' || Array.isArray(cigSettings.model_discovery)) {
+        cigSettings.model_discovery = {};
         settingsMigrated = true;
     }
     if (!Object.hasOwn(cigSettings.provider_keys, 'linkapi') && cigSettings.linkapi_key) {
@@ -444,7 +502,12 @@ function renderModelManager() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
-    const ui = projectProviderUi(providerId, settings.model, { localEntries });
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const ui = projectProviderUi(providerId, settings.model, {
+        localEntries,
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+    });
     if (!ui) return;
 
     const $list = $('#cig_managed_model_list').empty();
@@ -463,10 +526,12 @@ function renderModelManager() {
     }
     $transport.val(selectedEntry?.transportId || selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
     $('#cig_managed_model_transport_container').toggle($transport.children().length > 1);
-    $('#cig_fetch_provider_models').toggle(ui.supportsModelDiscovery);
+    $('#cig_fetch_provider_models').toggle(ui.modelDiscovery.refreshEnabled);
     $('#cig_model_discovery_note')
-        .text(ui.modelDiscoveryExperimental ? 'Experimental: model discovery uses the provider’s standard /models endpoint. A failed fetch keeps your current list.' : '')
-        .toggle(ui.modelDiscoveryExperimental);
+        .text(ui.modelDiscovery.warning?.userMessage || (ui.modelDiscovery.refreshEnabled
+            ? 'Refresh merges discovered models and keeps your local entries.'
+            : ui.modelDiscovery.disabledReason || ''))
+        .toggle(Boolean(ui.modelDiscovery.warning?.userMessage || ui.modelDiscovery.refreshEnabled || ui.modelDiscovery.disabledReason));
     $('#cig_remove_model').prop('disabled', !localEntries.some((entry) => entry.id === settings.model));
 }
 
@@ -1590,7 +1655,8 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_fetch_provider_models').on('click', fetchManagedProviderModels);
+    $('#cig_fetch_provider_models, #cig_model_refresh').on('click', fetchManagedProviderModels);
+    $('#cig_model_search').on('input', updateModelDropdown);
     $('#cig_managed_model_list').on('change', function () {
         const selectedId = $(this).val() || '';
         $('#cig_managed_model_id').val(selectedId);

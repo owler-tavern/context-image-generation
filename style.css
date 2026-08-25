@@ -3,6 +3,44 @@
     width: 100%;
 }
 
+.cig-model-row {
+    display: flex;
+    align-items: stretch;
+    gap: 6px;
+}
+
+.cig-model-row #cig_model {
+    min-width: 0;
+    flex: 1 1 auto;
+}
+
+#cig_model_refresh {
+    flex: 0 0 auto;
+    white-space: nowrap;
+}
+
+.cig-model-search {
+    width: 100%;
+    margin-top: 6px;
+}
+
+.cig-model-discovery-status {
+    display: block;
+    min-height: 1.2em;
+    margin-top: 4px;
+    opacity: 0.72;
+}
+
+@media (max-width: 480px) {
+    .cig-model-row {
+        flex-direction: column;
+    }
+
+    #cig_model_refresh {
+        width: 100%;
+    }
+}
+
 #cig_settings .inline-drawer-content {
     display: flex;
     flex-direction: column;
