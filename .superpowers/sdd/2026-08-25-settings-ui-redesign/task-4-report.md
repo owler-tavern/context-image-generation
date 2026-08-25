@@ -54,3 +54,26 @@
 ### Concern
 
 - Browser UAT remains `NOT TESTED` for the same unavailable SillyTavern host/DevTools session; deterministic behavior and contract coverage are green.
+
+## Review round 2/5
+
+### RED -> GREEN evidence
+
+- RED: the new effective-image-size regression showed that a plan for an unsupported route still copied the persisted `4K` value into `plan.options.imageSize`.
+- GREEN: `node --test test/effective-image-size.test.mjs test/generation-plan.test.mjs test/provider-dispatch.test.mjs test/openai-images.test.mjs test/provider-ui-projection.test.mjs test/settings-ui.test.mjs` passed 34/34.
+- GREEN: `node --test test/*.mjs` passed 231/231; `git diff --check` passed.
+
+### Delivered
+
+- Generation-plan creation now preserves `settings.image_size` as the durable preference while resolving a separate effective plan value from positively evidenced, allowed model sizes.
+- Unsupported routes receive an empty effective size, so host and OpenAI transports omit their resolution/size request fields. Returning to a route which allows `4K` resolves it again without rewriting settings.
+- OpenAI Images consumes only the resolved plan image-size option. The legacy compatibility entry point maps its legacy aspect ratio once at the boundary into that same plan option.
+- New transport-level regression coverage verifies durable `4K` restoration, empty unsupported plans, and size-free host/OpenAI request payloads.
+
+### Commit
+
+`fix: resolve effective image size per route`
+
+### Concern
+
+- Browser UAT remains `NOT TESTED` for the same unavailable SillyTavern host/DevTools session; deterministic unit, integration, and full-suite evidence is green.
