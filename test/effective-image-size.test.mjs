@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGenerationPlan } from '../lib/generation-plan.js';
-import { DEFAULT_TRANSPORTS } from '../lib/providers/dispatch.js';
+import { DEFAULT_TRANSPORTS, dispatchProviderRoute } from '../lib/providers/dispatch.js';
 import { buildOpenAiImagesRequest } from '../lib/providers/openai-images.js';
 
 const savedSettings = { image_size: '4K' };
@@ -33,6 +33,23 @@ function planFor(capabilities, transportId = 'host-chat-image') {
     });
 }
 
+function indexStylePlan({ providerId, modelId, transport, transportId, endpoint, modelDefinition, aspectRatio = '16:9', imageSize = savedSettings.image_size }) {
+    return createGenerationPlan({
+        id: `effective-size:${providerId}:${modelId}:${aspectRatio}`,
+        invocation: 'settings',
+        resolved: {
+            connectionId: `${providerId}:default`,
+            providerId,
+            modelId,
+            transportId,
+            endpoint,
+            modelDefinition: { id: modelId, providerId, transport, ...modelDefinition },
+        },
+        prompt: { sourceMessage: 'A scene' },
+        options: { aspectRatio, imageSize },
+    });
+}
+
 test('generation plans preserve a saved size preference but only expose an allowed effective route option', () => {
     const unsupported = planFor(unsupportedSizes);
     assert.equal(savedSettings.image_size, '4K', 'the persisted preference is never changed');
@@ -41,6 +58,15 @@ test('generation plans preserve a saved size preference but only expose an allow
     const restored = planFor(supportedSizes);
     assert.equal(savedSettings.image_size, '4K');
     assert.equal(restored.options.imageSize, '4K', 'returning to a supported route restores the saved choice');
+});
+
+test('an explicit discrete size list never falls back to aspect-ratio mapping', () => {
+    const unavailableDiscreteSize = planFor({
+        imageGeneration: { state: 'supported', source: 'curated-fixture', confidence: 'high' },
+        sizes: { state: 'supported', source: 'curated-fixture', confidence: 'high' },
+        allowedSizes: [],
+    }, 'openai-images');
+    assert.equal(unavailableDiscreteSize.options.imageSize, '');
 });
 
 test('host and OpenAI transports omit an unsupported saved size from request payloads', async () => {
@@ -72,4 +98,47 @@ test('host and OpenAI transports omit an unsupported saved size from request pay
         size: openAiRequests[0].size,
         capabilities: unsupportedOpenAiPlan.resolved.capabilities,
     }).size, undefined);
+});
+
+test('schema-2 LinkAPI gpt-image and dall-e plans derive their OpenAI Images size from aspect ratio', async () => {
+    const calls = [];
+    for (const modelId of ['gpt-image-1', 'dall-e-3']) {
+        const plan = indexStylePlan({
+            providerId: 'linkapi',
+            modelId,
+            transport: 'openAiImages',
+            transportId: 'openai-images',
+            endpoint: 'https://linkapi.ai/v1',
+            modelDefinition: { supportsSize: true },
+        });
+        assert.equal(plan.options.imageSize, '1536x1024');
+        await dispatchProviderRoute({
+            plan,
+            connection: { id: 'linkapi:default', providerId: 'linkapi', kind: 'browser-api-key', enabled: true },
+            signal: new AbortController().signal,
+            transportContext: { requestOpenAiImages: async (request) => { calls.push(request); return { imageData: PNG, mimeType: 'image/png' }; } },
+        });
+    }
+    assert.deepEqual(calls.map((request) => request.size), ['1536x1024', '1536x1024']);
+});
+
+test('schema-2 Gemini omission does not replace a saved discrete 4K preference', async () => {
+    const unsupportedGemini = indexStylePlan({
+        providerId: 'openrouter',
+        modelId: 'google/gemini-2.5-flash-image-preview',
+        transport: 'host-chat-image',
+        transportId: 'host-chat-image',
+        modelDefinition: { capabilities: unsupportedSizes },
+    });
+    const requests = [];
+    await dispatchProviderRoute({
+        plan: unsupportedGemini,
+        connection: { id: 'openrouter:default', providerId: 'openrouter', kind: 'sillytavern-proxy', enabled: true },
+        signal: new AbortController().signal,
+        transportContext: { requestSillyTavernImage: async (request) => { requests.push(request); return { imageData: PNG, mimeType: 'image/png' }; } },
+    });
+    assert.equal(unsupportedGemini.options.imageSize, '');
+    assert.equal(requests[0].request_image_resolution, undefined);
+    assert.equal(savedSettings.image_size, '4K');
+    assert.equal(planFor(supportedSizes).options.imageSize, '4K');
 });

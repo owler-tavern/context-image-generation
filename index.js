@@ -38,7 +38,7 @@ import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from 
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
-import { createGenerationPlan } from './lib/generation-plan.js';
+import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
@@ -326,19 +326,7 @@ function isOpenAiImageModel(model) {
     return /^(gpt-image|dall-e)/i.test(model || '');
 }
 
-function mapAspectRatioToSize(aspectRatio) {
-    switch (aspectRatio) {
-        case '3:4':
-        case '9:16':
-            return '1024x1536';
-        case '4:3':
-        case '16:9':
-            return '1536x1024';
-        case '1:1':
-        default:
-            return '1024x1024';
-    }
-}
+const mapAspectRatioToSize = mapAspectRatioToImageSize;
 
 function extractPromptText(messages) {
     const parts = [];

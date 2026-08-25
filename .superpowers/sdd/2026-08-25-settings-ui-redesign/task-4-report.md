@@ -77,3 +77,27 @@
 ### Concern
 
 - Browser UAT remains `NOT TESTED` for the same unavailable SillyTavern host/DevTools session; deterministic unit, integration, and full-suite evidence is green.
+
+## Review round 3/5
+
+### RED -> GREEN evidence
+
+- RED: a schema-2 LinkAPI `gpt-image-1` / `dall-e-3` plan with `supportsSize: true` and no discrete list resolved `''` instead of the route mapping's `1536x1024` value for `16:9`.
+- RED: an explicit empty discrete `allowedSizes` list was lost during normalization and incorrectly fell back to `1536x1024` instead of omitting size.
+- GREEN: focused plan, provider, transport, settings, and contract coverage passed 37/37.
+- GREEN: `node --test test/*.mjs` passed 234/234; `git diff --check` passed.
+
+### Delivered
+
+- Effective size resolution now has three fail-closed branches: positively supported explicit discrete lists accept only their saved listed value; supported routes without a discrete list use the shared aspect-ratio mapping; unsupported or unknown routes omit size.
+- The index capture path and generation-plan resolver share the same aspect-ratio mapping, so dispatch receives one immutable effective option and never rereads mutable settings.
+- Empty explicit discrete lists remain explicit after capability normalization, preventing accidental aspect-ratio fallback.
+- Schema-2 dispatch coverage proves LinkAPI `gpt-image` and `dall-e` mappings, unsupported Gemini omission, and discrete `4K` persistence/restoration.
+
+### Commit
+
+`fix: resolve schema-2 aspect image sizes`
+
+### Concern
+
+- Browser UAT remains `NOT TESTED` for the same unavailable SillyTavern host/DevTools session; deterministic unit, integration, and full-suite evidence is green.
