@@ -85,6 +85,13 @@ const defaultSettings = {
 
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createRunCoordinator();
+let currentGenerationRunId = null;
+generationCoordinator.subscribe((event) => {
+    if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
+    if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
+    const cancelControl = $('#cig_cancel_generation');
+    if (cancelControl.length) cancelControl.prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
+});
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 const chatLifecycleEpoch = createChatLifecycleEpoch();
@@ -698,106 +705,103 @@ function getCharacterDescriptions() {
     };
 }
 
-async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation = 'settings') {
+function cloneSnapshot(value) {
+    if (value === undefined) return undefined;
+    try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
+}
+
+function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
     const settings = extension_settings[extensionName];
-    const messages = [];
-    const contentParts = [];
-
-    if (settings.system_instruction) {
-        contentParts.push({ type: 'text', text: settings.system_instruction });
+    const providerId = settings.provider || 'makersuite';
+    const modelId = settings.model;
+    let providerRoute = resolveProviderRoute(providerId, modelId);
+    const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
+    if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
+        providerRoute = { ...providerRoute, model: { id: modelId, ...cloneSnapshot(localModel) }, transport: localModel.transportId || localModel.transport };
     }
-
-    if (settings.include_descriptions) {
-        const descriptions = getCharacterDescriptions();
-        let descText = '';
-        if (descriptions.user_persona) {
-            descText += `[${descriptions.user_name} (User) Description]: ${descriptions.user_persona}\n\n`;
-        }
-        if (descriptions.char_description) {
-            descText += `[${descriptions.char_name} (Character) Description]: ${descriptions.char_description}\n\n`;
-        }
-        if (descriptions.char_scenario) {
-            descText += `[Current Scenario]: ${descriptions.char_scenario}\n\n`;
-        }
-        if (descText) {
-            contentParts.push({ type: 'text', text: descText.trim() });
-        }
-    }
-
-    const depth = settings.message_depth || 1;
-
+    const legacyTransport = providerRoute.transport;
+    const manualLegacyRecovery = invocation !== 'automation' && invocation !== 'swipe' && isManualLegacyLinkApiRecovery(providerId, settings);
+    const transportId = manualLegacyRecovery
+        ? 'linkapi-legacy-recovery'
+        : legacyTransport === 'openAiImages' ? 'openai-images' : legacyTransport === 'sillyTavernGeminiProxy' ? 'sillytavern-gemini-proxy' : 'host-chat-image';
+    const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
+    const recentMessages = cloneSnapshot(getRecentMessages(settings.message_depth || 1, messageId)) || [];
+    let messageContent = prompt;
     if (messageId !== null || sender !== null) {
-        const recentMessages = getRecentMessages(depth, messageId);
-
         if (recentMessages.length > 0) {
             let storyContext = '[Story Context - Generate an image for the final message]:\n\n';
-
-            for (const msg of recentMessages) {
-                const senderTag = msg.isUser ? '{{user}}' : '{{char}}';
-                storyContext += `[${senderTag} (${msg.name})]: ${msg.text}\n\n`;
-            }
-
-            contentParts.push({
-                type: 'text',
-                text: buildFocusedMessageContent({
-                    sourceMessage: prompt,
-                    focusText,
-                    sender,
-                    storyContext: storyContext.trim(),
-                }),
-            });
-        } else {
-            if (sender) {
-                contentParts.push({
-                    type: 'text',
-                    text: buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender }),
-                });
-            } else {
-                contentParts.push({ type: 'text', text: prompt });
-            }
+            for (const msg of recentMessages) storyContext += `[${msg.isUser ? '{{user}}' : '{{char}}'} (${msg.name})]: ${msg.text}\n\n`;
+            messageContent = buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender, storyContext: storyContext.trim() });
+        } else if (sender) {
+            messageContent = buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender });
         }
-    } else {
-        contentParts.push({ type: 'text', text: prompt });
     }
-
-    const providerId = settings.provider || 'makersuite';
-    const capability = getReferenceImageCapability(providerId, settings.model);
-    const supportsReferenceImages = Boolean(capability);
+    let descriptionText = '';
+    if (settings.include_descriptions) {
+        const descriptions = getCharacterDescriptions();
+        if (descriptions.user_persona) {
+            descriptionText += `[${descriptions.user_name} (User) Description]: ${descriptions.user_persona}\n\n`;
+        }
+        if (descriptions.char_description) {
+            descriptionText += `[${descriptions.char_name} (Character) Description]: ${descriptions.char_description}\n\n`;
+        }
+        if (descriptions.char_scenario) {
+            descriptionText += `[Current Scenario]: ${descriptions.char_scenario}\n\n`;
+        }
+        descriptionText = descriptionText.trim();
+    }
+    // Legacy resolver shape: getReferenceImageCapability(providerId, settings.model)
+    const capability = getReferenceImageCapability(providerId, modelId);
     const referenceCandidates = [];
-    const referenceAssets = {};
-    const appearanceMaterial = materializeAppearanceAssets(settings.rp_library, settings.gallery || []);
-    referenceCandidates.push(...buildAppearanceReferenceCandidates(settings.rp_library, settings.gallery || [], { currentChatId: getContext().chatId }));
-    Object.assign(referenceAssets, appearanceMaterial.assets);
-
-    if (supportsReferenceImages && settings.use_previous_image && settings.gallery?.length > 0) {
-        const previous = settings.gallery[0];
-        const dataUrl = await galleryItemToDataUrl(previous);
-        if (dataUrl) {
-            referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
-            referenceAssets['asset:legacy-previous'] = { url: dataUrl, mimeType: 'image/png' };
-        }
+    const settingsSnapshot = cloneSnapshot(settings) || {};
+    const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
+    const appearanceMaterial = materializeAppearanceAssets(settingsSnapshot.rp_library, gallerySnapshot);
+    referenceCandidates.push(...buildAppearanceReferenceCandidates(settingsSnapshot.rp_library, gallerySnapshot, { currentChatId: getContext().chatId }));
+    if (capability && settingsSnapshot.use_previous_image && gallerySnapshot.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
+    // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
+    // the captured capability/setting snapshot below is the authority.
+    if (capability && settingsSnapshot.use_avatars) {
+        referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: 'character' });
+        referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: 'user' });
     }
-    if (supportsReferenceImages && settings.use_avatars) {
-        const charAvatarData = await getCharacterAvatar();
-        if (charAvatarData) {
-            referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: charAvatarData.name || 'character' });
-            referenceAssets['asset:host-character'] = { data: charAvatarData.data, mimeType: charAvatarData.mimeType };
-        }
-        const userAvatarData = await getUserAvatar();
-        if (userAvatarData) {
-            referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: userAvatarData.name || 'user' });
-            referenceAssets['asset:host-user'] = { data: userAvatarData.data, mimeType: userAvatarData.mimeType };
-        }
-    }
-    const plan = createGenerationPlan({
-        id: `generation:${providerId}:${settings.model}:${messageId ?? 'prompt'}`,
+    const planInput = {
+        id: `generation:${getGenerationKey(prompt, messageId, target)}`,
+        idempotencyKey: getGenerationKey(prompt, messageId, target),
         invocation,
-        provider: { providerId, modelId: settings.model, transport: resolveProviderRoute(providerId, settings.model).transport, capabilities: { referenceImages: capability || {} } },
-        prompt: { sourceMessage: prompt, focusText, nearbyMessages: getRecentMessages(settings.message_depth || 1, messageId), intent: 'scene' },
+        target: cloneSnapshot(target),
+        provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
+        resolved: { connectionId: `${providerId}:default`, providerId, modelId, transportId, ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), ...(manualLegacyRecovery ? { legacyKind: legacyTransport === 'openAiImages' ? 'openai-images' : 'gemini-proxy' } : {}), capabilities: routeModel.capabilities || routeModel },
+        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         references: referenceCandidates,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
-        options: { aspectRatio: settings.aspect_ratio, imageSize: settings.image_size, systemInstruction: settings.system_instruction },
-    });
+        options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
+        policy: { source: invocation === 'automation' ? 'automation' : 'manual' },
+    };
+    return Object.freeze({ planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot, apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot, referenceAssets: appearanceMaterial.assets, referenceCandidates });
+}
+
+async function materializeSnapshotAssets(snapshot) {
+    const assets = { ...(snapshot.referenceAssets || {}) };
+    if (snapshot.referenceCandidates.some((reference) => reference.id === 'legacy:previous')) {
+        const dataUrl = await galleryItemToDataUrl(snapshot.gallerySnapshot[0]);
+        if (dataUrl) assets['asset:legacy-previous'] = { url: dataUrl, mimeType: 'image/png' };
+    }
+    if (snapshot.referenceCandidates.some((reference) => reference.id === 'host:character')) {
+        const charAvatarData = await getCharacterAvatar();
+        if (charAvatarData) assets['asset:host-character'] = { data: charAvatarData.data, mimeType: charAvatarData.mimeType };
+        const userAvatarData = await getUserAvatar();
+        if (userAvatarData) assets['asset:host-user'] = { data: userAvatarData.data, mimeType: userAvatarData.mimeType };
+    }
+    return assets;
+}
+
+// Compatibility signature: buildMessages(prompt, sender, messageId, focusText, invocation).
+async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation = 'settings', plan = null, referenceAssets = {}) {
+    if (!plan) throw new TypeError('buildMessages requires a captured GenerationPlan.');
+    const contentParts = [];
+    if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
+    if (plan.prompt.descriptionText) contentParts.push({ type: 'text', text: plan.prompt.descriptionText });
+    contentParts.push({ type: 'text', text: plan.prompt.messageContent || plan.prompt.sourceMessage });
     const materialized = materializeReferences(plan.references, { assets: referenceAssets });
     for (const reference of materialized.references) {
         contentParts.push({ type: 'text', text: `[Reference image: ${reference.label || reference.role}]` });
@@ -806,8 +810,7 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
         contentParts.push({ type: 'image_url', image_url: { url } });
     }
 
-    messages.push({ role: 'user', content: contentParts });
-    return messages;
+    return [{ role: 'user', content: contentParts }];
 }
 
 async function requestSillyTavernImage(requestBody, { providerId = requestBody?.chat_completion_source || 'unknown', modelId = requestBody?.model, signal } = {}) {
@@ -920,82 +923,51 @@ function getGenerationKey(prompt, messageId, target = null) {
     });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
-    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation);
+async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null) {
+    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize);
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
-    const settings = extension_settings[extensionName];
-    const selectedProvider = settings.provider || 'makersuite';
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null) {
+    let snapshot;
     try {
-        const messages = await buildMessages(prompt, sender, messageId, focusText, invocation);
-
-        let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
-        const localModel = getProviderModelEntries(settings, selectedProvider).find((entry) => entry.id === settings.model);
-        if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
-            providerRoute = { ...providerRoute, model: { id: settings.model, ...localModel }, transport: localModel.transportId || localModel.transport };
-        }
-
-        const legacyTransport = providerRoute.transport;
-        const transportId = legacyTransport === 'openAiImages'
-            ? 'openai-images'
-            : legacyTransport === 'sillyTavernGeminiProxy'
-                ? 'sillytavern-gemini-proxy'
-                : 'host-chat-image';
-        const endpoint = providerRoute.provider?.transports?.[legacyTransport]?.baseUrl;
-        const routeModel = providerRoute.model || { id: settings.model, providerId: selectedProvider, transportId };
-        const plan = createGenerationPlan({
-            id: `generation:${getGenerationKey(prompt, messageId, target)}`,
-            idempotencyKey: getGenerationKey(prompt, messageId, target),
-            invocation,
-            target,
-            provider: {
-                providerId: selectedProvider,
-                modelId: settings.model,
-                transport: transportId,
-                capabilities: routeModel.capabilities || routeModel,
-            },
-            resolved: {
-                connectionId: `${selectedProvider}:default`,
-                providerId: selectedProvider,
-                modelId: settings.model,
-                transportId,
-                ...(endpoint ? { endpoint } : {}),
-                capabilities: routeModel.capabilities || routeModel,
-            },
-            messages,
-            prompt: { sourceMessage: extractPromptText(messages), focusText, nearbyMessages: getRecentMessages(settings.message_depth || 1, messageId), intent: 'scene' },
-            options: {
-                aspectRatio: settings.aspect_ratio,
-                imageSize: settings.image_size,
-                thinkingLevel: settings.thinking_level,
-                useGoogleSearch: settings.use_google_search,
-                systemInstruction: settings.system_instruction,
-            },
-            policy: { source: invocation === 'automation' ? 'automation' : 'manual' },
-        });
+        // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
+        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation);
+        const assets = await materializeSnapshotAssets(snapshot);
+        const availableReferences = snapshot.referenceCandidates.filter((reference) => !reference.assetId || assets[reference.assetId]);
+        const missingReferenceOmissions = snapshot.referenceCandidates.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
+        const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions });
+        const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
+        const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions, messages });
         const connection = {
-            id: `${selectedProvider}:default`,
-            providerId: selectedProvider,
-            kind: providerRoute.provider?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
+            id: dispatchedPlan.resolved.connectionId,
+            providerId: dispatchedPlan.resolved.providerId,
+            kind: snapshot.providerRoute?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
             enabled: true,
         };
-        return await generationCoordinator.enqueue(plan, (signal) => dispatchProviderRoute({
-            plan,
-            connection,
-            signal,
-            transportContext: {
-                apiKey: getProviderApiKey(settings, selectedProvider),
-                messages,
-                reverseProxy: oai_settings.reverse_proxy || '',
-                fetchImpl: fetch,
-                getRequestHeaders,
-                mapAspectRatioToSize,
-                requestSillyTavernImage,
-            },
-        }));
+        const execution = generationCoordinator.enqueue(dispatchedPlan, async (signal) => {
+            const generated = await dispatchProviderRoute({
+                plan: dispatchedPlan,
+                connection,
+                signal,
+                transportContext: {
+                    apiKey: snapshot.apiKey,
+                    messages,
+                    reverseProxy: snapshot.reverseProxy,
+                    fetchImpl: fetch,
+                    getRequestHeaders,
+                    mapAspectRatioToSize,
+                    requestSillyTavernImage,
+                },
+            });
+            if (typeof finalize !== 'function') return generated;
+            const persisted = await finalize(generated, signal);
+            return persisted?.persistence?.stale ? { ...persisted, stale: true } : persisted;
+        });
+        currentGenerationRunId = execution.runId || currentGenerationRunId;
+        $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
+        return await execution;
     } catch (error) {
-        throw attachNormalizedProviderError(error, { providerId: selectedProvider, modelId: settings.model });
+        throw attachNormalizedProviderError(error, { providerId: snapshot?.planInput?.resolved?.providerId || 'unknown', modelId: snapshot?.planInput?.resolved?.modelId });
     }
 }
 // Resolve the <img> src for a gallery item. Supports new file-based items ({url})
@@ -1364,7 +1336,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         prompt,
         sender,
         focusText,
-        generate: () => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation),
+        generate: ({ finalize } = {}) => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation, finalize),
         saveImage: async (imageData) => {
             const fileName = `cig_${Date.now()}`;
             const filePath = await saveBase64AsFile(imageData, extensionName, fileName, 'png');
@@ -1675,6 +1647,10 @@ jQuery(async () => {
     $('#cig_linkapi_use_legacy_routing').on('change', function () {
         extension_settings[extensionName].linkapi_use_legacy_routing = $(this).prop('checked');
         saveSettingsDebounced();
+    });
+
+    $('#cig_cancel_generation').on('click', function () {
+        if (currentGenerationRunId) generationCoordinator.cancel(currentGenerationRunId);
     });
 
     $('#cig_model_refresh').on('click', fetchManagedProviderModels);

@@ -38,6 +38,23 @@ test('safe target appends media, saves the active chat, and records the artifact
     ]);
 });
 
+test('safe attachment can be finalized inside the coordinator execution', async () => {
+    let persisted = 0;
+    const result = await attachGeneratedImageSafely({
+        target: { chatId: 'chat', messageId: 1, messageFingerprint: 'fp' },
+        prompt: 'scene',
+        generate: async ({ finalize }) => finalize({ imageData: 'image', mimeType: 'image/png' }),
+        saveImage: async () => 'saved.png',
+        getCurrentTarget: () => ({ safe: true, message: {} }),
+        appendMedia: () => { persisted += 1; },
+        saveChat: async () => ({ saved: true }),
+        addToGallery: async () => {},
+        notify: () => {},
+    });
+    assert.equal(result, true);
+    assert.equal(persisted, 1);
+});
+
 test('stale target keeps the artifact in the gallery without touching the active chat', async () => {
     const { calls, options } = dependencies({ safe: false, reason: 'chat-changed' });
     assert.equal(await attachGeneratedImageSafely(options), false);

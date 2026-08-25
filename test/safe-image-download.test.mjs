@@ -16,6 +16,12 @@ test('safe image download accepts HTTPS images and forwards AbortSignal', async 
     assert.equal(result.bytes, 3);
 });
 
+test('safe image download checks abort before decoding a data URL', async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await assert.rejects(downloadImageData('data:image/png;base64,aGVsbG8=', { signal: controller.signal }), (error) => error.name === 'AbortError');
+});
+
 test('safe image download rejects non-HTTPS URLs, non-images, and oversized responses', async () => {
     await assert.rejects(downloadImageData('http://images.example/a.png'), /HTTPS/);
     await assert.rejects(downloadImageData('https://images.example/a.txt', { fetchImpl: async () => response(new ArrayBuffer(1), { 'content-type': 'text/plain' }) }), /image content/);
@@ -35,4 +41,12 @@ test('safe image download aborts a fetch that exceeds its timeout', async () => 
     const pending = downloadImageData('https://images.example/slow.png', { timeoutMs: 5, fetchImpl: async () => new Promise(() => {}) });
     const result = await Promise.race([pending.then(() => null, (error) => error), new Promise((resolve) => setTimeout(() => resolve(new Error('test timeout')), 50))]);
     assert.equal(result?.name, 'AbortError');
+});
+
+test('safe image download enforces the byte cap while reading a streaming body', async () => {
+    const chunks = [new Uint8Array([1, 2]), new Uint8Array([3, 4])];
+    await assert.rejects(downloadImageData('https://images.example/stream.png', {
+        maxBytes: 3,
+        fetchImpl: async () => ({ ok: true, status: 200, headers: new Headers({ 'content-type': 'image/png' }), body: { getReader() { return { async read() { return chunks.length ? { done: false, value: chunks.shift() } : { done: true }; }, releaseLock() {} }; } } }),
+    }), /size limit/i);
 });

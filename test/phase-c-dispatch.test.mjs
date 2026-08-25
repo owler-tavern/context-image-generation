@@ -51,3 +51,24 @@ test('dispatch never rereads a changed endpoint from the connection', async () =
     connection.baseUrl = 'https://changed.example';
     assert.equal(received.plan.resolved.endpoint, 'https://fixture.example/v1');
 });
+
+test('manual LinkAPI recovery is an explicit plan transport, never an argument-bag route', async () => {
+    const controller = new AbortController();
+    const transports = createTransportRegistry();
+    assert.equal(transports.has('linkapi-legacy-recovery'), false);
+    transports.register({
+        id: 'linkapi-legacy-recovery',
+        generate: async ({ plan, signal }) => {
+            assert.equal(plan.resolved.legacyKind, 'openai-images');
+            assert.equal(signal, controller.signal);
+            return { imageData: 'abc', mimeType: 'image/png' };
+        },
+    });
+    const result = await dispatchProviderRoute({
+        plan: plan({ transportId: 'linkapi-legacy-recovery', legacyKind: 'openai-images' }),
+        connection: { id: 'linkapi:default', providerId: 'linkapi', kind: 'browser-api-key', enabled: true },
+        signal: controller.signal,
+        transportContext: { transports },
+    });
+    assert.equal(result.imageData, 'abc');
+});

@@ -41,3 +41,29 @@ test('RunCoordinator suppresses duplicate paid work and cancels queued work', as
     assert.equal(calls, 1);
     assert.equal(coordinator.get('run:2').state, 'cancelled');
 });
+
+test('RunCoordinator terminal records contain normalized provider fields only', async () => {
+    const coordinator = createRunCoordinator();
+    const error = Object.assign(new Error('Bearer sk-secret raw upstream body'), {
+        category: 'authentication', code: 'AUTH_FAILED', status: 401, providerId: 'fixture', modelId: 'image-1', requestId: 'req-1',
+    });
+    await assert.rejects(coordinator.enqueue(plan('terminal'), async () => { throw error; }));
+    const record = coordinator.get('run:1');
+    assert.deepEqual(record.terminal, { error: { category: 'authentication', code: 'AUTH_FAILED', status: 401, providerId: 'fixture', modelId: 'image-1', requestId: 'req-1' } });
+    assert.doesNotMatch(JSON.stringify(record), /Bearer|sk-secret|raw upstream body/);
+});
+
+test('RunCoordinator marks gallery-only persistence as stale instead of completed', async () => {
+    const coordinator = createRunCoordinator();
+    const result = await coordinator.enqueue(plan('stale'), async () => ({ persistence: { attached: false, stale: true }, stale: true }));
+    assert.equal(result.stale, true);
+    assert.equal(coordinator.get('run:1').state, 'stale');
+});
+
+test('RunCoordinator does not retain completed artifacts in public terminal records', async () => {
+    const coordinator = createRunCoordinator();
+    await coordinator.enqueue(plan('artifact'), async () => ({ imageData: 'secret-payload', providerRequestId: 'req-1' }));
+    const record = coordinator.get('run:1');
+    assert.equal('result' in record, false);
+    assert.doesNotMatch(JSON.stringify(record), /secret-payload/);
+});
