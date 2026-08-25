@@ -123,6 +123,7 @@ You can select a passage inside the rendered message before clicking its wand. A
 - Select TokenReply (Experimental) to enter its separate key and choose `grok-imagine-image` or `grok-imagine-image-quality`; it is text-only and hides image-size and reference-image controls.
 - Choose aspect ratio and compatible controls for the selected model, toggle descriptions, customize the system instruction, and manage the gallery.
 - Use **Manage models** to add or edit the actual model ID sent to the selected provider. **Fetch models** merges discovered IDs without deleting your local entries. TokenReply discovery is Experimental and may fail safely until its /v1/models behavior is live-verified.
+- For a manual or fetched model whose image-generation capability is unknown, open **Manage models** and explicitly enable **Allow experimental text-only generation** after reviewing the warning. Optional features stay disabled, and generation remains blocked until this confirmation is present.
 
 ### Slash Command
 ```

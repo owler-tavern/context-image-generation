@@ -65,6 +65,7 @@ const defaultSettings = {
     provider_keys: {},
     provider_models: {},
     model_discovery: {},
+    experimental_model_preflight: {},
     linkapi_use_legacy_routing: false,
     aspect_ratio: '1:1',
     image_size: '',
@@ -140,6 +141,72 @@ function getProviderModelEntries(settings, providerId) {
     if (Array.isArray(records)) return records;
     const entries = settings.provider_models?.[providerId];
     return Array.isArray(entries) ? entries : [];
+}
+
+function experimentalPreflightKey({ providerId, modelId, transportId } = {}) {
+    if (![providerId, modelId, transportId].every((value) => typeof value === 'string' && value.trim())) return '';
+    return JSON.stringify([providerId, modelId, transportId]);
+}
+
+function getSelectedModelRoute(settings, modelId = settings.model) {
+    const providerId = settings.provider || 'makersuite';
+    const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
+    let providerRoute = resolveProviderRoute(providerId, modelId);
+    if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
+        providerRoute = { ...providerRoute, model: { id: modelId, ...cloneSnapshot(localModel) }, transport: localModel.transportId || localModel.transport };
+    }
+    return {
+        providerId,
+        modelId,
+        model: providerRoute.model,
+        transportId: providerRoute.model?.transportId || providerRoute.model?.transport || providerRoute.transport || '',
+    };
+}
+
+function modelNeedsExperimentalPreflight(model) {
+    const sourceKind = model?.source?.kind || model?.source;
+    const imageGenerationState = model?.capabilities?.imageGeneration?.state || 'unknown';
+    return ['manual', 'fetched'].includes(sourceKind) && imageGenerationState !== 'supported';
+}
+
+function isExperimentalPreflightAccepted(settings, route) {
+    const key = experimentalPreflightKey(route);
+    return Boolean(key && settings.experimental_model_preflight?.[key] === true);
+}
+
+function setExperimentalPreflight(settings, route, accepted) {
+    const key = experimentalPreflightKey(route);
+    if (!key) return;
+    if (!settings.experimental_model_preflight || typeof settings.experimental_model_preflight !== 'object' || Array.isArray(settings.experimental_model_preflight)) settings.experimental_model_preflight = {};
+    if (accepted === true) settings.experimental_model_preflight[key] = true;
+    else delete settings.experimental_model_preflight[key];
+}
+
+function clearExperimentalPreflightForRoute(settings, route) {
+    setExperimentalPreflight(settings, route, false);
+}
+
+function clearExperimentalPreflightForProvider(settings, providerId) {
+    const map = settings.experimental_model_preflight;
+    if (!map || typeof map !== 'object' || Array.isArray(map)) return;
+    for (const key of Object.keys(map)) {
+        try {
+            const parsed = JSON.parse(key);
+            if (Array.isArray(parsed) && parsed[0] === providerId) delete map[key];
+        } catch { /* migration will discard malformed keys */ }
+    }
+}
+
+function renderExperimentalPreflight(settings, modelId = settings.model) {
+    const selectedRoute = getSelectedModelRoute(settings, modelId);
+    const showExperimentalPreflight = modelNeedsExperimentalPreflight(selectedRoute.model);
+    $('#cig_experimental_preflight').toggle(showExperimentalPreflight);
+    $('#cig_experimental_preflight_checkbox')
+        .prop('checked', showExperimentalPreflight && isExperimentalPreflightAccepted(settings, selectedRoute))
+        .prop('disabled', !showExperimentalPreflight);
+    $('#cig_experimental_preflight_warning')
+        .text('Endpoint/model is unverified; optional features are disabled.')
+        .toggle(showExperimentalPreflight);
 }
 
 // The legacy recovery route remains an explicit manual capability. It is not
@@ -494,6 +561,7 @@ function renderModelManager() {
     }
     $transport.val(selectedEntry?.transportId || selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
     $('#cig_managed_model_transport_container').toggle($transport.children().length > 1);
+    renderExperimentalPreflight(settings);
     $('#cig_model_discovery_note')
         .text(ui.modelDiscovery.warning?.userMessage || (ui.modelDiscovery.refreshEnabled
             ? 'Refresh merges discovered models and keeps your local entries.'
@@ -512,6 +580,7 @@ function refreshManagedModels() {
 function saveManagedModel(operation) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
+    const provider = getProviderDefinition(providerId);
     const id = $('#cig_managed_model_id').val().trim();
     if (!id) {
         toastr.warning('Enter an actual model ID.', 'Context Image Generation');
@@ -520,6 +589,10 @@ function saveManagedModel(operation) {
     const previousId = $('#cig_managed_model_list').val();
     const localEntries = getProviderModelEntries(settings, providerId);
     const transport = $('#cig_managed_model_transport').val() || undefined;
+    const previousEntry = localEntries.find((entry) => entry.id === previousId);
+    const previousTransport = previousEntry?.transportId || previousEntry?.transport || provider?.models?.find((model) => model.id === previousId)?.transport || transport;
+    clearExperimentalPreflightForRoute(settings, { providerId, modelId: previousId, transportId: previousTransport });
+    clearExperimentalPreflightForRoute(settings, { providerId, modelId: previousId, transportId: transport });
     const type = operation === 'save' && localEntries.some((entry) => entry.id === previousId) ? 'replace' : 'upsert';
     setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type, previousId, id, source: 'manual', transportId: transport }, providerId));
     settings.model = id;
@@ -678,6 +751,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         : ({ openAiImages: 'openai-images', sillyTavernGeminiProxy: 'sillytavern-gemini-proxy', 'host-chat-image': 'host-chat-image' }[legacyTransport]);
     if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
+    const preflightRoute = { providerId, modelId, transportId: legacyTransport };
+    const preflightAccepted = !modelNeedsExperimentalPreflight(routeModel) || isExperimentalPreflightAccepted(settings, preflightRoute);
     const recentMessages = cloneSnapshot(getRecentMessages(settings.message_depth || 1, messageId)) || [];
     let messageContent = prompt;
     if (messageId !== null || sender !== null) {
@@ -728,7 +803,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         references: referenceCandidates,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
-        policy: { source: invocation === 'automation' ? 'automation' : 'manual' },
+        policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted },
     };
     return Object.freeze({ planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot, apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot, referenceAssets: appearanceMaterial.assets, referenceCandidates });
 }
@@ -1496,7 +1571,9 @@ jQuery(async () => {
 
     $('#cig_provider').on('change', function () {
         const settings = extension_settings[extensionName];
-        cancelModelDiscovery(settings.provider || 'makersuite');
+        const previousProvider = settings.provider || 'makersuite';
+        cancelModelDiscovery(previousProvider);
+        clearExperimentalPreflightForProvider(settings, previousProvider);
         settings.provider = $(this).val();
         updateModelDropdown();
         toggleImageSizeVisibility();
@@ -1532,6 +1609,29 @@ jQuery(async () => {
         const settings = extension_settings[extensionName];
         const providerId = settings.provider || 'makersuite';
         $('#cig_remove_model').prop('disabled', !getProviderModelEntries(settings, providerId).some((entry) => entry.id === selectedId));
+        renderExperimentalPreflight(settings, selectedId);
+    });
+    $('#cig_experimental_preflight_checkbox').on('change', function () {
+        const settings = extension_settings[extensionName];
+        const route = getSelectedModelRoute(settings, $('#cig_managed_model_list').val() || settings.model);
+        if (!modelNeedsExperimentalPreflight(route.model)) {
+            $(this).prop('checked', false);
+            return;
+        }
+        setExperimentalPreflight(settings, route, $(this).prop('checked'));
+        saveSettingsDebounced();
+        renderExperimentalPreflight(settings, route.modelId);
+    });
+    $('#cig_managed_model_transport').on('change', function () {
+        const settings = extension_settings[extensionName];
+        const providerId = settings.provider || 'makersuite';
+        const selectedId = $('#cig_managed_model_list').val() || settings.model;
+        const previousEntry = getProviderModelEntries(settings, providerId).find((entry) => entry.id === selectedId);
+        const previousTransport = previousEntry?.transportId || previousEntry?.transport || getProviderDefinition(providerId)?.models?.find((model) => model.id === selectedId)?.transport || '';
+        clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: previousTransport });
+        clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: $(this).val() || '' });
+        renderModelManager();
+        saveSettingsDebounced();
     });
     $('#cig_add_model').on('click', () => saveManagedModel('add'));
     $('#cig_save_model').on('click', () => saveManagedModel('save'));
@@ -1539,7 +1639,10 @@ jQuery(async () => {
 
     $('#cig_model').on('change', function () {
         const settings = extension_settings[extensionName];
-        cancelModelDiscovery(settings.provider || 'makersuite');
+        const previousProvider = settings.provider || 'makersuite';
+        const previousRoute = getSelectedModelRoute(settings, settings.model);
+        cancelModelDiscovery(previousProvider);
+        clearExperimentalPreflightForRoute(settings, previousRoute);
         settings.model = $(this).val();
         toggleImageSizeVisibility();
         renderModelManager();

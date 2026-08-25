@@ -68,7 +68,7 @@ test('manual LinkAPI recovery is an explicit plan transport, never an argument-b
     });
     const result = await dispatchProviderRoute({
         plan: plan({ transportId: 'linkapi-legacy-recovery', legacyKind: 'openai-images' }),
-        connection: { id: 'linkapi:default', providerId: 'linkapi', kind: 'browser-api-key', enabled: true },
+        connection: { id: 'fixture:default', providerId: 'fixture', kind: 'browser-api-key', enabled: true },
         signal: controller.signal,
         transportContext: { transports },
     });

@@ -71,6 +71,13 @@
                     <select id="cig_managed_model_transport" class="text_pole"></select>
                 </div>
                 </div>
+                <div id="cig_experimental_preflight" class="flex-container flexFlowColumn" style="display: none; margin-top: 5px;">
+                    <label class="checkbox_label" title="The endpoint/model is unverified and optional image features remain disabled until verified.">
+                        <input type="checkbox" id="cig_experimental_preflight_checkbox" />
+                        <span>Allow experimental text-only generation</span>
+                    </label>
+                    <small id="cig_experimental_preflight_warning">Endpoint/model is unverified; optional features are disabled.</small>
+                </div>
                 <div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;">
                     <input id="cig_add_model" class="menu_button" type="button" value="Add model" />
                     <input id="cig_save_model" class="menu_button" type="button" value="Save ID" />

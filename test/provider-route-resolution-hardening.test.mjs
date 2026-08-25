@@ -26,6 +26,7 @@ function nanoPlan(overrides = {}) {
             ...overrides,
         },
         prompt: { sourceMessage: 'a quiet forest' },
+        policy: { preflightAccepted: true },
     });
 }
 

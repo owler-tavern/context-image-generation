@@ -69,6 +69,8 @@ The LinkAPI Gemini route is intentionally shaped as a Gemini/MakerSuite request 
 The direct OpenAI Images route starts with the minimal `{ model, prompt }` payload. It adds `size`, `n`, or `response_format` only when the selected model's normalized capability evidence positively supports that field. It accepts either `b64_json` or a returned URL; a returned URL is fetched and converted to base64 before the extension continues. TokenReply deliberately has no size metadata until live evidence confirms its accepted field.
 The normal adapter route adds `size` only when the selected model metadata declares `supportsSize: true`; it is capability-gated, not endpoint-wide. Unknown models send only the minimal text prompt, while positive model evidence enables individual optional fields. The retained legacy LinkAPI Images recovery route intentionally maps and sends `size` unconditionally to preserve the pre-adapter request shape. Keep that distinction documented and do not use legacy behavior as evidence that a new provider accepts `size`.
 
+Unknown manual or fetched image models require an explicit **Allow experimental text-only generation** confirmation in Manage models. The warning states that the endpoint/model is unverified and optional features are disabled; the confirmation is stored only under the exact provider/model/transport tuple. Without confirmation, ordinary wand and automation runs fail closed and direct the user to Advanced → Manage models without opening a modal during roleplay.
+
 
 ### Important endpoint distinction
 
