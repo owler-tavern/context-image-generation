@@ -55,6 +55,7 @@ import {
     migrateAppearanceLibrary,
     listVisibleAppearanceEntries,
     applyAppearanceLookRemoval,
+    applyGalleryClear,
     applyGalleryImageDeletion,
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
@@ -1642,19 +1643,19 @@ function injectAllMessageButtons() {
 }
 
 async function clearGallery() {
-    if (!confirm('Are you sure you want to clear the gallery? This cannot be undone.')) {
-        return;
-    }
-
     const settings = extension_settings[extensionName];
     const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
-    const originalCount = settings.gallery.length;
-    settings.gallery = settings.gallery.filter((item) => !protectedIds.has(galleryArtifactKey(item)));
-    const removedCount = originalCount - settings.gallery.length;
+    const warning = protectedIds.size > 0
+        ? 'Clear every gallery image? This will also remove saved appearances that use gallery images. This cannot be undone.'
+        : 'Clear every gallery image? This cannot be undone.';
+    if (!await confirmDestructiveAction(warning, 'Clear Gallery')) return;
+    const result = applyGalleryClear({ gallery: settings.gallery, library: settings.rp_library, confirmed: true });
+    settings.gallery = result.gallery;
+    settings.rp_library = result.library;
     saveSettingsDebounced();
     renderGallery();
     renderAppearanceList();
-    toastr.info(removedCount > 0 ? `Gallery cleared. Kept ${settings.gallery.length} referenced image(s).` : 'Gallery already contains only referenced images.', 'Context Image Generation');
+    toastr.success('Gallery cleared.', 'Context Image Generation');
 }
 
 function viewGalleryImage(index) {

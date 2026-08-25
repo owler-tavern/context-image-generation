@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
     addAppearanceLook,
+    applyGalleryClear,
     buildAppearanceReferenceCandidates,
     listAppearanceIdentityChoices,
     materializeAppearanceAssets,
@@ -57,6 +58,21 @@ test('adding a gallery look creates a stable identity record and deduplicates th
     assert.equal(second.library.identities['character:ava.png'].looks.length, 1);
     assert.equal(second.library.assets['asset:gallery:one'].source.galleryId, 'gallery:one');
     assert.equal('imageData' in second.library.assets['asset:gallery:one'], false);
+});
+
+test('confirmed gallery clear removes every image and its dependent appearance records', () => {
+    const saved = addAppearanceLook({}, {
+        identity: { id: 'character:ava.png', kind: 'character', label: 'Ava' },
+        galleryItem,
+    }).library;
+    const untouched = applyGalleryClear({ gallery: [galleryItem], library: saved, confirmed: false });
+    assert.equal(untouched.gallery.length, 1);
+    assert.equal(untouched.library.identities['character:ava.png'].looks.length, 1);
+
+    const cleared = applyGalleryClear({ gallery: [galleryItem], library: saved, confirmed: true });
+    assert.deepEqual(cleared.gallery, []);
+    assert.deepEqual(cleared.library.identities['character:ava.png'].looks, []);
+    assert.deepEqual(cleared.library.assets, {});
 });
 
 test('only the current chat can view or act on chat-local NPC appearances', () => {
