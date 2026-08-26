@@ -44,7 +44,7 @@ import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
-import { decideImageNavigation, handleImageGesture } from './lib/rp/image-navigation.js';
+import { handleImageArrowNavigation, handleImageGesture } from './lib/rp/image-navigation.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -1644,17 +1644,18 @@ function onCigImageArrowClick(event) {
         stopImageNavigationEvent(event);
         return;
     }
-    const decision = decideImageNavigation({
+    handleImageArrowNavigation({
+        owned: true,
+        event,
         direction: target.classList.contains('mes_img_swipe_right') ? 'next' : 'previous',
         currentIndex: navigation.index,
         mediaLength: navigation.media.length,
         generatePastLast: Boolean(extension_settings[extensionName]?.regenerate_on_swipe),
         generationActive: false,
+        schedule: (callback) => setTimeout(callback, 0),
+        reconfigure: () => configureCigImageArrows(messageElement),
+        generate: () => { void generatePastLastImage(navigation); },
     });
-    if (decision.action === 'navigate') return;
-
-    stopImageNavigationEvent(event);
-    if (decision.action === 'generate') void generatePastLastImage(navigation);
 }
 
 function onCigImageArrowKeydown(event) {

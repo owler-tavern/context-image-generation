@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     decideImageNavigation,
+    handleImageArrowNavigation,
     handleImageGesture,
     navigationDirectionForGesture,
 } from '../lib/rp/image-navigation.js';
@@ -122,4 +123,70 @@ test('disabled gestures, missing arrows, and unrelated events remain untouched',
         assert.equal(event.defaultPrevented, false);
         assert.equal(event.propagationStopped, false);
     }
+});
+
+test('ordinary CIG navigation reconfigures replacement controls after the host navigation completes', () => {
+    const event = gestureEvent('click');
+    const scheduled = [];
+    let replacement = { keyboardReady: false };
+
+    const decision = handleImageArrowNavigation({
+        owned: true,
+        event,
+        direction: 'next',
+        currentIndex: 0,
+        mediaLength: 2,
+        generatePastLast: true,
+        generationActive: false,
+        schedule: (callback) => scheduled.push(callback),
+        reconfigure: () => { replacement.keyboardReady = true; },
+    });
+
+    assert.deepEqual(decision, { action: 'navigate', index: 1 });
+    assert.equal(event.defaultPrevented, false);
+    assert.equal(event.propagationStopped, false);
+    assert.equal(scheduled.length, 1);
+    replacement = { keyboardReady: false };
+    scheduled[0]();
+    assert.equal(replacement.keyboardReady, true);
+});
+
+test('non-CIG and busy image arrows cannot respectively reconfigure controls or start generation', () => {
+    const foreignEvent = gestureEvent('click');
+    const busyEvent = gestureEvent('click');
+    let schedules = 0;
+    let generations = 0;
+
+    assert.deepEqual(handleImageArrowNavigation({
+        owned: false,
+        event: foreignEvent,
+        direction: 'next',
+        currentIndex: 0,
+        mediaLength: 2,
+        generatePastLast: true,
+        generationActive: false,
+        schedule: () => { schedules += 1; },
+        reconfigure: () => { schedules += 1; },
+        generate: () => { generations += 1; },
+    }), { action: 'ignore', reason: 'not-cig-owned' });
+
+    assert.deepEqual(handleImageArrowNavigation({
+        owned: true,
+        event: busyEvent,
+        direction: 'next',
+        currentIndex: 1,
+        mediaLength: 2,
+        generatePastLast: true,
+        generationActive: true,
+        schedule: () => { schedules += 1; },
+        reconfigure: () => { schedules += 1; },
+        generate: () => { generations += 1; },
+    }), { action: 'stay', index: 1, reason: 'generation-active' });
+
+    assert.equal(schedules, 0);
+    assert.equal(generations, 0);
+    assert.equal(foreignEvent.defaultPrevented, false);
+    assert.equal(foreignEvent.propagationStopped, false);
+    assert.equal(busyEvent.defaultPrevented, true);
+    assert.equal(busyEvent.propagationStopped, true);
 });
