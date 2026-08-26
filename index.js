@@ -21,7 +21,7 @@ import { getContext, extension_settings } from '../../../extensions.js';
 import { getBase64Async, saveBase64AsFile } from '../../../utils.js';
 import { power_user } from '../../../power-user.js';
 import { oai_settings } from '../../../openai.js';
-import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR, SWIPE_DIRECTION } from '../../../constants.js';
+import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../../constants.js';
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
@@ -44,6 +44,7 @@ import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
+import { decideImageNavigation, handleImageGesture } from './lib/rp/image-navigation.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -95,6 +96,7 @@ const generationCoordinator = createRunCoordinator();
 let currentGenerationRunId = null;
 let lastGenerationPlanInspection = null;
 let setupRuntimeIssue = null;
+const activeImageBoundaryGenerations = new Set();
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1475,6 +1477,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 type: MEDIA_TYPE.IMAGE,
                 title: sourcePrompt.substring(0, 100),
                 source: MEDIA_SOURCE.GENERATED,
+                cig_owner: extensionName,
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
@@ -1522,37 +1525,150 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
     });
 }
 
-// Regenerate a fresh variation when the user swipes RIGHT past the last image of
-// one of OUR generated images. Opt-in via the regenerate_on_swipe setting.
-async function onCigImageSwiped({ message, element, direction }) {
-    const settings = extension_settings[extensionName];
-    if (!settings.regenerate_on_swipe) return;
-    if (direction !== SWIPE_DIRECTION.RIGHT) return;
+function isCigOwnedMedia(media) {
+    return media?.cig_owner === extensionName
+        || (typeof media?.url === 'string' && media.url.includes(extensionName));
+}
 
+function activeMediaForMessage(message) {
     const media = message?.extra?.media;
-    if (!Array.isArray(media) || media.length === 0) return;
+    if (!Array.isArray(media) || media.length === 0) return null;
+    const rawIndex = Number(message.extra.media_index);
+    const index = Number.isInteger(rawIndex)
+        ? Math.max(0, Math.min(rawIndex, media.length - 1))
+        : media.length - 1;
+    return { media, index, item: media[index] };
+}
 
-    const idx = message.extra.media_index ?? (media.length - 1);
-    if (idx !== media.length - 1) return; // only an overswipe past the last image
-
-    const current = media[idx];
-    if (!current?.url || !current.url.includes(extensionName)) return; // only our own images
-
-    const messageId = Number(element.attr('mesid') ?? element.closest('.mes').attr('mesid'));
+function imageNavigationContext(messageElement) {
+    const messageId = Number(messageElement?.attr('mesid'));
     const context = getContext();
-    const charName = context.name2 || 'Character';
+    const message = context.chat?.[messageId];
+    const activeMedia = activeMediaForMessage(message);
+    if (!Number.isInteger(messageId) || !activeMedia || !isCigOwnedMedia(activeMedia.item)) return null;
+    return { context, message, messageId, messageElement, ...activeMedia };
+}
+
+function imageGenerationKey({ context, messageId }) {
+    return `${context.chatId || 'unknown-chat'}:${messageId}`;
+}
+
+function cigImageArrows(messageElement) {
+    return messageElement.find('.mes_img_swipe_left, .mes_img_swipe_right');
+}
+
+function configureCigImageArrows(messageElement) {
+    if (!imageNavigationContext(messageElement)) return;
+    messageElement.find('.mes_img_swipe_left')
+        .attr({ tabindex: '0', role: 'button', title: 'Previous image', 'aria-label': 'Previous image' })
+        .addClass('cig_image_navigation');
+    messageElement.find('.mes_img_swipe_right')
+        .attr({ tabindex: '0', role: 'button', title: 'Next image', 'aria-label': 'Next image' })
+        .addClass('cig_image_navigation');
+}
+
+function setCigImageArrowBusy(messageElement, busy) {
+    setBusyState(cigImageArrows(messageElement), busy, { busyClass: 'cig_busy', busyTitle: 'Generating image…' });
+}
+
+function stopImageNavigationEvent(event) {
+    event.preventDefault();
+    event.stopPropagation();
+}
+
+function resolveCigImageGestureContext(event) {
+    const target = event.target instanceof Element ? event.target : null;
+    const image = target?.closest('.mes_img');
+    const mediaContainer = image?.closest('.mes_img_container, .mes_media_container');
+    const messageElement = mediaContainer ? $(mediaContainer).closest('.mes') : $();
+    if (!messageElement.length) return null;
+    return imageNavigationContext(messageElement);
+}
+
+function onCigImageGesture(event) {
+    const navigation = resolveCigImageGestureContext(event);
+    if (!navigation) return;
+    configureCigImageArrows(navigation.messageElement);
+    handleImageGesture({
+        event,
+        gesturesEnabled: power_user.gestures !== false,
+        resolveArrow: (direction) => navigation.messageElement.find(direction === 'next'
+            ? '.mes_img_swipe_right'
+            : '.mes_img_swipe_left')[0],
+    });
+}
+
+async function generatePastLastImage(navigation) {
+    const key = imageGenerationKey(navigation);
+    if (activeImageBoundaryGenerations.has(key)) return;
+
+    activeImageBoundaryGenerations.add(key);
+    setCigImageArrowBusy(navigation.messageElement, true);
+    const messageMedia = navigation.messageElement.find('.mes_img, .mes_video');
+    const charName = navigation.context.name2 || 'Character';
     const userName = name1 || 'User';
-    const sender = message.is_user ? `{{user}} (${userName})` : `{{char}} (${charName})`;
-    const messageMedia = element.find('.mes_img, .mes_video');
+    const sender = navigation.message.is_user ? `{{user}} (${userName})` : `{{char}} (${charName})`;
 
     try {
         messageMedia.addClass('fa-fade');
-        await attachGeneratedImage(message, element, message.mes, sender, messageId, null, null, 'swipe');
+        await attachGeneratedImage(
+            navigation.message,
+            navigation.messageElement,
+            navigation.message.mes,
+            sender,
+            navigation.messageId,
+            null,
+            null,
+            'swipe',
+        );
     } catch (error) {
-        showGenerationError(error, 'Swipe regeneration');
+        showGenerationError(error, 'Image regeneration');
     } finally {
         messageMedia.removeClass('fa-fade');
+        activeImageBoundaryGenerations.delete(key);
+        setCigImageArrowBusy(navigation.messageElement, false);
+        configureCigImageArrows(navigation.messageElement);
     }
+}
+
+function onCigImageArrowClick(event) {
+    const target = event.target instanceof Element ? event.target.closest('.mes_img_swipe_left, .mes_img_swipe_right') : null;
+    if (!target) return;
+    const messageElement = $(target).closest('.mes');
+    const navigation = imageNavigationContext(messageElement);
+    if (!navigation) return;
+
+    configureCigImageArrows(messageElement);
+    const key = imageGenerationKey(navigation);
+    if (activeImageBoundaryGenerations.has(key)) {
+        stopImageNavigationEvent(event);
+        return;
+    }
+    const decision = decideImageNavigation({
+        direction: target.classList.contains('mes_img_swipe_right') ? 'next' : 'previous',
+        currentIndex: navigation.index,
+        mediaLength: navigation.media.length,
+        generatePastLast: Boolean(extension_settings[extensionName]?.regenerate_on_swipe),
+        generationActive: false,
+    });
+    if (decision.action === 'navigate') return;
+
+    stopImageNavigationEvent(event);
+    if (decision.action === 'generate') void generatePastLastImage(navigation);
+}
+
+function onCigImageArrowKeydown(event) {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    const target = event.target instanceof Element ? event.target.closest('.cig_image_navigation') : null;
+    if (!target) return;
+    stopImageNavigationEvent(event);
+    target.click();
+}
+
+function configureAllCigImageArrows() {
+    $('.mes').each(function () {
+        configureCigImageArrows($(this));
+    });
 }
 
 async function autoGenerateForMessage(messageId) {
@@ -1973,10 +2089,16 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
+    document.addEventListener('swiped-left', onCigImageGesture, true);
+    document.addEventListener('swiped-right', onCigImageGesture, true);
+    document.addEventListener('click', onCigImageArrowClick, true);
+    document.addEventListener('keydown', onCigImageArrowKeydown, true);
+
     bindAppearanceRerenderOnChatLifecycle(eventSource, event_types, renderAppearanceList);
 
     eventSource.on(event_types.MESSAGE_RENDERED, (messageId) => {
         injectMessageButton(messageId);
+        configureCigImageArrows($(`.mes[mesid="${messageId}"]`));
     });
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
@@ -1998,9 +2120,10 @@ jQuery(async () => {
         setTimeout(injectAllMessageButtons, 100);
     });
 
-    eventSource.on(event_types.IMAGE_SWIPED, onCigImageSwiped);
-
-    setTimeout(injectAllMessageButtons, 500);
+    setTimeout(() => {
+        injectAllMessageButtons();
+        configureAllCigImageArrows();
+    }, 500);
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
         name: 'proimagine',

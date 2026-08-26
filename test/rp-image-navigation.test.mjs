@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     decideImageNavigation,
+    handleImageGesture,
     navigationDirectionForGesture,
 } from '../lib/rp/image-navigation.js';
 
@@ -79,4 +80,46 @@ test('touch swipe directions map to image navigation directions', () => {
     assert.equal(navigationDirectionForGesture('swiped-left'), 'next');
     assert.equal(navigationDirectionForGesture('swiped-right'), 'previous');
     assert.equal(navigationDirectionForGesture('swiped-up'), null);
+});
+
+function gestureEvent(type) {
+    return {
+        type,
+        defaultPrevented: false,
+        propagationStopped: false,
+        preventDefault() { this.defaultPrevented = true; },
+        stopPropagation() { this.propagationStopped = true; },
+    };
+}
+
+test('recognized image gestures consume the event and activate the matching native arrow once', () => {
+    const event = gestureEvent('swiped-left');
+    let activations = 0;
+    const arrow = { click: () => { activations += 1; } };
+
+    assert.equal(handleImageGesture({
+        event,
+        gesturesEnabled: true,
+        resolveArrow: (direction) => direction === 'next' ? arrow : null,
+    }), true);
+    assert.equal(activations, 1);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(event.propagationStopped, true);
+});
+
+test('disabled gestures, missing arrows, and unrelated events remain untouched', () => {
+    const disabled = gestureEvent('swiped-right');
+    const missingArrow = gestureEvent('swiped-left');
+    const unrelated = gestureEvent('swiped-up');
+    let activations = 0;
+    const arrow = { click: () => { activations += 1; } };
+
+    assert.equal(handleImageGesture({ event: disabled, gesturesEnabled: false, resolveArrow: () => arrow }), false);
+    assert.equal(handleImageGesture({ event: missingArrow, gesturesEnabled: true, resolveArrow: () => null }), false);
+    assert.equal(handleImageGesture({ event: unrelated, gesturesEnabled: true, resolveArrow: () => arrow }), false);
+    assert.equal(activations, 0);
+    for (const event of [disabled, missingArrow, unrelated]) {
+        assert.equal(event.defaultPrevented, false);
+        assert.equal(event.propagationStopped, false);
+    }
 });
