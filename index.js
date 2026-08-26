@@ -44,7 +44,7 @@ import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
-import { handleImageArrowNavigation, handleImageGesture } from './lib/rp/image-navigation.js';
+import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { materializeReferences } from './lib/rp/references.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -1482,6 +1482,10 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
             appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+            scheduleImageArrowConfiguration({
+                schedule: (callback) => setTimeout(callback, 0),
+                reconfigure: () => configureCigImageArrows(currentMessageElement),
+            });
             return () => {
                 if (previousExtra === null) {
                     delete currentMessage.extra;
@@ -1492,6 +1496,10 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                     };
                 }
                 appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+                scheduleImageArrowConfiguration({
+                    schedule: (callback) => setTimeout(callback, 0),
+                    reconfigure: () => configureCigImageArrows(currentMessageElement),
+                });
             };
         },
         saveChat: async () => {
@@ -2097,22 +2105,30 @@ jQuery(async () => {
 
     bindAppearanceRerenderOnChatLifecycle(eventSource, event_types, renderAppearanceList);
 
-    eventSource.on(event_types.MESSAGE_RENDERED, (messageId) => {
+    function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
-        configureCigImageArrows($(`.mes[mesid="${messageId}"]`));
-    });
+        const messageElement = $(`.mes[mesid="${messageId}"]`);
+        scheduleImageArrowConfiguration({
+            schedule: (callback) => setTimeout(callback, 0),
+            reconfigure: () => configureCigImageArrows(messageElement),
+        });
+    }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         chatLifecycleEpoch.advance();
-        setTimeout(injectAllMessageButtons, 100);
+        setTimeout(() => {
+            injectAllMessageButtons();
+            configureAllCigImageArrows();
+        }, 100);
     });
 
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
-        setTimeout(injectAllMessageButtons, 100);
+        onCigMessageRendered(messageId);
         autoGenerateForMessage(messageId);
     });
 
     eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
+        onCigMessageRendered(messageId);
         autoGenerateForMessage(messageId);
     });
 

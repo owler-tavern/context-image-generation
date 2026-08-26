@@ -6,6 +6,7 @@ import {
     handleImageArrowNavigation,
     handleImageGesture,
     navigationDirectionForGesture,
+    scheduleImageArrowConfiguration,
 } from '../lib/rp/image-navigation.js';
 
 test('previous from the first image stays at the first image', () => {
@@ -189,4 +190,18 @@ test('non-CIG and busy image arrows cannot respectively reconfigure controls or 
     assert.equal(foreignEvent.propagationStopped, false);
     assert.equal(busyEvent.defaultPrevented, true);
     assert.equal(busyEvent.propagationStopped, true);
+});
+
+test('post-render scheduling configures replacement arrows only after attachment or chat refresh completes', () => {
+    const queued = [];
+    let currentControls = { accessible: false };
+    const schedule = (callback) => queued.push(callback);
+    const reconfigure = () => { currentControls.accessible = true; };
+
+    assert.equal(scheduleImageArrowConfiguration({ schedule, reconfigure }), true);
+    assert.equal(currentControls.accessible, false);
+    currentControls = { accessible: false };
+    queued.shift()();
+    assert.equal(currentControls.accessible, true);
+    assert.equal(scheduleImageArrowConfiguration({ schedule }), false);
 });
