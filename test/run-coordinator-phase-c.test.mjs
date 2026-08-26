@@ -42,6 +42,25 @@ test('RunCoordinator suppresses duplicate paid work and cancels queued work', as
     assert.equal(coordinator.get('run:2').state, 'cancelled');
 });
 
+test('RunCoordinator starts a fresh run for the same message after completion', async () => {
+    const coordinator = createRunCoordinator({ maxConcurrent: 1 });
+    let calls = 0;
+
+    const first = await coordinator.enqueue(plan('same-message', 'chat:first'), async () => {
+        calls += 1;
+        return { imageData: 'first', mimeType: 'image/png' };
+    });
+    const second = await coordinator.enqueue(plan('same-message', 'chat:first'), async () => {
+        calls += 1;
+        return { imageData: 'second', mimeType: 'image/png' };
+    });
+
+    assert.equal(first.imageData, 'first');
+    assert.equal(second.imageData, 'second');
+    assert.equal(calls, 2);
+    assert.equal(coordinator.get('run:2').state, 'completed');
+});
+
 test('RunCoordinator terminal records contain normalized provider fields only', async () => {
     const coordinator = createRunCoordinator();
     const error = Object.assign(new Error('Bearer sk-secret raw upstream body'), {
