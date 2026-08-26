@@ -9,7 +9,7 @@ test('shared generation path builds one plan and labels invocation sources', asy
     assert.match(index, /buildMessages\(prompt, sender, messageId, focusText, invocation\)/);
     assert.match(index, /invocation: 'automation'/);
     assert.match(index, /'slash'\)/);
-    assert.match(index, /'swipe'\);/);
+    assert.match(index, /await attachGeneratedImage\(\s*navigation\.message,\s*navigation\.messageElement,\s*navigation\.message\.mes,\s*sender,\s*navigation\.messageId,\s*null,\s*null,\s*'swipe',\s*\);/);
 });
 
 test('runtime dispatch does not reference a removed SillyTavern request callback', async () => {
