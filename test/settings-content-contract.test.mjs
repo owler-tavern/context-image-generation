@@ -59,6 +59,15 @@ test('each existing preference control remains once in its user-facing group', (
     }
 });
 
+test('overswipe generation setting explains the image boundary and retains one persisted control', () => {
+    const preference = settings.match(/<label[^>]*>[^<]*<input[^>]*id="cig_regenerate_on_swipe"[^>]*>[\s\S]*?<\/label>/)?.[0] || '';
+    assert.equal((settings.match(/id="cig_regenerate_on_swipe"/g) || []).length, 1);
+    assert.match(preference, />Generate past the last image</);
+    assert.match(preference, /title="[^"]*(swipe left|right arrow)[^"]*(swipe left|right arrow)[^"]*"/i);
+    assert.match(preference, /cig-setting-help[^>]*>[\s\S]*?(swipe left|right arrow)[\s\S]*?(swipe left|right arrow)/i);
+    assert.doesNotMatch(settings, /id="cig_regenerate_on_swipe"[\s\S]*?id="cig_regenerate_on_swipe"/);
+});
+
 test('Images and Cast leads with Gallery and then a visible Appearance memory section', () => {
     const imagesCast = panelMarkup('cig_settings_panel_images_cast');
     assert.ok(imagesCast.indexOf('id="cig_gallery"') < imagesCast.indexOf('id="cig_appearances"'));
