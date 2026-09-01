@@ -163,7 +163,7 @@ test('production initializes the shared chat epoch before the first scoped story
 test('production story memory mount disables the unscoped auto-load before explicit chat-scoped load', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(index, /mountStoryMemorySurface\(host, storyMemoryController, \{ installStyles: true, autoLoad: false \}\)/u);
-    assert.match(index, /void storyMemoryController\.load\(\{ chatId: getContext\(\)\.chatId \}\)/u);
+    assert.match(index, /void loadStoryMemoryForCurrentChat\(\)/u);
 });
 
 test('production story memory opener reveals host and extension drawers before selecting and focusing the entry', async () => {
@@ -176,8 +176,9 @@ test('production story memory opener reveals host and extension drawers before s
     assert.match(entry, /#extensions-settings-button > \.drawer-toggle/u);
     assert.match(entry, /\.inline-drawer-content/u);
     assert.match(index, /activateTab: \(tab\) => activateSettingsTab\(tab\)/u);
-    assert.match(index, /selectArtifact: \(targetMessageId\)/u);
-    assert.match(index, /storyMemoryController\.setSelectedArtifact\(entry\.id\)/u);
+    assert.match(index, /selectStoryMemoryEntryWhenReady\(/u);
+    assert.match(index, /storyMemoryController\?\.setSelectedArtifact\(artifactId\)/u);
+    assert.match(index, /chatCaptureIsCurrent\(captured\)/u);
     assert.match(entry, /scrollIntoView/u);
 });
 

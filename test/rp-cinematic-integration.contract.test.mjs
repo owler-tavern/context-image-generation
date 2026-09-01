@@ -46,6 +46,7 @@ test('manual cinematic retrigger reports a visible suggestion result even before
     assert.match(index, /refreshCinematicSurface\(result\?\.suggestion, status\)/u);
     assert.match(index, /Manual cinematic suggestion is ready/u);
     assert.match(index, /No chat event was replayed/u);
+    assert.match(index, /focusCinematicSuggestionCard\(\{ documentLike: document, suggestionId: result\.suggestion\?\.suggestionId \}\)/u);
 });
 
 test('production cinematic runtime binds manual retriggers to the current chat messages', () => {
@@ -55,6 +56,6 @@ test('production cinematic runtime binds manual retriggers to the current chat m
 
 test('production manual retrigger captures lifecycle identity and skips stale refreshes', () => {
     assert.match(index, /const captured = \{ chatId: getContext\(\)\.chatId, epoch: chatLifecycleEpoch\.capture\(\) \};[\s\S]*cinematicRuntime\?\.retrigger\([\s\S]*captured\)/u);
-    assert.match(index, /if \(chatCaptureIsCurrent\(captured\)\) refreshCinematicSurface\(result\?\.suggestion, status\)/u);
+    assert.match(index, /if \(chatCaptureIsCurrent\(captured\)\) \{[\s\S]*refreshCinematicSurface\(result\?\.suggestion, status\)/u);
     assert.match(index, /suggestion\.target\.epoch[\s\S]*chatLifecycleEpoch\.capture\(\)/u);
 });

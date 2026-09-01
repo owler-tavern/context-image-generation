@@ -82,11 +82,11 @@ import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, pers
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
-import { revealStoryMemoryEntry } from './lib/rp/story-memory-entry.js';
+import { revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from './lib/rp/story-memory-entry.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
-import { createCinematicUiController, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
+import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, renderDirectorPanel } from './lib/rp/director-ui.js';
 
@@ -141,6 +141,8 @@ const iterationSurfaceMounts = new Map();
 const iterationInvocations = new Set();
 let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
+let storyMemoryLoadPromise = null;
+let storyMemoryLoadCapture = null;
 let pendingStoryMemoryContinuation = null;
 let cinematicRuntime = null;
 let cinematicUiController = null;
@@ -923,31 +925,64 @@ function createStoryMemorySurface() {
         },
     };
     storyMemoryController = createStoryMemoryController(dependencies);
+    storyMemoryLoadPromise = null;
+    storyMemoryLoadCapture = null;
     const host = document.getElementById('cig_story_memory_surface');
     if (!host) return;
     storyMemorySurfaceMount?.destroy?.();
     storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
-    void storyMemoryController.load({ chatId: getContext().chatId });
+    void loadStoryMemoryForCurrentChat();
+}
+
+function loadStoryMemoryForCurrentChat(captured = null) {
+    if (!storyMemoryController) return Promise.resolve({ status: 'unavailable', error: 'Story Memory is not mounted.' });
+    const target = captured || { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+    const token = { chatId: target.chatId, epoch: target.epoch };
+    const promise = Promise.resolve(storyMemoryController.load({ chatId: token.chatId }));
+    storyMemoryLoadCapture = token;
+    storyMemoryLoadPromise = promise;
+    return promise;
 }
 
 function refreshStoryMemorySurface() {
     if (!storyMemoryController) return;
     pendingStoryMemoryContinuation = null;
-    void storyMemoryController.load({ chatId: getContext().chatId });
+    void loadStoryMemoryForCurrentChat();
 }
 
 function openStoryMemoryArtifact(messageId) {
+    const context = getContext();
+    const captured = { chatId: context.chatId, epoch: chatLifecycleEpoch.capture() };
+    const message = context.chat?.[Number(messageId)];
+    const activeMedia = activeMediaForMessage(message);
+    const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
     revealStoryMemoryEntry({
         documentLike: document,
         activateTab: (tab) => activateSettingsTab(tab),
-        selectArtifact: (targetMessageId) => {
-            const message = getContext().chat?.[Number(targetMessageId)];
-            const activeMedia = activeMediaForMessage(message);
-            const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
-            const entry = storyMemoryController?.getState().timeline?.find((item) => item.messageId === Number(targetMessageId) && item.url === media?.url);
-            if (entry) storyMemoryController.setSelectedArtifact(entry.id);
-        },
         messageId,
+    });
+    const sameLoad = storyMemoryLoadPromise
+        && storyMemoryLoadCapture
+        && String(storyMemoryLoadCapture.chatId) === String(captured.chatId)
+        && storyMemoryLoadCapture.epoch === captured.epoch;
+    const loadPromise = sameLoad ? storyMemoryLoadPromise : loadStoryMemoryForCurrentChat(captured);
+    void selectStoryMemoryEntryWhenReady({
+        loadPromise,
+        isCurrent: () => chatCaptureIsCurrent(captured),
+        getTimeline: () => storyMemoryController?.getState().timeline || [],
+        messageId: Number(messageId),
+        mediaUrl: media?.url,
+        selectArtifact: (artifactId) => storyMemoryController?.setSelectedArtifact(artifactId),
+        focusSelected: (entry) => {
+            const cards = [...document.querySelectorAll('#cig_story_memory_surface [data-story-artifact-id]')];
+            const card = cards.find((node) => node.getAttribute('data-story-artifact-id') === String(entry.id));
+            const focusTarget = card?.querySelector('[data-story-action="select-details"]') || card;
+            card?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+            focusTarget?.focus?.({ preventScroll: true });
+        },
+    }).then((result) => {
+        if (result.status === 'stale') toastr.info(result.reason, 'Story Memory');
+        else if (result.status === 'unavailable' || result.status === 'error') toastr.info(result.reason, 'Story Memory');
     });
 }
 
@@ -4338,7 +4373,10 @@ jQuery(async () => {
                 : result?.status === 'pending-suppressed'
                     ? 'Finish the current cinematic suggestion before adding another.'
                     : result?.reason || 'Manual cinematic suggestion could not be created.';
-            if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(result?.suggestion, status);
+            if (chatCaptureIsCurrent(captured)) {
+                refreshCinematicSurface(result?.suggestion, status);
+                if (result?.status === 'suggested') focusCinematicSuggestionCard({ documentLike: document, suggestionId: result.suggestion?.suggestionId });
+            }
             if (result?.status === 'suggested') toastr.info(status, 'Context Image Generation');
             else if (result?.status === 'pending-suppressed') toastr.info(status, 'Context Image Generation');
             else toastr.info(status, 'Context Image Generation');

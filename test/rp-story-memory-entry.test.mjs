@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { revealStoryMemoryEntry } from '../lib/rp/story-memory-entry.js';
+import { revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from '../lib/rp/story-memory-entry.js';
 
 function fixture({ hostVisible = false, contentVisible = false } = {}) {
     const calls = { hostToggle: 0, contentToggle: 0, tab: [], selected: [], focus: 0, scroll: 0 };
@@ -60,4 +60,42 @@ test('story memory entry preserves already-open drawers and is idempotent', () =
     assert.deepEqual(fixtureState.calls.tab, ['images-cast', 'images-cast']);
     assert.equal(fixtureState.calls.focus, 2);
     assert.equal(fixtureState.calls.scroll, 2);
+});
+
+test('story memory entry selects the exact artifact after a pending scoped load', async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    const selected = [];
+    const selecting = selectStoryMemoryEntryWhenReady({
+        loadPromise: pending,
+        isCurrent: () => true,
+        getTimeline: () => [{ id: 'story:12', messageId: 12, url: '/images/olivia.png' }],
+        messageId: 12,
+        mediaUrl: '/images/olivia.png',
+        selectArtifact: (id) => selected.push(id),
+    });
+    assert.deepEqual(selected, []);
+    release({ status: 'ready' });
+    assert.deepEqual(await selecting, { status: 'selected', artifactId: 'story:12' });
+    assert.deepEqual(selected, ['story:12']);
+});
+
+test('story memory entry refuses a pending artifact selection after chat switch', async () => {
+    let release;
+    const pending = new Promise((resolve) => { release = resolve; });
+    let current = true;
+    let selected = 0;
+    const selecting = selectStoryMemoryEntryWhenReady({
+        loadPromise: pending,
+        isCurrent: () => current,
+        getTimeline: () => [{ id: 'story:12', messageId: 12, url: '/images/olivia.png' }],
+        messageId: 12,
+        mediaUrl: '/images/olivia.png',
+        selectArtifact: () => { selected += 1; },
+    });
+    current = false;
+    release({ status: 'ready' });
+    const result = await selecting;
+    assert.equal(result.status, 'stale');
+    assert.equal(selected, 0);
 });
