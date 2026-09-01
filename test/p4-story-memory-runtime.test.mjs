@@ -77,6 +77,26 @@ test('runtime blocks stale mutation after chat switch and never invokes a provid
     assert.equal(typeof runtime.generate, 'undefined');
 });
 
+test('Gallery-only current-chat media remains ready across hydration, persistence, and readback', async () => {
+    const settings = {
+        [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
+        gallery: [{ id: 'gallery-only', url: '/images/gallery-only.png', chatId: 'chat-a', messageId: 7, prompt: 'A remembered station' }],
+    };
+    const runtime = createStoryMemoryRuntime({
+        extensionName,
+        settings,
+        getChat: () => [],
+        getChatId: () => 'chat-a',
+        saveSettings: async () => {},
+        fetchImpl: async () => ({ ok: true, async json() { return { extension_settings: { [extensionName]: settings } }; } }),
+    });
+    const controller = createStoryMemoryController(runtime);
+    const loaded = await controller.load({ chatId: 'chat-a' });
+    assert.equal(loaded.status, 'ready');
+    assert.deepEqual(loaded.timeline.map((entry) => entry.url), ['/images/gallery-only.png']);
+    assert.equal(loaded.memory.artifacts[loaded.timeline[0].id].sourceMoment, null);
+});
+
 test('mounted seam behavior searches, persists favorite/collection, and stages Continue without generation', async () => {
     const settings = { [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} }, gallery: [] };
     let providerCalls = 0;
@@ -121,6 +141,30 @@ test('real P2 scene state becomes bounded valid story facts on CIG media', () =>
     assert.ok(entries[0].facts.length > 0);
     assert.match(entries[0].facts[0].text, /Ava|station|key/u);
     assert.equal(JSON.stringify(entries[0].facts).includes('provider'), false);
+});
+
+test('P3 iteration output keeps scene facts on saved media and story hydration', () => {
+    const iterationOutput = {
+        imageData: 'provider-bytes-never-persisted',
+        __cigStoryMemoryFacts: buildStoryMemoryFactSnapshot({ sceneFacts: {
+            cast: [{ identityId: 'ava', label: 'Ava', confidence: 'high' }],
+            location: 'Quiet station',
+        } }),
+    };
+    const entries = collectStoryMemoryMedia({
+        chatId: 'chat-a',
+        extensionName,
+        chat: [{ extra: { media: [{
+            url: '/images/iteration.png',
+            cig_owner: extensionName,
+            cig_iteration_artifact: { artifactId: 'artifact:iteration', taskId: 'task-iteration' },
+            cig_story_memory_facts: iterationOutput.__cigStoryMemoryFacts,
+        }] } }],
+    });
+    assert.equal(entries.length, 1);
+    assert.ok(entries[0].facts.length > 0);
+    assert.match(entries[0].facts.map((fact) => fact.text).join(' '), /Ava|station/u);
+    assert.doesNotMatch(JSON.stringify(entries[0]), /provider-bytes-never-persisted/u);
 });
 
 test('stale persistence compensates a remote write after chat switches mid-save', async () => {

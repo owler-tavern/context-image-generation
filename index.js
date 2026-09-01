@@ -3020,7 +3020,13 @@ async function dispatchIterationPlan(plan, signal) {
         planId: plan.planId,
         invocationId: plan.invocationId,
         outputCount: 1,
-        artifacts: [{ ...plan.artifacts[0], imageData: generated.imageData }],
+        artifacts: [{
+            ...plan.artifacts[0],
+            imageData: generated.imageData,
+            ...(Array.isArray(generated.__cigStoryMemoryFacts) && generated.__cigStoryMemoryFacts.length
+                ? { __cigStoryMemoryFacts: cloneSnapshot(generated.__cigStoryMemoryFacts) }
+                : {}),
+        }],
         signal,
     };
 }

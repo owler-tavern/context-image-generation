@@ -15,6 +15,7 @@ test('production runtime stores the dispatched recipe and provenance on generate
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /createIterationArtifact\(/);
     assert.match(source, /__cigIterationArtifact/);
+    assert.match(source, /__cigStoryMemoryFacts/);
     assert.match(source, /iterationArtifact/);
 });
 
@@ -38,6 +39,7 @@ test('iteration dispatch reuses the outer coordinator signal instead of nesting 
     const dispatchEnd = source.indexOf('async function persistIterationCanonicalRoles');
     const dispatch = source.slice(dispatchStart, dispatchEnd);
     assert.match(dispatch, /generateImageFromPromptInternal\([\s\S]*,\s*null,\s*signal\)/);
+    assert.match(dispatch, /generated\.imageData[\s\S]*generated\.__cigStoryMemoryFacts/);
     assert.match(source, /const execution = coordinatorOverride\s*\?\s*coordinatorOverride\.enqueue/);
 });
 
