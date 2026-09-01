@@ -19,6 +19,9 @@ test('cinematic automation is mounted into real chat lifecycle hooks and uses st
     assert.match(index, /attachGeneratedImage\(message, element, prompt/);
     assert.match(index, /if \(result !== true\).*attachmentStatus: 'not-attached'/s);
     assert.match(index, /writeState: \(value, \{ chatId \} = \{\}\)/);
+    assert.match(index, /readDurableState: \(\{ chatId \} = \{\}\)/);
+    assert.match(index, /writeDurableState: \(value, \{ chatId \} = \{\}\)/);
+    assert.match(index, /saveDurableState: async \(\) => \{ await saveSettings\(\); \}/);
     assert.match(index, /cinematicRuntime\.approve/);
 });
 
@@ -27,6 +30,7 @@ test('settings expose explicit cinematic controls and honest cost fallback', () 
     assert.match(settings, /Suggestions never call a provider until you approve them/);
     assert.match(settings, /No currency is invented/);
     assert.match(index, /cinematic_automation/);
+    assert.match(index, /cinematic_automation_sessions/);
     assert.match(index, /cinematicRuntime\?\.retrigger/);
 });
 

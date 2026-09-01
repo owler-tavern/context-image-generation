@@ -102,6 +102,7 @@ const defaultSettings = {
     custom_connections: { schema: 1, connections: {}, models: {}, evidence: {}, modelEvidence: {}, confirmations: {} },
     custom_connection_keys: {},
     custom_connection_editor_id: '',
+    cinematic_automation_sessions: { schema: 1, chats: {} },
     aspect_ratio: '1:1',
     image_size: '',
     thinking_level: 'auto',
@@ -987,6 +988,17 @@ function createCinematicSurface() {
             chat_metadata[SCENE_STATE_METADATA_KEY] = value.storyState;
         },
         saveChat: () => saveChatConditional(),
+        readDurableState: ({ chatId } = {}) => settings.cinematic_automation_sessions?.chats?.[String(chatId)] || null,
+        writeDurableState: (value, { chatId } = {}) => {
+            if (!chatId) return;
+            const store = settings.cinematic_automation_sessions;
+            if (!store || typeof store !== 'object' || Array.isArray(store)) return;
+            store.chats = store.chats && typeof store.chats === 'object' && !Array.isArray(store.chats) ? store.chats : {};
+            store.chats[String(chatId)] = value;
+            const keys = Object.keys(store.chats);
+            for (const staleKey of keys.slice(0, Math.max(0, keys.length - 24))) delete store.chats[staleKey];
+        },
+        saveDurableState: async () => { await saveSettings(); },
         fingerprint: getMessageFingerprint,
         routeKey: () => {
             const currentSettings = extension_settings[extensionName] || {};
@@ -1083,6 +1095,13 @@ async function loadSettings() {
         if (!Number.isInteger(limit) || limit < 1) { cinematic.generationLimit = 5; settingsMigrated = true; } else cinematic.generationLimit = Math.min(limit, 100);
         const ceiling = Number(cinematic.costCeiling);
         if (cinematic.costCeiling !== null && (!Number.isFinite(ceiling) || ceiling < 0)) { cinematic.costCeiling = null; settingsMigrated = true; }
+    }
+    if (!cigSettings.cinematic_automation_sessions || typeof cigSettings.cinematic_automation_sessions !== 'object' || Array.isArray(cigSettings.cinematic_automation_sessions)) {
+        cigSettings.cinematic_automation_sessions = { ...defaultSettings.cinematic_automation_sessions, chats: {} };
+        settingsMigrated = true;
+    } else if (!cigSettings.cinematic_automation_sessions.chats || typeof cigSettings.cinematic_automation_sessions.chats !== 'object' || Array.isArray(cigSettings.cinematic_automation_sessions.chats)) {
+        cigSettings.cinematic_automation_sessions.chats = {};
+        settingsMigrated = true;
     }
     const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
     if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
