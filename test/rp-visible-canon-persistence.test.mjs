@@ -4,6 +4,7 @@ import {
     applyVisibleCanonPendingResult,
     createVisibleCanonPendingState,
     queueVisibleCanonPending,
+    reconcileVisibleCanonPendingLink,
     resumeVisibleCanonPending,
 } from '../lib/rp/visible-canon-persistence.js';
 
@@ -47,4 +48,31 @@ test('stale pending media replacement cannot overwrite a newer artifact target',
     const result = await resumeVisibleCanonPending(state, async (link) => ({ status: link.epoch === 2 ? 'confirmed' : 'indeterminate' }));
     assert.equal(result.state.pending[pendingLink.artifactId], undefined);
     assert.deepEqual(result.state.pending[newer.artifactId], newer);
+});
+
+test('pending reconciliation retries a failed full-chat save without trimming later messages, then verifies read-back', async () => {
+    const chat = [{ mes: 'image', extra: { media: [] } }, { mes: 'later message' }];
+    let persisted;
+    let attempts = 0;
+    const save = async () => {
+        attempts += 1;
+        if (attempts === 1) throw new Error('offline');
+        persisted = structuredClone(chat);
+    };
+    const verify = async () => ({ status: persisted?.length === 2 ? 'confirmed' : 'confirmed-absent' });
+    const first = await reconcileVisibleCanonPendingLink(pendingLink, { save, verify });
+    assert.equal(first.status, 'indeterminate');
+    const second = await reconcileVisibleCanonPendingLink(pendingLink, { save, verify });
+    assert.equal(second.status, 'confirmed');
+    assert.equal(persisted.length, 2);
+});
+
+test('pending reconciliation rejects a stale media target before or after save', async () => {
+    let saves = 0;
+    const stale = await reconcileVisibleCanonPendingLink(pendingLink, { isCurrent: () => false, save: async () => { saves++; }, verify: async () => ({ status: 'confirmed' }) });
+    assert.equal(stale.status, 'stale');
+    assert.equal(saves, 0);
+    let current = true;
+    const switched = await reconcileVisibleCanonPendingLink(pendingLink, { isCurrent: () => current, save: async () => { current = false; }, verify: async () => ({ status: 'confirmed' }) });
+    assert.equal(switched.status, 'stale');
 });

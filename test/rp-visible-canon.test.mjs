@@ -6,6 +6,7 @@ import {
     buildVisibleCanonActionPayload,
     buildVisibleCanonMediaArtifactId,
     createVisibleCanonActionController,
+    createVisibleCanonDomController,
     linkVisibleCanonMediaArtifact,
     linkVisibleCanonGalleryArtifact,
     projectVisibleCanon,
@@ -191,6 +192,18 @@ test('visible canon DOM action payload binds every state-changing action to disp
             messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:chosen',
         });
     }
+});
+
+test('visible canon DOM controller executes button activation and keyboard Enter/Space without provider dispatch', async () => {
+    const calls = [];
+    const controller = createVisibleCanonDomController({ dispatch: async (action, payload) => calls.push([action, payload]) });
+    const element = {
+        classList: { contains: (name) => name === 'cig_visible_canon_lock' },
+        dataset: { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' },
+    };
+    const keyEvent = { type: 'keydown', key: ' ', preventDefault() {}, stopPropagation() {} };
+    assert.equal(await controller.activate(element, keyEvent), true);
+    assert.deepEqual(calls, [['lock', { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' }]]);
 });
 
 test('visible canon action controller handles keyboard-equivalent actions without a provider dependency', async () => {

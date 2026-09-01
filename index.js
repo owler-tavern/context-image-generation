@@ -8,7 +8,6 @@
 import {
     saveSettingsDebounced,
     saveSettings,
-    saveChat,
     chat_metadata,
     getRequestHeaders,
     appendMediaToMessage,
@@ -73,8 +72,8 @@ import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebased
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
-import { buildVisibleCanonActionPayload, buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
-import { createVisibleCanonPendingState, queueVisibleCanonPending, resumeVisibleCanonPending } from './lib/rp/visible-canon-persistence.js';
+import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
+import { createVisibleCanonPendingState, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending } from './lib/rp/visible-canon-persistence.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -103,6 +102,7 @@ const defaultSettings = {
     message_depth: 1,
     system_instruction: 'You are an image generation assistant. When reference images are provided, they represent the characters in the story. Generate an illustration that depicts the scene described in the prompt while maintaining the art style and appearance of the reference characters. You are not obligated to include both characters - if the scene depicts only one character alone, illustrate them alone. When available, you can use the internet to search for reference pictures and information to improve the accuracy and quality of your generations.',
     gallery: [],
+    visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
 };
 
@@ -1703,14 +1703,27 @@ function visibleCanonPendingLink(captured, identityId, lookId) {
     };
 }
 
-function saveVisibleCanonChat(mediaTarget = null) {
-    const context = getContext();
-    return context.groupId ? context.saveMetadata() : saveChat({ mesId: mediaTarget?.messageId });
+function saveVisibleCanonChat() {
+    return saveChatConditional();
+}
+
+function scheduleVisibleCanonPendingSettingsRetry(link) {
+    setTimeout(async () => {
+        const settings = extension_settings[extensionName];
+        settings.visible_canon_pending = queueVisibleCanonPending(createVisibleCanonPendingState({ pending: settings.visible_canon_pending }), link).pending;
+        try { await saveSettings(); }
+        catch { scheduleVisibleCanonPendingSettingsRetry(link); }
+    }, 1500);
 }
 
 function scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint, mediaTarget = null }) {
     const retry = () => {
         void reconcilePendingOperation(operationId, async () => {
+            if (mediaTarget && visibleCanonCaptureIsCurrent(captured)) {
+                chat_metadata[CHAT_CANON_KEY] = candidate;
+                setVisibleCanonMediaLink(mediaTarget, { identityId, lookId: mediaTarget.lookId });
+                await saveVisibleCanonChat(mediaTarget);
+            }
             const bindingVerification = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
             const mediaVerification = mediaTarget
                 ? await verifyPersistedChatMediaLink({ target: { ...target, ...mediaTarget }, fetchImpl: fetch, getHeaders: getRequestHeaders })
@@ -1818,21 +1831,28 @@ function scheduleLibraryPromotionReconciliation(operationId, _expectedRevision) 
 
 async function resumePendingVisibleCanonLinks() {
     const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    const pendingState = createVisibleCanonPendingState(canon.visibleCanonPending);
+    const settings = extension_settings[extensionName];
+    const pendingState = createVisibleCanonPendingState({ pending: { ...(settings.visible_canon_pending || {}), ...(canon.visibleCanonPending || {}) } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
-        if (getContext().chatId !== link.chatId || !currentVisibleCanonMedia(link)) return { status: 'confirmed' };
-        setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
-        await saveVisibleCanonChat(link);
-        return verifyPersistedChatMediaLink({
-            target: capturedChatTarget(link.identityId, canon.revision, link.lookId, link),
-            fetchImpl: fetch,
-            getHeaders: getRequestHeaders,
+        if (!currentVisibleCanonMedia(link)) return { status: 'confirmed' };
+        return reconcileVisibleCanonPendingLink(link, {
+            save: async () => {
+                setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
+                await saveVisibleCanonChat(link);
+            },
+            verify: () => verifyPersistedChatMediaLink({
+                target: capturedChatTarget(link.identityId, canon.revision, link.lookId, link),
+                fetchImpl: fetch,
+                getHeaders: getRequestHeaders,
+            }),
         });
-    });
+    }, { isCurrent: (link) => getContext().chatId === link.chatId });
     if (JSON.stringify(resumed.state.pending) !== JSON.stringify(pendingState.pending)) {
         chat_metadata[CHAT_CANON_KEY] = { ...canon, visibleCanonPending: resumed.state.pending };
-        await getContext().saveMetadata();
+        settings.visible_canon_pending = resumed.state.pending;
+        await saveVisibleCanonChat();
+        await saveSettings();
     }
     return resumed;
 }
@@ -1844,8 +1864,13 @@ async function persistChatCanonChange({ captured, candidate, identityId, activeL
     const linkedLookId = mediaTarget?.lookId || activeLookId;
     const pendingLink = visibleCanonPendingLink(captured, identityId, linkedLookId);
     const candidateWithPending = pendingLink
-        ? { ...candidate, visibleCanonPending: queueVisibleCanonPending(createVisibleCanonPendingState(candidate.visibleCanonPending), pendingLink).pending }
+        ? { ...candidate, visibleCanonPending: queueVisibleCanonPending(createVisibleCanonPendingState({ pending: candidate.visibleCanonPending }), pendingLink).pending }
         : candidate;
+    if (pendingLink) {
+        const settings = extension_settings[extensionName];
+        settings.visible_canon_pending = queueVisibleCanonPending(createVisibleCanonPendingState({ pending: settings.visible_canon_pending }), pendingLink).pending;
+        try { await saveSettings(); } catch { scheduleVisibleCanonPendingSettingsRetry(pendingLink); }
+    }
     const previousState = () => ({ canon: chat_metadata[CHAT_CANON_KEY], mediaLink: mediaTarget ? visibleCanonMediaLinkSnapshot(mediaTarget) : null });
     return persistVerifiedChatMutation({
         captured,
@@ -1867,6 +1892,7 @@ async function persistChatCanonChange({ captured, candidate, identityId, activeL
             return { status: bindingVerification.status === 'indeterminate' || mediaVerification.status === 'indeterminate' ? 'indeterminate' : 'confirmed-absent', bindingVerification, mediaVerification };
         },
         scheduleReconcile: () => scheduleChatCanonReconciliation({ operationId, captured, target, candidate: candidateWithPending, identityId, expectedCurrentFingerprint, mediaTarget: pendingLink || mediaTarget }),
+        preservePendingState: Boolean(pendingLink),
     });
 }
 
@@ -2775,6 +2801,10 @@ function visibleCanonActionController() {
     });
 }
 
+function visibleCanonDomController() {
+    return createVisibleCanonDomController({ dispatch: (action, payload) => visibleCanonActionController().run(action, payload) });
+}
+
 jQuery(async () => {
     console.log(`[${extensionName}] Initializing extension...`);
 
@@ -3062,7 +3092,7 @@ jQuery(async () => {
     $(document).on('click', '.cig_visible_canon_remember', async function (e) {
         e.stopPropagation();
         try {
-            await visibleCanonActionController().run('remember', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'remember' }));
+            await visibleCanonDomController().activate(this, e);
         } catch (error) {
             showGenerationError(error, 'Remember character look');
         }
@@ -3072,17 +3102,20 @@ jQuery(async () => {
         e.stopPropagation();
         const root = $(this).closest('.cig_visible_canon');
         const lookId = root.find('.cig_visible_canon_select').val();
-        if (lookId) await visibleCanonActionController().run('change', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'change', lookId }));
+        if (lookId) {
+            this.dataset.lookId = lookId;
+            await visibleCanonDomController().activate(this, e);
+        }
     });
 
     $(document).on('click', '.cig_visible_canon_lock', async function (e) {
         e.stopPropagation();
-        await visibleCanonActionController().run('lock', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'lock' }));
+        await visibleCanonDomController().activate(this, e);
     });
 
     $(document).on('click', '.cig_visible_canon_stop', async function (e) {
         e.stopPropagation();
-        await visibleCanonActionController().run('stop', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'stop' }));
+        await visibleCanonDomController().activate(this, e);
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {
