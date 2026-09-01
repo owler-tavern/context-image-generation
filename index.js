@@ -68,7 +68,7 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedIterationArtifact, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
@@ -79,6 +79,8 @@ import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitP
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
 import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
 import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
+import { createIterationArtifact } from './lib/rp/iteration-domain.js';
+import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { saveGroupChat } from '../../../group-chats.js';
 
 const extensionName = 'context-image-generation';
@@ -124,6 +126,8 @@ let currentGenerationRunId = null;
 let lastGenerationPlanInspection = null;
 let setupRuntimeIssue = null;
 const activeImageBoundaryGenerations = new Set();
+const iterationSurfaceMounts = new Map();
+const iterationInvocations = new Set();
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1432,16 +1436,28 @@ function getGenerationKey(prompt, messageId, target = null) {
     });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null) {
-    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize);
+async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null) {
+    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe);
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null) {
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null) {
     let snapshot;
     try {
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
         snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
+        if (iterationRecipe && typeof iterationRecipe === 'object') {
+            snapshot = {
+                ...snapshot,
+                planInput: {
+                    ...snapshot.planInput,
+                    prompt: { ...snapshot.planInput.prompt, sourceMessage: iterationRecipe.sourcePassage?.text || snapshot.planInput.prompt.sourceMessage, messageContent: iterationRecipe.effectivePrompt || snapshot.planInput.prompt.messageContent },
+                    references: cloneSnapshot(iterationRecipe.references || snapshot.planInput.references),
+                    canonSnapshot: cloneSnapshot(iterationRecipe.canonSnapshot || snapshot.planInput.canonSnapshot),
+                    options: { ...snapshot.planInput.options, ...cloneSnapshot(iterationRecipe.options || {}) },
+                },
+            };
+        }
         notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         const assets = await materializeSnapshotAssets(snapshot);
         const capturedBaseReferences = [
@@ -1454,6 +1470,29 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
         const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions, messages });
+        const capturedIterationPlan = {
+            planId: dispatchedPlan.id,
+            revision: dispatchedPlan.resolved.routeEvidence?.revision || `${dispatchedPlan.resolved.providerId}:${dispatchedPlan.resolved.modelId}:${dispatchedPlan.resolved.transportId}`,
+            routeResolved: true,
+            routeConfirmationAccepted: dispatchedPlan.policy.routeConfirmationAccepted === true,
+            capabilities: cloneSnapshot(dispatchedPlan.resolved.capabilities || {}),
+            generationPlan: cloneSnapshot(dispatchedPlan),
+        };
+        const capturedIterationArtifact = {
+            ...createIterationArtifact({
+                artifactId: `artifact:${dispatchedPlan.id}`,
+                sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId },
+                effectivePrompt: dispatchedPlan.prompt.messageContent || dispatchedPlan.prompt.sourceMessage,
+                references: dispatchedPlan.references,
+                model: dispatchedPlan.resolved,
+                route: dispatchedPlan.resolved,
+                options: dispatchedPlan.options,
+                canonSnapshot: dispatchedPlan.canonSnapshot,
+            }),
+            generationPlan: capturedIterationPlan,
+            target: cloneSnapshot(target),
+            sender: sender || '',
+        };
         const continuitySurface = cloneSnapshot({
             schema: 1,
             invocation,
@@ -1526,7 +1565,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state) }
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state), __cigIterationArtifact: capturedIterationArtifact }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -2689,6 +2728,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 cig_owner: extensionName,
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
                 ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
+                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: cloneSnapshot(result.__cigIterationArtifact) } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
@@ -2766,6 +2806,191 @@ function activeMediaForMessage(message) {
     return { media, index, item: media[index] };
 }
 
+function iterationSourceArtifact(message, activeMedia) {
+    const item = activeMedia?.item || {};
+    if (item.cig_iteration_artifact?.artifactId) return cloneSnapshot(item.cig_iteration_artifact);
+    const legacy = createIterationArtifact({
+        artifactId: `artifact:legacy:${activeMedia?.index ?? 0}`,
+        sourcePassage: { text: item.title || '' },
+        effectivePrompt: item.title || '',
+        references: [], model: {}, route: {}, options: {}, canonSnapshot: {},
+    });
+    return { ...legacy, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: visibleCanonMessageSender(message) };
+}
+
+function iterationGenerationPlan(sourceArtifact) {
+    return sourceArtifact?.generationPlan || null;
+}
+
+function iterationArtifactForStorage(artifact, plan) {
+    const stored = cloneSnapshot(artifact) || {};
+    delete stored.imageData;
+    delete stored.b64;
+    delete stored.url;
+    return stored;
+}
+
+async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
+    const target = originalArtifact?.target || artifact?.target;
+    const currentContext = getContext();
+    const messageId = Number(target?.messageId);
+    const message = currentContext.chat?.[messageId];
+    if (!target?.chatId || !Number.isInteger(messageId) || !message || currentContext.chatId !== target.chatId || !artifact?.imageData) return { status: 'confirmed-absent' };
+    const messageElement = $(`.mes[mesid="${messageId}"]`);
+    if (!messageElement.length) return { status: 'confirmed-absent' };
+    const filePath = await saveBase64AsFile(artifact.imageData, extensionName, `cig_iteration_${Date.now()}`, 'png');
+    const previousExtra = cloneSnapshot(message.extra);
+    if (!message.extra || typeof message.extra !== 'object') message.extra = {};
+    if (!Array.isArray(message.extra.media)) message.extra.media = [];
+    message.extra.media.push({
+        url: filePath,
+        type: MEDIA_TYPE.IMAGE,
+        title: String(artifact.effectivePrompt || '').slice(0, 100),
+        source: MEDIA_SOURCE.GENERATED,
+        cig_owner: extensionName,
+        cig_iteration_artifact: iterationArtifactForStorage(artifact, plan),
+        cig_iteration_persistence: { planId: plan.planId, invocationId: plan.invocationId },
+    });
+    message.extra.media_index = message.extra.media.length - 1;
+    message.extra.inline_image = true;
+    appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
+    const captured = { chatId: target.chatId, epoch: chatLifecycleEpoch.capture() };
+    const saved = await saveChatForCapturedTarget(captured, target);
+    if (!saved?.saved) {
+        message.extra = previousExtra;
+        appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
+        return saved;
+    }
+    await addToGallery(artifact.imageData, artifact.effectivePrompt || '', messageId, filePath, {
+        iterationArtifact: iterationArtifactForStorage(artifact, plan),
+        source: 'iteration', chatId: target.chatId, messageId,
+    });
+    renderIterationActionSurface(messageElement, message);
+    return { status: 'confirmed', artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId };
+}
+
+function iterationDispatchCoordinator(sourceArtifact) {
+    return {
+        enqueue(iterationPlan, execute) {
+            const base = iterationGenerationPlan(sourceArtifact)?.generationPlan || {};
+            const coordinatorPlan = {
+                ...cloneSnapshot(base),
+                id: `iteration:${iterationPlan.planId}`,
+                idempotencyKey: `iteration:${iterationPlan.planId}`,
+                target: cloneSnapshot(sourceArtifact.target),
+            };
+            return generationCoordinator.enqueue(coordinatorPlan, execute);
+        },
+    };
+}
+
+async function dispatchIterationPlan(plan, signal) {
+    const source = plan.sourceArtifact;
+    const artifact = plan.artifacts?.[0] || source;
+    const target = source.target;
+    const sourceMessage = artifact.effectivePrompt || artifact.sourcePassage?.text;
+    const generated = await generateImageFromPromptInternal(sourceMessage, source.sender || null, target?.messageId ?? null, null, target, 'wand', null, artifact);
+    if (!generated?.imageData) throw new Error('Iteration generation returned no image.');
+    return {
+        status: 'completed',
+        planId: plan.planId,
+        invocationId: plan.invocationId,
+        outputCount: plan.artifacts.length,
+        artifacts: plan.artifacts.map((artifact) => ({ ...artifact, imageData: generated.imageData })),
+        signal,
+    };
+}
+
+async function persistIterationCanonicalRoles({ sourceArtifact, mutation }) {
+    const roles = mutation?.roles || {};
+    const identityId = roles.activeLook?.identityId || sourceArtifact.canonSnapshot?.activeLook?.identityId || getStableSpeakerIdentityId(sourceArtifact.sender);
+    const current = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+    let candidate = { ...current, iterationRoles: { ...(current.iterationRoles || {}), ...cloneSnapshot(roles) }, revision: `chat-canon:${crypto.randomUUID()}` };
+    let activeLookId = current.bindings?.[identityId]?.activeLookId || null;
+    if (roles.activeLook?.lookId) {
+        const look = migrateAppearanceLibrary(extension_settings[extensionName].rp_library).identities?.[identityId]?.looks?.find((entry) => entry.id === roles.activeLook.lookId);
+        const materialized = materializeAppearanceAssets(extension_settings[extensionName].rp_library, extension_settings[extensionName].gallery || []);
+        if (!look || !materialized.assets[look.assetId]) throw new Error('The selected canonical look is unavailable.');
+        candidate = setChatBinding(candidate, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), isLocked: current.bindings?.[identityId]?.isLocked === true });
+        activeLookId = look.id;
+    }
+    return persistChatCanonChange({
+        captured: { chatId: sourceArtifact.target?.chatId, epoch: chatLifecycleEpoch.capture() },
+        candidate,
+        identityId,
+        activeLookId,
+        mediaTarget: null,
+    });
+}
+
+async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation }) {
+    const identityId = mutation?.roles?.activeLook?.identityId || sourceArtifact.canonSnapshot?.activeLook?.identityId || getStableSpeakerIdentityId(sourceArtifact.sender);
+    const result = await verifyPersistedChatBinding({
+        target: { chatId: sourceArtifact.target?.chatId, identityId, activeLookId: mutation?.roles?.activeLook?.lookId || undefined, expectedRevision: chat_metadata[CHAT_CANON_KEY]?.revision },
+        fetchImpl: fetch,
+        getHeaders: getRequestHeaders,
+    });
+    return { status: result.status, mutation: cloneSnapshot(mutation), planId: plan.planId, invocationId: plan.invocationId };
+}
+
+function renderIterationActionSurface(messageElement, messageOverride = null) {
+    if (!messageElement?.length) return;
+    const messageId = Number(messageElement.attr('mesid'));
+    const message = messageOverride || getContext().chat?.[messageId];
+    const activeMedia = activeMediaForMessage(message);
+    const key = `${getContext().chatId || 'unknown-chat'}:${messageId}`;
+    const previous = iterationSurfaceMounts.get(key);
+    previous?.destroy?.();
+    iterationSurfaceMounts.delete(key);
+    messageElement.find('.cig_iteration_entry').remove();
+    if (!activeMedia || !isCigOwnedMedia(activeMedia.item)) return;
+    const root = $('<section class="cig_iteration_entry" aria-label="Improve generated image"></section>');
+    const button = $('<button type="button" class="menu_button cig_iteration_improve" data-cig-iteration-open="true" data-cig-iteration-improve="true" style="min-height:44px"></button>')
+        .text('Improve')
+        .attr({ title: 'Improve this generated image', 'aria-label': 'Improve this generated image', 'data-message-id': String(messageId) });
+    const host = $('<div class="cig_iteration_host" data-cig-iteration-host hidden></div>');
+    root.append(button, host);
+    const anchor = messageElement.find('.mes_img_container, .mes_media_container').last();
+    if (anchor.length) anchor.after(root); else messageElement.append(root);
+    button.on('click', () => {
+        host.prop('hidden', false);
+        if (iterationSurfaceMounts.has(key)) return;
+        const sourceArtifact = iterationSourceArtifact(message, activeMedia);
+        const generationPlan = iterationGenerationPlan(sourceArtifact);
+        const hasSingleQuote = Number.isFinite(generationPlan?.singleOutputQuote?.amount);
+        const controller = createIterationSurfaceController({
+            sourceArtifact,
+            generationPlan,
+            twoUpAvailable: Boolean(generationPlan?.twoUpQuote?.amount),
+            reserveInvocation: (invocationId) => { if (iterationInvocations.has(invocationId)) return false; iterationInvocations.add(invocationId); return true; },
+            verifyGenerationPlan: (candidate) => candidate.planId === generationPlan?.planId && candidate.revision === generationPlan?.revision && generationPlan?.routeConfirmationAccepted === true
+                ? { status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: generationPlan.planId, routeResolved: true, capabilities: generationPlan.capabilities || {} } : { status: 'unverified' },
+            estimateCost: async ({ outputCount }) => outputCount === 1 && hasSingleQuote ? { ...generationPlan.singleOutputQuote, outputCount } : { finite: false, error: outputCount === 2 ? 'Two-up is unavailable because this provider has no exact finite cost estimator.' : 'Improve is unavailable until this provider supplies an exact finite cost quote.' },
+            dispatchCoordinator: iterationDispatchCoordinator(sourceArtifact),
+            dispatchExecutor: dispatchIterationPlan,
+            persistArtifact: persistIterationArtifact,
+            readbackArtifact: ({ artifact, plan }) => verifyPersistedIterationArtifact({ target: sourceArtifact.target, artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            readbackOriginalArtifact: async ({ originalArtifact, plan }) => {
+                const result = await verifyPersistedIterationArtifact({ target: sourceArtifact.target, artifactId: originalArtifact.artifactId, fetchImpl: fetch, getHeaders: getRequestHeaders });
+                return { ...result, planId: plan.planId, invocationId: plan.invocationId };
+            },
+            verifyCanonicalEligibility: ({ artifactId }) => ({ status: artifactId === sourceArtifact.artifactId ? 'eligible' : 'ineligible', artifactId, authorityToken: 'captured-artifact' }),
+            mutateCanonical: ({ mutation }) => persistIterationCanonicalRoles({ sourceArtifact, mutation }),
+            readbackCanonical: ({ plan, mutation }) => verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation }),
+            discardArtifact: async ({ artifactId, plan }) => ({ status: 'confirmed', artifactId, planId: plan.planId, invocationId: plan.invocationId }),
+        });
+        iterationSurfaceMounts.set(key, { controller, destroy: () => mount?.destroy?.() });
+        const mount = mountIterationSurface(host[0], controller);
+        iterationSurfaceMounts.set(key, { controller, destroy: mount.destroy });
+    });
+    installIterationSurfaceStyles(document);
+}
+
+function destroyIterationSurfaceMounts() {
+    for (const mount of iterationSurfaceMounts.values()) mount?.destroy?.();
+    iterationSurfaceMounts.clear();
+}
+
 function imageNavigationContext(messageElement) {
     const messageId = Number(messageElement?.attr('mesid'));
     const context = getContext();
@@ -2786,6 +3011,7 @@ function cigImageArrows(messageElement) {
 function configureCigImageArrows(messageElement) {
     if (!imageNavigationContext(messageElement)) return;
     renderVisibleCanonControls(messageElement);
+    renderIterationActionSurface(messageElement);
     messageElement.find('.mes_img_swipe_left')
         .attr({ tabindex: '0', role: 'button', title: 'Previous image', 'aria-label': 'Previous image' })
         .addClass('cig_image_navigation');
@@ -3755,6 +3981,7 @@ jQuery(async () => {
         const messageElement = $(`.mes[mesid="${messageId}"]`);
         renderContinuityShelf(messageElement);
         renderSceneInspection(messageElement);
+        renderIterationActionSurface(messageElement);
         scheduleImageArrowConfiguration({
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
@@ -3762,10 +3989,12 @@ jQuery(async () => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        destroyIterationSurfaceMounts();
         setTimeout(() => {
             injectAllMessageButtons();
             renderContinuityShelves();
             $('.mes').each(function () { renderSceneInspection($(this)); });
+            $('.mes').each(function () { renderIterationActionSurface($(this)); });
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
             void resumePendingOutfitState();
@@ -3784,13 +4013,15 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); }); }, 100);
+        destroyIterationSurfaceMounts();
+        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {
         injectAllMessageButtons();
         renderContinuityShelves();
         $('.mes').each(function () { renderSceneInspection($(this)); });
+        $('.mes').each(function () { renderIterationActionSurface($(this)); });
         configureAllCigImageArrows();
     }, 500);
 
