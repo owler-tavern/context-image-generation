@@ -79,7 +79,7 @@ import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitP
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
 import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
 import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
-import { createIterationArtifact } from './lib/rp/iteration-domain.js';
+import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { saveGroupChat } from '../../../group-chats.js';
 
@@ -1440,6 +1440,24 @@ async function generateImageFromPrompt(prompt, sender = null, messageId = null, 
     return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe);
 }
 
+function assertExactIterationRoute(snapshot, recipe) {
+    const savedRoute = recipe?.route || {};
+    const savedModel = recipe?.model || {};
+    const current = snapshot?.planInput?.resolved || {};
+      const expected = {
+          providerId: savedRoute.providerId || savedModel.providerId,
+          modelId: savedRoute.modelId || savedModel.modelId,
+          transportId: savedRoute.transportId || savedRoute.transport || savedModel.transportId,
+          connectionId: savedRoute.connectionId || savedModel.connectionId,
+      };
+      if (savedRoute.endpointClass || savedModel.endpointClass) expected.endpointClass = savedRoute.endpointClass || savedModel.endpointClass;
+    if (!expected.providerId || !expected.modelId || !expected.transportId || !expected.connectionId) throw new Error('Saved recipe route is incomplete; reopen the original image to capture a fresh route.');
+    for (const key of Object.keys(expected)) {
+        if (String(current[key] || '') !== String(expected[key])) throw new Error('Saved recipe route is no longer executable; choose the current settings to generate a new image.');
+    }
+    if (snapshot.planInput.policy?.routeConfirmationAccepted !== true) throw new Error('Saved recipe route is no longer executable because route confirmation is stale.');
+}
+
 async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, coordinatorOverride = generationCoordinator, executionSignal = null) {
     let snapshot;
     try {
@@ -1447,16 +1465,31 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
         snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
         if (iterationRecipe && typeof iterationRecipe === 'object') {
+            assertExactIterationRoute(snapshot, iterationRecipe);
+            const savedReferences = Array.isArray(iterationRecipe.references) ? cloneSnapshot(iterationRecipe.references) : [];
+            const savedCanon = cloneSnapshot(iterationRecipe.canonSnapshot || {}) || {};
             snapshot = {
                 ...snapshot,
+                referenceAssets: {
+                    ...(snapshot.referenceAssets || {}),
+                    ...(savedCanon.assets || {}),
+                    ...Object.fromEntries(Object.entries(materializeAppearanceAssets(extension_settings[extensionName].rp_library, extension_settings[extensionName].gallery || []).assets || {})
+                        .filter(([assetId]) => savedReferences.some((reference) => String(reference?.assetId || '') === assetId))),
+                },
+                referenceCandidates: savedReferences,
                 planInput: {
                     ...snapshot.planInput,
+                    provider: { ...snapshot.planInput.provider, providerId: iterationRecipe.model?.providerId, modelId: iterationRecipe.model?.modelId, transport: iterationRecipe.model?.transportId },
+                    resolved: { ...snapshot.planInput.resolved, ...cloneSnapshot(iterationRecipe.route), modelId: iterationRecipe.model?.modelId || snapshot.planInput.resolved.modelId },
                     prompt: { ...snapshot.planInput.prompt, sourceMessage: iterationRecipe.sourcePassage?.text || snapshot.planInput.prompt.sourceMessage, messageContent: iterationRecipe.effectivePrompt || snapshot.planInput.prompt.messageContent },
-                    references: cloneSnapshot(iterationRecipe.references || snapshot.planInput.references),
-                    canonSnapshot: cloneSnapshot(iterationRecipe.canonSnapshot || snapshot.planInput.canonSnapshot),
-                    options: { ...snapshot.planInput.options, ...cloneSnapshot(iterationRecipe.options || {}) },
+                    references: savedReferences,
+                    canonSnapshot: { ...savedCanon, references: [] },
+                    referencePlan: { selected: savedReferences, omitted: [] },
+                    options: cloneSnapshot(iterationRecipe.options || {}),
                 },
             };
+            const missingSavedReference = savedReferences.find((reference) => reference?.assetId && !snapshot.referenceAssets?.[reference.assetId]);
+            if (missingSavedReference) throw new Error(`Saved recipe reference ${missingSavedReference.id || missingSavedReference.assetId} is unavailable; generation is blocked.`);
         }
         notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         const assets = await materializeSnapshotAssets(snapshot);
@@ -2811,34 +2844,22 @@ function activeMediaForMessage(message) {
 
 function iterationSourceArtifact(message, activeMedia) {
     const item = activeMedia?.item || {};
-    if (item.cig_iteration_artifact?.artifactId) return cloneSnapshot(item.cig_iteration_artifact);
+    if (item.cig_iteration_artifact?.artifactId) return { ...cloneSnapshot(item.cig_iteration_artifact), mediaUrl: item.url || null };
     const legacy = createIterationArtifact({
         artifactId: `artifact:legacy:${activeMedia?.index ?? 0}`,
         sourcePassage: { text: item.title || '' },
         effectivePrompt: item.title || '',
         references: [], model: {}, route: {}, options: {}, canonSnapshot: {},
     });
-    return { ...legacy, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: visibleCanonMessageSender(message) };
+    return { ...legacy, mediaUrl: item.url || null, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: visibleCanonMessageSender(message) };
 }
 
 function iterationGenerationPlan(sourceArtifact) {
     return sourceArtifact?.generationPlan || null;
 }
 
-function hasFiniteIterationQuote(value) {
-    if (!value || typeof value !== 'object' || typeof value.quoteId !== 'string' || !value.quoteId.trim()
-        || typeof value.currency !== 'string' || !value.currency.trim()
-        || typeof value.amount !== 'number' || !Number.isFinite(value.amount) || value.amount < 0) return false;
-    const expiresAt = typeof value.expiresAt === 'number' ? value.expiresAt : Date.parse(String(value.expiresAt || ''));
-    return Number.isFinite(expiresAt) && expiresAt > Date.now();
-}
-
 function iterationArtifactForStorage(artifact, plan) {
-    const stored = cloneSnapshot(artifact) || {};
-    delete stored.imageData;
-    delete stored.b64;
-    delete stored.url;
-    return stored;
+    return sanitizeIterationArtifactForStorage({ ...artifact, generationPlan: plan?.generationPlan || artifact?.generationPlan });
 }
 
 async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
@@ -2883,7 +2904,8 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
 function iterationDispatchCoordinator(sourceArtifact) {
     return {
         enqueue(iterationPlan, execute) {
-            const base = iterationGenerationPlan(sourceArtifact)?.generationPlan || {};
+            const captured = iterationGenerationPlan(sourceArtifact) || {};
+            const base = captured.generationPlan || captured;
             const coordinatorPlan = {
                 ...cloneSnapshot(base),
                 id: `iteration:${iterationPlan.planId}`,
@@ -2906,42 +2928,62 @@ async function dispatchIterationPlan(plan, signal) {
         status: 'completed',
         planId: plan.planId,
         invocationId: plan.invocationId,
-        outputCount: plan.artifacts.length,
-        artifacts: plan.artifacts.map((artifact) => ({ ...artifact, imageData: generated.imageData })),
+        outputCount: 1,
+        artifacts: [{ ...plan.artifacts[0], imageData: generated.imageData }],
         signal,
     };
 }
 
 async function persistIterationCanonicalRoles({ sourceArtifact, mutation }) {
     const roles = mutation?.roles || {};
-    const identityId = roles.activeLook?.identityId || sourceArtifact.canonSnapshot?.activeLook?.identityId || getStableSpeakerIdentityId(sourceArtifact.sender);
-    const current = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    let candidate = { ...current, iterationRoles: { ...(current.iterationRoles || {}), ...cloneSnapshot(roles) }, revision: `chat-canon:${crypto.randomUUID()}` };
-    let activeLookId = current.bindings?.[identityId]?.activeLookId || null;
-    if (roles.activeLook?.lookId) {
-        const look = migrateAppearanceLibrary(extension_settings[extensionName].rp_library).identities?.[identityId]?.looks?.find((entry) => entry.id === roles.activeLook.lookId);
-        const materialized = materializeAppearanceAssets(extension_settings[extensionName].rp_library, extension_settings[extensionName].gallery || []);
-        if (!look || !materialized.assets[look.assetId]) throw new Error('The selected canonical look is unavailable.');
-        candidate = setChatBinding(candidate, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), isLocked: current.bindings?.[identityId]?.isLocked === true });
-        activeLookId = look.id;
-    }
-    return persistChatCanonChange({
-        captured: { chatId: sourceArtifact.target?.chatId, epoch: chatLifecycleEpoch.capture() },
-        candidate,
-        identityId,
-        activeLookId,
-        mediaTarget: null,
+    if (Object.keys(roles).some((role) => role !== 'activeLook') || !roles.activeLook?.identityId) throw new Error('Only the active character look can be promoted from an iteration image.');
+    if (!sourceArtifact.mediaUrl) throw new Error('The current image cannot be read for canonical promotion.');
+    const identity = getAppearanceIdentityChoices().find((entry) => entry.id === roles.activeLook.identityId);
+    if (!identity) throw new Error('The selected canonical identity is unavailable.');
+    const captured = { chatId: sourceArtifact.target?.chatId, epoch: chatLifecycleEpoch.capture() };
+    const item = { id: sourceArtifact.artifactId, url: sourceArtifact.mediaUrl, prompt: sourceArtifact.effectivePrompt || 'Saved appearance' };
+    const activation = await runRememberAppearance({
+        captured, identity, label: 'Canonical look', item,
+        io: {
+            isCurrent: visibleCanonCaptureIsCurrent,
+            runExclusive: (operation) => enqueueLibraryMutation(operation),
+            readLibrary: async () => {
+                const authoritative = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
+                if (authoritative.status === 'confirmed') extension_settings[extensionName].rp_library = migrateAppearanceLibrary(authoritative.library);
+                return authoritative;
+            },
+            readDataUrl: async (galleryItem) => {
+                const response = await fetch(galleryItem.url);
+                if (!response.ok) throw new Error('The current image could not be read.');
+                const blob = await response.blob();
+                return getBase64Async(blob);
+            },
+            saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
+            saveLibrary: async (library) => { extension_settings[extensionName].rp_library = library; await saveSettings(); },
+            verifyLibrary: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            deleteAppearanceFile: (url) => deleteAppearanceAssetFile(url, fetch, getRequestHeaders),
+            persistOrphanCleanup: ({ library, url }) => persistOrphanCleanupRetry(library, url),
+            setLocalLibrary: (library) => { extension_settings[extensionName].rp_library = library; },
+            scheduleLibraryReconciliation: ({ operationId, revision }) => scheduleLibraryPromotionReconciliation(operationId, revision),
+            getChatCanon: () => chat_metadata[CHAT_CANON_KEY],
+            persistChat: ({ candidate, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId }),
+            uuid: () => crypto.randomUUID(),
+            now: () => Date.now(),
+        },
     });
+    if (activation.status !== 'confirmed') throw new Error(activation.message || 'Canonical look promotion was not confirmed.');
+    return { status: 'confirmed', lookId: activation.promoted?.look?.id || null, identityId: identity.id, activation };
 }
 
-async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation }) {
-    const identityId = mutation?.roles?.activeLook?.identityId || sourceArtifact.canonSnapshot?.activeLook?.identityId || getStableSpeakerIdentityId(sourceArtifact.sender);
+async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, persisted }) {
+    const identityId = mutation?.roles?.activeLook?.identityId;
+    if (!identityId || !persisted?.lookId) return { status: 'confirmed-absent', mutation: cloneSnapshot(mutation), planId: plan.planId, invocationId: plan.invocationId };
     const result = await verifyPersistedChatBinding({
-        target: { chatId: sourceArtifact.target?.chatId, identityId, activeLookId: mutation?.roles?.activeLook?.lookId || undefined, expectedRevision: chat_metadata[CHAT_CANON_KEY]?.revision },
+        target: { chatId: sourceArtifact.target?.chatId, identityId, activeLookId: persisted.lookId, expectedRevision: chat_metadata[CHAT_CANON_KEY]?.revision },
         fetchImpl: fetch,
         getHeaders: getRequestHeaders,
     });
-    return { status: result.status, mutation: cloneSnapshot(mutation), planId: plan.planId, invocationId: plan.invocationId };
+    return { status: result.status, mutation: cloneSnapshot(mutation), role: 'activeLook', identityId, lookId: persisted.lookId, planId: plan.planId, invocationId: plan.invocationId };
 }
 
 function renderIterationActionSurface(messageElement, messageOverride = null) {
@@ -2968,15 +3010,15 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
         if (iterationSurfaceMounts.has(key)) return;
         const sourceArtifact = iterationSourceArtifact(message, activeMedia);
         const generationPlan = iterationGenerationPlan(sourceArtifact);
-        const hasSingleQuote = hasFiniteIterationQuote(generationPlan?.singleOutputQuote);
         const controller = createIterationSurfaceController({
             sourceArtifact,
             generationPlan,
-            twoUpAvailable: hasFiniteIterationQuote(generationPlan?.twoUpQuote),
+            twoUpAvailable: false,
+            allowUnquotedSingle: true,
+            supportedCanonicalRoles: ['activeLook'],
             reserveInvocation: (invocationId) => { if (iterationInvocations.has(invocationId)) return false; iterationInvocations.add(invocationId); return true; },
             verifyGenerationPlan: (candidate) => candidate.planId === generationPlan?.planId && candidate.revision === generationPlan?.revision && generationPlan?.routeConfirmationAccepted === true
                 ? { status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: generationPlan.planId, routeResolved: true, capabilities: generationPlan.capabilities || {} } : { status: 'unverified' },
-            estimateCost: async ({ outputCount }) => outputCount === 1 && hasSingleQuote ? { ...generationPlan.singleOutputQuote, outputCount } : { finite: false, error: outputCount === 2 ? 'Two-up is unavailable because this provider has no exact finite cost estimator.' : 'Improve is unavailable until this provider supplies an exact finite cost quote.' },
             dispatchCoordinator: iterationDispatchCoordinator(sourceArtifact),
             dispatchExecutor: dispatchIterationPlan,
             persistArtifact: persistIterationArtifact,
@@ -2985,10 +3027,9 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
                 const result = await verifyPersistedIterationArtifact({ target: sourceArtifact.target, artifactId: originalArtifact.artifactId, fetchImpl: fetch, getHeaders: getRequestHeaders });
                 return { ...result, planId: plan.planId, invocationId: plan.invocationId };
             },
-            verifyCanonicalEligibility: ({ artifactId }) => ({ status: artifactId === sourceArtifact.artifactId ? 'eligible' : 'ineligible', artifactId, authorityToken: 'captured-artifact' }),
+            verifyCanonicalEligibility: ({ artifactId, roles }) => ({ status: artifactId === sourceArtifact.artifactId && Object.keys(roles || {}).length === 1 && Object.prototype.hasOwnProperty.call(roles || {}, 'activeLook') && sourceArtifact.mediaUrl ? 'eligible' : 'ineligible', artifactId, authorityToken: 'captured-artifact' }),
             mutateCanonical: ({ mutation }) => persistIterationCanonicalRoles({ sourceArtifact, mutation }),
-            readbackCanonical: ({ plan, mutation }) => verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation }),
-            discardArtifact: async ({ artifactId, plan }) => ({ status: 'confirmed', artifactId, planId: plan.planId, invocationId: plan.invocationId }),
+            readbackCanonical: ({ plan, mutation, persisted }) => verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, persisted }),
         });
         iterationSurfaceMounts.set(key, { controller, destroy: () => mount?.destroy?.() });
         const mount = mountIterationSurface(host[0], controller);
