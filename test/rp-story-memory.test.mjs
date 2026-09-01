@@ -4,12 +4,14 @@ import assert from 'node:assert/strict';
 import {
     addStoryArtifact,
     addStoryCollectionMember,
+    buildStoryArtifactId,
     createStoryMemory,
     buildReproductionInput,
     getGenerationDetails,
     getStoryTimeline,
     listStoryCollectionMembers,
     migrateGalleryEntries,
+    migrateStoryMemory,
     planContinueFromScene,
     searchStoryArtifacts,
     toggleStoryFavorite,
@@ -52,13 +54,45 @@ test('migrates Gallery entries to stable, reference-only artifacts and preserves
     const first = migrateGalleryEntries(gallery, { chatId: 'chat-a' });
     const second = migrateGalleryEntries(gallery, { chatId: 'chat-a' });
     assert.deepEqual(first, second);
-    assert.equal(first[0].id, 'story:chat-a:gallery-1');
+    assert.equal(first[0].id, 'story:v1:6:chat-a:9:gallery-1');
     assert.equal(first[0].url, '/images/one.png');
     assert.equal(first[0].model, 'model-x');
     assert.equal(first[0].createdAt, '2026-08-07T00:00:00.000Z');
     assert.equal('imageData' in first[0], false);
     assert.deepEqual(first[0].legacyMetadata.sourceMetadata.nested, { value: 1 });
     assert.deepEqual(first[0].legacyMetadata.omittedFields, ['imageData']);
+});
+
+test('artifact IDs are unambiguous for delimiter-heavy chat/source values', () => {
+    const first = buildStoryArtifactId({ chatId: 'a:b', item: { id: 'c', url: '/one.png' } });
+    const second = buildStoryArtifactId({ chatId: 'a', item: { id: 'b:c', url: '/one.png' } });
+    assert.notEqual(first, second);
+    assert.equal(first, buildStoryArtifactId({ chatId: 'a:b', item: { id: 'c', url: '/one.png' } }));
+});
+
+test('conflicting duplicate explicit IDs are rejected while idempotent reingestion preserves user fields', () => {
+    const first = addStoryArtifact(createStoryMemory(), { ...generated({ id: 'same-id' }), favorite: true, customNote: 'keep me' });
+    assert.throws(() => addStoryArtifact(first, { ...generated({ id: 'same-id' }), url: '/different.png' }), /duplicate|conflict/i);
+    const reingested = addStoryArtifact(first, { ...generated({ id: 'same-id' }), prompt: 'updated prompt' });
+    assert.equal(reingested.artifacts['same-id'].favorite, true);
+    assert.equal(reingested.artifacts['same-id'].customNote, 'keep me');
+    assert.equal(reingested.artifacts['same-id'].prompt, 'updated prompt');
+});
+
+test('nested binary fields are omitted from references, provenance, and legacy metadata', () => {
+    const artifact = generated({ id: 'nested-binary', generation: {
+        sourcePassage: 'passage', effectivePrompt: 'prompt',
+        references: [{ id: 'look:1', data: 'bytes', nested: { base64: 'bytes', blob: 'bytes' } }],
+        model: 'model-a', settings: {},
+    }, provenance: { source: 'test', nested: { imageData: 'bytes', data: 'bytes' } }, metadata: { nested: { blob: 'bytes', keep: true } } });
+    const memory = addStoryArtifact(createStoryMemory(), artifact);
+    const saved = memory.artifacts[artifact.id];
+    assert.equal('data' in saved.generation.references[0], false);
+    assert.equal('base64' in saved.generation.references[0].nested, false);
+    assert.equal('blob' in saved.generation.references[0].nested, false);
+    assert.equal('imageData' in saved.provenance.nested, false);
+    assert.equal(saved.metadata.nested.keep, true);
+    assert.equal('blob' in saved.metadata.nested, false);
 });
 
 test('timeline remains chat-scoped, ordered for long histories, and does not mutate input', () => {
@@ -72,6 +106,15 @@ test('timeline remains chat-scoped, ordered for long histories, and does not mut
     assert.deepEqual(getStoryTimeline(memory, { chatId: 'chat-a' }).map((item) => item.messageId), Array.from({ length: 120 }, (_, index) => index + 1));
     assert.deepEqual(getStoryTimeline(memory, { chatId: 'chat-b' }).map((item) => item.id), ['other-chat-image']);
     assert.deepEqual(before, createStoryMemory());
+});
+
+test('timeline uses source sequence/order before date and ID tie-breakers', () => {
+    let memory = createStoryMemory();
+    memory = addStoryArtifact(memory, generated({ id: 'tie-z', messageId: 4, sequence: 2, createdAt: '2026-08-01T00:00:00Z' }));
+    memory = addStoryArtifact(memory, generated({ id: 'tie-a', messageId: 4, sequence: 1, createdAt: '2026-08-02T00:00:00Z' }));
+    memory = addStoryArtifact(memory, generated({ id: 'order-2', messageId: 5, order: 2 }));
+    memory = addStoryArtifact(memory, generated({ id: 'order-1', messageId: 5, order: 1 }));
+    assert.deepEqual(getStoryTimeline(memory, { chatId: 'chat-a' }).map((item) => item.id), ['tie-a', 'tie-z', 'order-1', 'order-2']);
 });
 
 test('favorites persist on the artifact record without creating or moving media', () => {
@@ -96,6 +139,14 @@ test('search composes character, chat, task, model, prompt, and date filters', (
     }).map((item) => item.id), ['match']);
 });
 
+test('date aliases are inclusive for date-only end bounds and invalid bounds fail explicitly', () => {
+    let memory = createStoryMemory();
+    memory = addStoryArtifact(memory, generated({ id: 'boundary', createdAt: '2026-08-10T23:59:59.999Z' }));
+    assert.deepEqual(searchStoryArtifacts(memory, { dateFrom: '2026-08-10', dateTo: '2026-08-10' }).map((item) => item.id), ['boundary']);
+    assert.throws(() => searchStoryArtifacts(memory, { from: 'not-a-date' }), /date|bound|invalid/i);
+    assert.throws(() => searchStoryArtifacts(memory, { from: '2026-08-11', to: '2026-08-10' }), /range|bound|before/i);
+});
+
 test('collections contain artifact IDs only and support canon look, location, outfit, and moment labels', () => {
     let memory = addStoryArtifact(createStoryMemory(), generated({ id: 'collection-image' }));
     memory = addStoryCollectionMember(memory, { collectionId: 'canon-harbor', kind: 'location', label: 'Harbor', artifactId: 'collection-image' });
@@ -103,6 +154,15 @@ test('collections contain artifact IDs only and support canon look, location, ou
     assert.deepEqual(listStoryCollectionMembers(memory, 'canon-harbor').map((member) => member.id), ['collection-image']);
     assert.equal(memory.collections['canon-harbor'].kind, 'location');
     assert.equal(memory.artifacts['collection-image'].url, '/user/images/collection-image.png');
+});
+
+test('memory migration repairs and reports dangling collection members', () => {
+    const migrated = migrateStoryMemory({
+        artifacts: { keep: generated({ id: 'keep' }) },
+        collections: { moments: { id: 'moments', kind: 'moment', label: 'Moments', memberIds: ['keep', 'missing'] } },
+    });
+    assert.deepEqual(migrated.collections.moments.memberIds, ['keep']);
+    assert.deepEqual(migrated.migrationReport.danglingCollectionMembers, [{ collectionId: 'moments', artifactId: 'missing' }]);
 });
 
 test('generation details and reproduction inputs are stable value snapshots', () => {
@@ -119,6 +179,11 @@ test('generation details and reproduction inputs are stable value snapshots', ()
     assert.deepEqual(recipe.references, artifact.generation.references);
     recipe.settings.width = 1;
     assert.equal(buildReproductionInput(memory, artifact.id).settings.width, 512);
+    assert.deepEqual(recipe.sourceMoment, artifact.sourceMoment);
+    assert.deepEqual(recipe.facts, [{ id: 'location:harbor', value: 'old harbor', status: 'valid' }]);
+    assert.equal(recipe.chatId, artifact.chatId);
+    assert.equal(recipe.messageId, artifact.messageId);
+    assert.equal(recipe.taskId, artifact.taskId);
 });
 
 test('Continue from this scene selects the prior image and excludes obsolete facts', () => {
@@ -130,4 +195,19 @@ test('Continue from this scene selects the prior image and excludes obsolete fac
     assert.deepEqual(plan.facts, [{ id: 'location:harbor', value: 'old harbor', status: 'valid' }]);
     assert.deepEqual(plan.generation, artifact.generation);
     assert.equal(plan.facts.some((fact) => fact.status === 'obsolete'), false);
+});
+
+test('Continue filters temporal, superseded, unauthorized, and unrelated-scene facts', () => {
+    const artifact = generated({ id: 'validity-1', sourceMoment: { id: 'scene-1', scope: 'scene-1', passage: 'scene' }, facts: [
+        { id: 'before', value: 1, validFrom: '2026-09-02' },
+        { id: 'after', value: 2, validUntil: '2026-08-31' },
+        { id: 'superseded', value: 3, supersededBy: 'newer' },
+        { id: 'old-version', value: 4, version: 1, currentVersion: 2 },
+        { id: 'untrusted', value: 5, reconciliation: { isAuthoritative: false } },
+        { id: 'other-scene', value: 6, scope: 'scene-2' },
+        { id: 'accepted', value: 7, scope: 'scene-1', validFrom: '2026-08-01', validUntil: '2026-09-30' },
+    ] });
+    const memory = addStoryArtifact(createStoryMemory(), artifact);
+    const plan = planContinueFromScene(memory, artifact.id, { at: '2026-09-01' });
+    assert.deepEqual(plan.facts.map((fact) => fact.id), ['accepted']);
 });
