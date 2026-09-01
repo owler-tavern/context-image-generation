@@ -306,6 +306,37 @@ test('active chat persistence uses a bounded provider-free projection and reload
     assert.equal(restarted.getState().session.reservedGenerationCount, 0);
 });
 
+test('bounded compaction protects an old pending event behind more than 110 queued changes', async () => {
+    let latestChatMetadata = null;
+    const makeRuntime = (epoch) => createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 150 },
+        getChatId: () => 'chat-a',
+        getEpoch: () => epoch,
+        readState: () => latestChatMetadata || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value) => { latestChatMetadata = structuredClone(value); },
+        saveChat: async () => {},
+        saveDurableState: async () => {},
+        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
+        dispatch: async () => ({ status: 'completed', receipt: { actualCost: null } }),
+    });
+    const runtime = makeRuntime(1);
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const first = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 0, message: { mes: 'First location' }, acceptedSceneDelta: interpretationDelta({ location: 'first-location' }) });
+    assert.equal(first.status, 'suggested');
+    for (let index = 1; index <= 110; index += 1) {
+        const result = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: index, message: { mes: `Queued location ${index}` }, acceptedSceneDelta: interpretationDelta({ location: `queued-location-${index}` }) });
+        assert.equal(result.status, 'pending-suppressed');
+    }
+    const persisted = latestChatMetadata.cinematicAutomation.session;
+    assert.ok(Object.keys(persisted.eventRegistry).length <= 96);
+    assert.ok(Object.hasOwn(persisted.eventRegistry, first.suggestion.eventId));
+    const restarted = makeRuntime(2);
+    const loaded = restarted.load({ chatId: 'chat-a', epoch: 2 });
+    assert.equal(loaded.suggestion?.suggestionId, first.suggestion.suggestionId);
+    assert.equal((await restarted.approve(first.suggestion.suggestionId)).status, 'completed');
+    assert.equal(restarted.getState().session.reservedGenerationCount, 0);
+});
+
 test('runtime accepts the real scene interpretation delta, not a message counter', async () => {
     const { runtime } = setup({
         interpret: ({ message, priorStoryState }) => buildSceneGenerationSnapshot({
