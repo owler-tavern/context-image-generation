@@ -41,3 +41,9 @@ test('suggestion actions and narrow-safe controls are accessible', () => {
     assert.match(style, /\.cig_cinematic_suggestion[\s\S]*min-height:\s*44px/);
     assert.match(style, /@media \(max-width: 480px\)[\s\S]*cig_cinematic_suggestion_actions/);
 });
+
+test('manual cinematic retrigger reports a visible suggestion result even before a message card can mount', () => {
+    assert.match(index, /refreshCinematicSurface\(result\?\.suggestion, status\)/u);
+    assert.match(index, /Manual cinematic suggestion is ready/u);
+    assert.match(index, /No chat event was replayed/u);
+});

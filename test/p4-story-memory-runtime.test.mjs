@@ -130,6 +130,12 @@ test('production index imports and mounts the story memory surface in Images & C
     assert.match(settings, /cig_story_memory_surface/u);
 });
 
+test('production story memory mount disables the unscoped auto-load before explicit chat-scoped load', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /mountStoryMemorySurface\(host, storyMemoryController, \{ installStyles: true, autoLoad: false \}\)/u);
+    assert.match(index, /void storyMemoryController\.load\(\{ chatId: getContext\(\)\.chatId \}\)/u);
+});
+
 test('real P2 scene state becomes bounded valid story facts on CIG media', () => {
     const facts = buildStoryMemoryFactSnapshot({ schema: 1, sceneFacts: {
         cast: [{ identityId: 'ava', label: 'Ava', confidence: 'high' }],

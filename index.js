@@ -925,7 +925,7 @@ function createStoryMemorySurface() {
     const host = document.getElementById('cig_story_memory_surface');
     if (!host) return;
     storyMemorySurfaceMount?.destroy?.();
-    storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true });
+    storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
     void storyMemoryController.load({ chatId: getContext().chatId });
 }
 
@@ -967,11 +967,12 @@ function renderCinematicSuggestion(suggestion = cinematicRuntime?.getState()?.su
     if (anchor.length) anchor.after(root); else messageElement.append(root);
 }
 
-function refreshCinematicSurface() {
-    renderCinematicSuggestion();
+function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
+    renderCinematicSuggestion(suggestionOverride);
     const state = cinematicRuntime?.getState();
     const settings = extension_settings[extensionName]?.cinematic_automation || {};
-    $('#cig_cinematic_status').text(state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
+    const status = statusOverride || (state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
+    $('#cig_cinematic_status').text(status);
     $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
 }
 
@@ -4312,10 +4313,17 @@ jQuery(async () => {
         const beat = String($('#cig_cinematic_retrigger_beat').val() || '').trim() || 'missed story beat';
         try {
             const result = await cinematicRuntime?.retrigger(beat, `manual:${Date.now()}`, 'missed or failed beat');
-            refreshCinematicSurface();
-            if (result?.status === 'suggested') toastr.info('A manual cinematic suggestion is ready. No chat event was replayed.', 'Context Image Generation');
-            else if (result?.status === 'pending-suppressed') toastr.info('Finish the current suggestion before adding another.', 'Context Image Generation');
+            const status = result?.status === 'suggested'
+                ? 'Manual cinematic suggestion is ready. No chat event was replayed.'
+                : result?.status === 'pending-suppressed'
+                    ? 'Finish the current cinematic suggestion before adding another.'
+                    : result?.reason || 'Manual cinematic suggestion could not be created.';
+            refreshCinematicSurface(result?.suggestion, status);
+            if (result?.status === 'suggested') toastr.info(status, 'Context Image Generation');
+            else if (result?.status === 'pending-suppressed') toastr.info(status, 'Context Image Generation');
+            else toastr.info(status, 'Context Image Generation');
         } catch (error) {
+            $('#cig_cinematic_status').text(`Manual cinematic suggestion failed: ${error?.message || 'try again.'}`);
             showGenerationError(error, 'Manual cinematic retrigger');
         }
     });
