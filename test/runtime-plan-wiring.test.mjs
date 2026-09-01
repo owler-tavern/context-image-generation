@@ -56,3 +56,34 @@ test('normal inline flow renders a continuity shelf and captures outfit/referenc
     assert.match(source, /saveChatConditional/);
     assert.match(source, /verifyPersistedChatOutfitState/);
 });
+
+test('the visible shelf reuses the captured media surface and cannot drift from dispatch settings', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const render = source.slice(source.indexOf('function renderContinuityShelf'), source.indexOf('function renderContinuityShelves'));
+    assert.match(source, /cig_continuity_snapshot/);
+    assert.match(source, /useAvatars: snapshot\.settingsSnapshot\.use_avatars === true/);
+    assert.match(source, /useDescriptions: snapshot\.settingsSnapshot\.include_descriptions === true/);
+    assert.match(render, /cig_continuity_snapshot/);
+    assert.doesNotMatch(render, /resolveHostAvatarIdentityReferences/);
+    assert.doesNotMatch(render, /getReferenceImageCapability\(/);
+});
+
+test('captured avatar and description options gate both candidates and prompt content', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const snapshot = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function materializeSnapshotAssets'));
+    assert.match(snapshot, /if \(capability && settingsSnapshot\.use_avatars\)/);
+    assert.match(snapshot, /includeDescriptions: settingsSnapshot\.include_descriptions === true/);
+    assert.match(snapshot, /rawAppearanceDescription && settingsSnapshot\.include_descriptions === true/);
+});
+
+test('outfit persistence queues durable pending state and saves only through the captured target gate', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const outfit = source.slice(source.indexOf('async function persistChatOutfitState'), source.indexOf('async function activateChatOutfit'));
+    assert.match(outfit, /queueOutfitPending/);
+    assert.match(outfit, /verifyPersistedOutfitPending/);
+    assert.match(outfit, /persistTargetedOutfitMutation/);
+    assert.match(outfit, /saveChatForCapturedTarget/);
+    assert.doesNotMatch(outfit, /saveChatConditional\(\)/);
+    assert.match(source, /resumePendingOutfitState/);
+    assert.match(source, /splitOutfitPendingByChat/);
+});

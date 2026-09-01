@@ -13,6 +13,7 @@ import {
     appendMediaToMessage,
     eventSource,
     event_types,
+    saveChat,
     saveChatConditional,
     user_avatar,
     getUserAvatar as getAvatarPath,
@@ -75,7 +76,9 @@ import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js
 import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
 import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
 import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitPrompt, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
-import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
+import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
+import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
+import { saveGroupChat } from '../../../group-chats.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -107,6 +110,7 @@ const defaultSettings = {
     visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
     rp_outfits: { schema: 1, outfits: [] },
+    outfit_pending: { schema: 1, pending: {} },
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -876,6 +880,11 @@ async function loadSettings() {
         cigSettings.rp_outfits = migratedOutfitCatalog;
         settingsMigrated = true;
     }
+    const migratedOutfitPending = createOutfitPendingState(cigSettings.outfit_pending);
+    if (JSON.stringify(cigSettings.outfit_pending) !== JSON.stringify(migratedOutfitPending)) {
+        cigSettings.outfit_pending = migratedOutfitPending;
+        settingsMigrated = true;
+    }
     if (!cigSettings.provider_keys || typeof cigSettings.provider_keys !== 'object' || Array.isArray(cigSettings.provider_keys)) {
         cigSettings.provider_keys = {};
         settingsMigrated = true;
@@ -905,6 +914,7 @@ async function loadSettings() {
 
     await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
     await resumePendingVisibleCanonLinks();
+    await resumePendingOutfitState();
 
 
     $('#cig_provider').val(extension_settings[extensionName].provider);
@@ -1294,6 +1304,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         truths: appearanceTruthEntries,
         remembered: canonCapture.canonSnapshot.references,
         avatarReferences: canonCapture.references,
+        priorScene: referenceCandidates.filter((candidate) => candidate.role === 'legacy-previous'),
+        includeDescriptions: settingsSnapshot.include_descriptions === true,
     }).map((candidate) => ({
         ...candidate,
         ...(canonCapture.canonSnapshot.assets?.[candidate.assetId]?.url ? { thumbnail: canonCapture.canonSnapshot.assets[candidate.assetId].url } : {}),
@@ -1314,7 +1326,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         .filter((entry) => entry.description?.text)
         .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
         .join('\n\n');
-    if (rawAppearanceDescription) descriptionText = [descriptionText, rawAppearanceDescription].filter(Boolean).join('\n\n');
+    if (rawAppearanceDescription && settingsSnapshot.include_descriptions === true) descriptionText = [descriptionText, rawAppearanceDescription].filter(Boolean).join('\n\n');
     const connectionId = routeModel.connectionId || `${providerId}:default`;
     const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
@@ -1412,6 +1424,18 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
         const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions, messages });
+        const continuitySurface = cloneSnapshot({
+            schema: 1,
+            invocation,
+            target,
+            settings: {
+                useAvatars: snapshot.settingsSnapshot.use_avatars === true,
+                useDescriptions: snapshot.settingsSnapshot.include_descriptions === true,
+            },
+            identities: dispatchedPlan.identities,
+            referencePlan: dispatchedPlan.referencePlan,
+            activeOutfits: dispatchedPlan.activeOutfits,
+        });
         // Retain only the redacted Advanced projection; prompt/context/assets
         // must not survive the dispatch lifecycle in extension state.
         lastGenerationPlanInspection = inspectGenerationPlan(dispatchedPlan);
@@ -1470,8 +1494,11 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                     renderCustomConnectionEditor();
                 }
             }
-            if (typeof finalize !== 'function') return generated;
-            const persisted = await finalize(generated, signal);
+            const generatedWithContinuity = generated && typeof generated === 'object'
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface }
+                : generated;
+            if (typeof finalize !== 'function') return generatedWithContinuity;
+            const persisted = await finalize(generatedWithContinuity, signal);
             return persisted?.persistence?.stale ? { ...persisted, stale: true } : persisted;
         });
         currentGenerationRunId = execution.runId || currentGenerationRunId;
@@ -1742,7 +1769,18 @@ function capturedChatTarget(identityId, expectedRevision, activeLookId, mediaTar
     const requestBody = groupId
         ? { id: context.chatId }
         : { avatar_url: context.characters?.[context.characterId]?.avatar, file_name: context.chatId };
-    return { chatId: context.chatId, groupId, identityId, expectedRevision, activeLookId, requestBody, ...(mediaTarget ? mediaTarget : {}), ...(mediaTarget && !mediaTarget.lookId && activeLookId ? { lookId: activeLookId } : {}) };
+    return {
+        chatId: context.chatId,
+        groupId,
+        identityId,
+        expectedRevision,
+        activeLookId,
+        requestBody,
+        chatData: cloneSnapshot(context.chat || []),
+        metadata: cloneSnapshot(chat_metadata),
+        ...(mediaTarget ? mediaTarget : {}),
+        ...(mediaTarget && !mediaTarget.lookId && activeLookId ? { lookId: activeLookId } : {}),
+    };
 }
 
 async function verifyPersistedChatOutfitState({ target, expectedState } = {}) {
@@ -1760,6 +1798,35 @@ async function verifyPersistedChatOutfitState({ target, expectedState } = {}) {
     }
 }
 
+async function verifyPersistedOutfitPending(entry) {
+    try {
+        const response = await fetch('/api/settings/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({}) });
+        if (!response.ok) return { status: 'indeterminate' };
+        const payload = await response.json();
+        const raw = typeof payload?.settings === 'string' ? JSON.parse(payload.settings) : payload;
+        const stored = raw?.extension_settings?.[extensionName]?.outfit_pending?.pending?.[outfitPendingKey(entry)] || raw?.settings?.extension_settings?.[extensionName]?.outfit_pending?.pending?.[outfitPendingKey(entry)];
+        const stable = (value) => JSON.stringify(value || null);
+        return { status: stable(stored) === stable(entry) ? 'confirmed' : 'confirmed-absent', entry: stored || null };
+    } catch (error) { return { status: 'indeterminate', error }; }
+}
+
+async function saveChatForCapturedTarget(captured, target) {
+    if (!chatCaptureIsCurrent(captured)) return { saved: false, reason: 'chat-changed' };
+    const chatData = cloneSnapshot(getContext().chat || target?.chatData || []);
+    const metadata = cloneSnapshot(chat_metadata || target?.metadata || {});
+    if (target?.groupId) await saveGroupChat(target.groupId, true);
+    else await saveChat({ chatName: target?.requestBody?.file_name, withMetadata: metadata, chatData });
+    return chatCaptureIsCurrent(captured) ? { saved: true, target } : { saved: false, reason: 'chat-changed' };
+}
+
+function outfitPendingKey(entry) {
+    return `${String(entry?.chatId || '')}::${String(entry?.identityId || '')}`;
+}
+
+function scheduleOutfitPendingRetry() {
+    setTimeout(() => { void resumePendingOutfitState(); }, 1500);
+}
+
 async function persistChatOutfitState(identityId, nextState) {
     const context = getContext();
     const captured = { chatId: context.chatId, epoch: chatLifecycleEpoch.capture() };
@@ -1768,22 +1835,67 @@ async function persistChatOutfitState(identityId, nextState) {
     const outfitState = { ...migrateChatOutfitState(nextState), revision: `outfit:${crypto.randomUUID()}` };
     const candidate = { ...currentCanon, outfitState, revision: `chat-canon:${crypto.randomUUID()}` };
     const target = capturedChatTarget(identityId, candidate.revision, getChatOutfitBinding(outfitState, identityId)?.activeOutfitId || null);
-    const result = await persistVerifiedChatMutation({
+    const pending = { chatId: captured.chatId, groupId: target.groupId, identityId, canonRevision: candidate.revision, revision: outfitState.revision, state: outfitState };
+    const settings = extension_settings[extensionName];
+    settings.outfit_pending = queueOutfitPending(settings.outfit_pending, pending);
+    try {
+        await saveSettings();
+        const pendingVerification = await verifyPersistedOutfitPending(pending);
+        if (pendingVerification.status !== 'confirmed') {
+            scheduleOutfitPendingRetry();
+            return { status: 'indeterminate', verification: pendingVerification };
+        }
+    } catch (error) {
+        scheduleOutfitPendingRetry();
+        return { status: 'indeterminate', error };
+    }
+    const result = await persistTargetedOutfitMutation({
         captured,
         isCurrent: chatCaptureIsCurrent,
         getState: () => ({ canon: chat_metadata[CHAT_CANON_KEY] }),
         setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value.canon; },
         nextState: { canon: candidate },
-        getRevision: (value) => value?.canon?.outfitState?.revision,
-        saveMetadata: () => saveChatConditional(),
+        save: (capturedTarget) => saveChatForCapturedTarget(capturedTarget, target),
         verify: () => verifyPersistedChatOutfitState({ target, expectedState: outfitState }),
-        scheduleReconcile: () => {},
     });
-    if (result.status !== 'confirmed' && chatCaptureIsCurrent(captured) && chat_metadata[CHAT_CANON_KEY]?.outfitState?.revision === outfitState.revision) {
+    if (result.status === 'confirmed') {
+        settings.outfit_pending = removeOutfitPending(settings.outfit_pending, pending);
+        await saveSettings();
+    } else if (result.status === 'confirmed-absent' && chatCaptureIsCurrent(captured) && chat_metadata[CHAT_CANON_KEY]?.outfitState?.revision === outfitState.revision) {
         chat_metadata[CHAT_CANON_KEY] = previous.canon;
+        scheduleOutfitPendingRetry();
+    } else if (result.status === 'indeterminate') {
+        scheduleOutfitPendingRetry();
     }
     renderContinuityShelves();
     return result;
+}
+
+async function resumePendingOutfitState() {
+    const settings = extension_settings[extensionName];
+    const currentChatId = getContext().chatId;
+    const pendingState = createOutfitPendingState(settings.outfit_pending);
+    if (!Object.keys(splitOutfitPendingByChat(pendingState, currentChatId).active).length) return { status: 'nothing-to-do' };
+    const resumed = await resumeOutfitPending(pendingState, async (entry) => {
+        const captured = { chatId: currentChatId, epoch: chatLifecycleEpoch.capture() };
+        const target = capturedChatTarget(entry.identityId, entry.canonRevision, getChatOutfitBinding(entry.state, entry.identityId)?.activeOutfitId || null);
+        const candidate = { ...migrateChatCanon(chat_metadata[CHAT_CANON_KEY]), outfitState: migrateChatOutfitState(entry.state), revision: entry.canonRevision };
+        return persistTargetedOutfitMutation({
+            captured,
+            isCurrent: (value) => chatCaptureIsCurrent(value) && String(value.chatId) === String(entry.chatId),
+            getState: () => ({ canon: chat_metadata[CHAT_CANON_KEY] }),
+            setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value.canon; },
+            nextState: { canon: candidate },
+            save: (capturedTarget) => saveChatForCapturedTarget(capturedTarget, target),
+            verify: () => verifyPersistedChatOutfitState({ target, expectedState: entry.state }),
+        });
+    }, { chatId: currentChatId, isCurrent: (entry) => chatCaptureIsCurrent({ chatId: entry.chatId, epoch: chatLifecycleEpoch.capture() }) });
+    if (resumed.state !== pendingState) {
+        settings.outfit_pending = resumed.state;
+        await saveSettings();
+    }
+    renderContinuityShelves();
+    return resumed;
 }
 
 async function activateChatOutfit(identityId, requestedOutfitId) {
@@ -2432,6 +2544,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 title: sourcePrompt.substring(0, 100),
                 source: MEDIA_SOURCE.GENERATED,
                 cig_owner: extensionName,
+                ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
@@ -2739,36 +2852,29 @@ function renderContinuityShelf(messageElement, messageOverride = null) {
     const messageId = Number(messageElement.attr('mesid'));
     const context = getContext();
     const message = messageOverride || context.chat?.[messageId];
-    const identities = presentContinuityIdentities(message);
-    if (!identities.length) return;
+    const activeMedia = activeMediaForMessage(message);
+    const continuitySurface = activeMedia?.item?.cig_continuity_snapshot;
+    if (!continuitySurface?.referencePlan?.identities?.length) return;
     const settings = extension_settings[extensionName] || {};
-    const library = migrateAppearanceLibrary(settings.rp_library);
-    const truths = continuityTruths(identities);
-    const hostReferences = resolveHostAvatarIdentityReferences({
-        identities,
-        activeCharacterAvatar: context.characters?.[context.characterId]?.avatar,
-        personaAvatar: user_avatar,
-        groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
-    });
-    const canonCapture = captureCanonForGeneration({
-        library,
-        gallery: settings.gallery || [],
-        chatState: chat_metadata[CHAT_CANON_KEY],
-        identities,
-        references: hostReferences,
-    });
-    const candidates = buildContinuityReferenceCandidates({ identities, truths, remembered: canonCapture.canonSnapshot.references, avatarReferences: hostReferences }).map((candidate) => ({
-        ...candidate,
-        ...(canonCapture.canonSnapshot.assets?.[candidate.assetId]?.url ? { thumbnail: canonCapture.canonSnapshot.assets[candidate.assetId].url } : {}),
-    }));
-    const shelf = projectContinuityShelf({
-        identities,
-        truths,
-        candidates,
-        modelLimit: getReferenceImageCapability(settings.provider || 'makersuite', settings.model)?.maxCount,
-        outfitCatalog: settings.rp_outfits,
-        outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
-    });
+    const catalog = migrateOutfitCatalog(settings.rp_outfits);
+    const outfitState = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
+    const shelf = {
+        ...continuitySurface.referencePlan,
+        identities: continuitySurface.referencePlan.identities.map((entry) => {
+            const outfitResult = resolveActiveChatOutfit(outfitState, entry.identityId, catalog);
+            return {
+                ...entry,
+                activeOutfit: outfitResult?.outfit ? {
+                    id: outfitResult.outfit.id,
+                    name: outfitResult.outfit.name,
+                    items: cloneSnapshot(outfitResult.outfit.items || []),
+                    description: outfitResult.outfit.description || null,
+                    isLocked: outfitResult.binding?.isLocked === true,
+                } : null,
+                outfits: catalog.outfits.filter((outfit) => outfit.identityId === entry.identityId).map((outfit) => ({ id: outfit.id, name: outfit.name, items: cloneSnapshot(outfit.items), description: outfit.description })),
+            };
+        }),
+    };
     const root = $('<details class="cig_continuity_shelf"></details>')
         .attr({ 'data-message-id': String(messageId), 'aria-label': 'Visual continuity shelf' });
     const summary = $('<summary class="cig_continuity_shelf_summary"></summary>')
@@ -3477,6 +3583,7 @@ jQuery(async () => {
             renderContinuityShelves();
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
+            void resumePendingOutfitState();
         }, 100);
     });
 

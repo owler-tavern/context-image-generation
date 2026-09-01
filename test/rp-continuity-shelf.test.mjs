@@ -4,6 +4,7 @@ import {
     buildAppearanceTruths,
     buildContinuityReferenceCandidates,
     buildOutfitPrompt,
+    alignContinuityReferencePlan,
     projectContinuityShelf,
 } from '../lib/rp/continuity-shelf.js';
 
@@ -93,4 +94,39 @@ test('outfit prompt is deterministic and independent for two identities', () => 
         { identityId: 'character:leo', identityLabel: 'Leo', outfit: { name: 'Formal', description: 'black suit' } },
     ]), '[Active outfits]\nAva — Travel: blue coat, boots.\nLeo — Formal: black suit.');
     assert.equal(buildOutfitPrompt([]), '');
+});
+
+test('description candidates follow the captured use-descriptions option', () => {
+    const truths = buildAppearanceTruths({ identities, sources: {
+        'character:ava': { description: 'Ava written details.' },
+        'character:leo': { description: 'Leo written details.' },
+    } });
+    const candidates = buildContinuityReferenceCandidates({
+        identities,
+        truths,
+        includeDescriptions: false,
+    });
+    assert.deepEqual(candidates, []);
+});
+
+test('aligned shelf projection exposes exactly the references sent by the immutable plan', () => {
+    const shelf = projectContinuityShelf({
+        identities,
+        truths: buildAppearanceTruths({ identities, sources: { 'character:ava': { description: 'Ava.' }, 'character:leo': { description: 'Leo.' } } }),
+        candidates: [
+            { id: 'host:ava', identityId: 'character:ava', sourceType: 'avatar', role: 'host-avatar', assetId: 'asset:ava' },
+            { id: 'host:leo', identityId: 'character:leo', sourceType: 'avatar', role: 'host-avatar', assetId: 'asset:leo' },
+        ],
+        modelLimit: 1,
+    });
+    const aligned = alignContinuityReferencePlan(shelf, {
+        selected: [{ id: 'host:leo', identityId: 'character:leo', role: 'host-avatar', assetId: 'asset:leo' }],
+        omitted: [{ candidate: { id: 'host:ava', identityId: 'character:ava', role: 'host-avatar', assetId: 'asset:ava' }, reason: 'provider-cap' }],
+    });
+    assert.deepEqual(aligned.selected.map((entry) => entry.id), ['host:leo']);
+    assert.deepEqual(aligned.omitted.map((entry) => [entry.id, entry.reason]), [['host:ava', 'provider-cap']]);
+    assert.deepEqual(aligned.identities.map((entry) => [entry.identityId, entry.selected.map((row) => row.id), entry.omitted.map((row) => row.id)]), [
+        ['character:ava', [], ['host:ava']],
+        ['character:leo', ['host:leo'], []],
+    ]);
 });
