@@ -15,6 +15,25 @@ import {
     trimGalleryToLimit,
     setActiveAppearanceLook,
 } from '../lib/rp/appearance-library.js';
+
+test('schema 2 stores promoted appearance assets and looks without changing the frozen global default', async () => {
+    const module = await import('../lib/rp/appearance-library.js');
+    const original = module.migrateAppearanceLibrary({ identities: { 'character:ava': { id: 'character:ava', kind: 'character', label: 'Ava', activeLookId: 'look:legacy', looks: [{ id: 'look:legacy', assetId: 'asset:legacy' }] } }, assets: { 'asset:legacy': { id: 'asset:legacy', kind: 'gallery', source: { galleryId: 'g' } } } });
+    const asset = { id: 'asset:123e4567-e89b-42d3-a456-426614174000', kind: 'appearance', url: '/user/images/context-image-generation-appearances/cig-appearance-123e4567-e89b-42d3-a456-426614174000.png', mimeType: 'image/png', byteCount: 8 };
+    const look = { id: 'look:123e4567-e89b-42d3-a456-426614174000', assetId: asset.id, label: 'Evening', source: { identityId: 'character:ava', galleryArtifactId: 'g2' } };
+    const result = module.addPromotedAppearanceLook(original, { identity: { id: 'character:ava', kind: 'character', label: 'Ava' }, asset, look });
+    assert.equal(result.library.schema, 2);
+    assert.equal(result.library.assets[asset.id].url, asset.url);
+    assert.equal(result.library.identities['character:ava'].activeLookId, 'look:legacy');
+    assert.equal(result.library.identities['character:ava'].looks.at(-1).id, look.id);
+});
+
+test('pending promoted appearances stay unavailable until verification completes', async () => {
+    const module = await import('../lib/rp/appearance-library.js');
+    const id = '123e4567-e89b-42d3-a456-426614174000';
+    const library = module.migrateAppearanceLibrary({ schema: 2, assets: { [`asset:${id}`]: { id: `asset:${id}`, kind: 'appearance', url: `/user/images/context-image-generation-appearances/cig-appearance-${id}.png` } }, identities: { 'character:ava': { id: 'character:ava', looks: [{ id: `look:${id}`, assetId: `asset:${id}` }] } }, operations: { op: { status: 'pending', assetId: `asset:${id}`, lookId: `look:${id}` } } });
+    assert.deepEqual(module.materializeAppearanceAssets(library).assets, {});
+});
 import * as appearanceLibrary from '../lib/rp/appearance-library.js';
 
 const galleryItem = {

@@ -1,5 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+
+test('appearance settings explain durable per-chat memory and lock controls', async () => {
+    const html = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
+    assert.match(html, /separate appearance file/i);
+    assert.match(html, /current chat/i);
+    assert.match(html, /lock/i);
+});
 import { readFile } from 'node:fs/promises';
 import { getCustomCatalogRefreshMessage, projectCustomConnectionEditor, projectRouteDiagnostics, projectProviderOptions } from '../lib/providers/ui-projection.js';
 import { connectionRevision } from '../lib/providers/custom-connections.js';

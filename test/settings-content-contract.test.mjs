@@ -75,8 +75,8 @@ test('Images and Cast leads with Gallery and then a visible Appearance memory se
     assert.match(imagesCast, /id="cig_appearances"[\s\S]*?<h2>Appearance memory<\/h2>/);
     assert.equal((imagesCast.match(/<details\b/g) || []).length, 0, 'Images and Cast has no nested details');
     assert.match(imagesCast, /Use the wand on any RP message to generate an image\./);
-    assert.match(imagesCast, /After you generate an image, choose Remember appearance to associate that look with a character\./);
-    assert.match(imagesCast, /Your character and persona are saved for future chats; named NPCs stay with this chat\./);
+    assert.match(imagesCast, /After you generate an image, choose Remember this look to associate it with a character\./);
+    assert.match(imagesCast, /Remember this look saves a separate appearance file, then uses it in the current chat\./);
 });
 
 test('primary Gallery actions are semantic buttons with accessible names', () => {

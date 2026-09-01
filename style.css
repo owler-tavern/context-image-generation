@@ -393,6 +393,24 @@
     opacity: 0.72;
 }
 
+.cig_appearance_item_text {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    min-width: 0;
+}
+
+.cig_appearance_active,
+.cig_appearance_locked {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1 !important;
+}
+
+.cig_appearance_lock,
+.cig_appearance_use {
+    flex: 0 0 auto;
+}
+
 .cig_appearance_remove {
     flex: 0 0 auto;
 }

@@ -7,6 +7,8 @@
 
 import {
     saveSettingsDebounced,
+    saveSettings,
+    chat_metadata,
     getRequestHeaders,
     appendMediaToMessage,
     eventSource,
@@ -62,7 +64,11 @@ import {
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
     setVisibleAppearanceLook,
+    addPromotedAppearanceLook,
 } from './lib/rp/appearance-library.js';
+import { promoteGalleryArtifact } from './lib/rp/appearance-assets.js';
+import { CHAT_CANON_KEY, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
+import { enqueueLibraryMutation, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1501,7 +1507,7 @@ function renderGallery() {
         $('<img>').attr({ src: galleryItemSrc(item), alt: item.prompt ? `Generated image: ${item.prompt}` : 'Generated image' }).appendTo(preview);
         preview.appendTo(thumb);
         const overlay = $('<div class="cig_gallery_item_overlay"></div>');
-        $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember appearance" aria-label="Remember appearance">')
+        $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember this look" aria-label="Remember this look">')
             .attr('data-index', i)
             .append($('<i class="fa-solid fa-user-pen" aria-hidden="true"></i>'))
             .appendTo(overlay);
@@ -1625,25 +1631,77 @@ async function rememberGalleryAppearance(index) {
     const settings = extension_settings[extensionName];
     const item = settings.gallery?.[index];
     if (!item) return;
+    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
     const selection = await chooseAppearanceIdentity(item.prompt || 'Saved appearance');
     if (!selection) return;
     const { identity, label } = selection;
-
-    // Promote legacy gallery entries to a stable artifact key; no image bytes are copied.
-    if (!item.id) item.id = `gallery:${galleryArtifactKey(item)}`;
-    const result = addAppearanceLook(settings.rp_library, {
-        identity,
-        galleryItem: item,
-        label,
-    });
-    if (!result.look) {
-        toastr.warning('This gallery image cannot be remembered.', 'Context Image Generation');
+    if (getContext().chatId !== captured.chatId || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
+        toastr.info('The chat changed before the look was saved. Please try again in the intended chat.', 'Context Image Generation');
         return;
     }
-    settings.rp_library = result.library;
-    saveSettingsDebounced();
-    renderAppearanceList();
-    toastr.success(`Saved appearance for ${identity.label}.`, 'Context Image Generation');
+
+    await enqueueLibraryMutation(async () => {
+        const readDataUrl = async (galleryItem) => {
+            if (galleryItem.imageData) return `data:${galleryItem.mimeType || 'image/png'};base64,${galleryItem.imageData}`;
+            const response = await fetch(galleryItem.url);
+            if (!response.ok) throw new Error('The Gallery image could not be read.');
+            return getBase64Async(await response.blob());
+        };
+        const promoted = await promoteGalleryArtifact({
+            item, identityId: identity.id, library: settings.rp_library, readDataUrl,
+            saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
+        });
+        if (!promoted.look || !promoted.asset) throw new Error('This Gallery image could not be remembered.');
+        promoted.look.label = label;
+        const inserted = addPromotedAppearanceLook(settings.rp_library, { identity, asset: promoted.asset, look: promoted.look });
+        const operationId = `promotion:${crypto.randomUUID()}`;
+        inserted.library.operations = { ...(inserted.library.operations || {}), [operationId]: { status: 'pending', assetId: promoted.asset.id, lookId: promoted.look.id, identityId: identity.id, galleryArtifactId: galleryArtifactKey(item) } };
+        const operationRevision = `appearance:${crypto.randomUUID()}`;
+        inserted.library.revision = operationRevision;
+        settings.rp_library = inserted.library;
+        await saveSettings();
+        const libraryVerification = await verifyPersistedExtensionLibrary({ expectedRevision: operationRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
+        if (libraryVerification.status !== 'confirmed') {
+            toastr.info('Saved look verification pending. It will be reconciled before use.', 'Context Image Generation');
+            renderAppearanceList();
+            return;
+        }
+        delete inserted.library.operations[operationId];
+        const acceptedRevision = `appearance:${crypto.randomUUID()}`;
+        inserted.library.revision = acceptedRevision;
+        settings.rp_library = inserted.library;
+        await saveSettings();
+        const acceptedVerification = await verifyPersistedExtensionLibrary({ expectedRevision: acceptedRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
+        if (acceptedVerification.status !== 'confirmed') {
+            inserted.library.operations[operationId] = { status: 'pending', assetId: promoted.asset.id, lookId: promoted.look.id, identityId: identity.id, galleryArtifactId: galleryArtifactKey(item) };
+            settings.rp_library = inserted.library;
+            toastr.info('Saved look verification pending. It will be reconciled before use.', 'Context Image Generation');
+            renderAppearanceList();
+            return;
+        }
+
+        if (getContext().chatId !== captured.chatId || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
+            renderAppearanceList();
+            toastr.info('Saved to the appearance library, but the chat changed before it could be activated.', 'Context Image Generation');
+            return;
+        }
+        const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+        const binding = getChatBinding(canon, identity.id);
+        if (binding?.isLocked) {
+            renderAppearanceList();
+            toastr.success('Saved as an alternate; your locked look was not changed.', 'Context Image Generation');
+            return;
+        }
+        const revision = `chat-canon:${crypto.randomUUID()}`;
+        chat_metadata[CHAT_CANON_KEY] = { ...setChatBinding(canon, identity.id, { activeLookId: promoted.look.id, expectedAssetId: promoted.asset.id, isLocked: false, selectedAt: Date.now() }), revision };
+        await getContext().saveMetadata();
+        if (getContext().chatId !== captured.chatId || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
+            toastr.info('Activation verification pending.', 'Context Image Generation');
+            return;
+        }
+        renderAppearanceList();
+        toastr.success('Saved and active in this chat.', 'Context Image Generation');
+    });
 }
 
 function renderAppearanceList() {
@@ -1654,22 +1712,33 @@ function renderAppearanceList() {
     const materialized = materializeAppearanceAssets(library, settings.gallery || []);
     const available = new Set(Object.keys(materialized.assets));
     const entries = listVisibleAppearanceEntries(library, { currentChatId: getContext().chatId });
+    const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
     empty.toggle(entries.length === 0);
     for (const { identity, look } of entries) {
+        const binding = getChatBinding(canon, identity.id);
+        const effectiveLookId = binding?.activeLookId || identity.activeLookId;
+        const active = effectiveLookId === look.id;
         const row = $('<div class="cig_appearance_item" role="listitem"></div>')
             .attr('data-identity-id', identity.id)
             .attr('data-look-id', look.id);
         const text = $('<div class="cig_appearance_item_text"></div>');
         $('<span>').text(`${identity.label}: ${look.label}`).appendTo(text);
-        if (identity.activeLookId === look.id) {
-            $('<small class="cig_appearance_active">Active</small>').appendTo(text);
+        if (active) {
+            $('<small class="cig_appearance_active">Active in this chat</small>').appendTo(text);
+            if (binding?.isLocked) $('<small class="cig_appearance_locked">Locked for this chat</small>').appendTo(text);
         }
         if (!available.has(look.assetId)) $('<small>').text('Unavailable').appendTo(text);
-        if (identity.activeLookId !== look.id) {
+        if (!active) {
             const useLabel = `Use ${look.label} for ${identity.label}`;
             $('<button type="button" class="menu_button cig_appearance_use" title="Use this appearance" aria-label="Use this appearance">')
-                .text('Use')
+                .text('Use in this chat')
                 .attr({ title: useLabel, 'aria-label': useLabel })
+                .appendTo(row);
+        } else {
+            const lockLabel = binding?.isLocked ? 'Unlock' : 'Lock for this chat';
+            $('<button type="button" class="menu_button cig_appearance_lock">')
+                .text(lockLabel)
+                .attr({ 'aria-pressed': binding?.isLocked ? 'true' : 'false', 'aria-label': lockLabel })
                 .appendTo(row);
         }
         const removeLabel = `Remove ${look.label} for ${identity.label}`;
@@ -2459,12 +2528,51 @@ jQuery(async () => {
         renderAppearanceList();
     });
 
-    $(document).on('click', '.cig_appearance_use', function (e) {
+    $(document).on('click', '.cig_appearance_use', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
-        settings.rp_library = setVisibleAppearanceLook(settings.rp_library, row.attr('data-identity-id'), row.attr('data-look-id'), { currentChatId: getContext().chatId });
-        saveSettingsDebounced();
+        const identityId = row.attr('data-identity-id');
+        const lookId = row.attr('data-look-id');
+        const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
+        const look = identity?.looks.find((entry) => entry.id === lookId);
+        if (!look) return;
+        const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+        const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+        const current = getChatBinding(canon, identityId);
+        let confirmed = false;
+        if (current?.isLocked && current.activeLookId !== lookId) {
+            confirmed = await confirmDestructiveAction('Replace the locked look for this chat?', 'Use in this chat');
+            if (!confirmed) return;
+        }
+        if (getContext().chatId !== captured.chatId || !chatLifecycleEpoch.isCurrent(captured.epoch) || getChatBinding(migrateChatCanon(chat_metadata[CHAT_CANON_KEY]), identityId)?.activeLookId !== current?.activeLookId) {
+            toastr.info('The look selection is stale because the chat changed.', 'Context Image Generation');
+            return;
+        }
+        const selected = selectLookForChat(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), confirmed, expectedLookId: current?.activeLookId });
+        if (selected.status !== 'selected') return;
+        chat_metadata[CHAT_CANON_KEY] = { ...selected.state, revision: `chat-canon:${crypto.randomUUID()}` };
+        await getContext().saveMetadata();
+        renderAppearanceList();
+    });
+
+    $(document).on('click', '.cig_appearance_lock', async function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_appearance_item');
+        const identityId = row.attr('data-identity-id');
+        const lookId = row.attr('data-look-id');
+        const identity = migrateAppearanceLibrary(extension_settings[extensionName].rp_library).identities[identityId];
+        const look = identity?.looks.find((entry) => entry.id === lookId);
+        if (!look) return;
+        const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+        let canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+        const binding = getChatBinding(canon, identityId);
+        canon = binding
+            ? setChatLock(canon, identityId, !binding.isLocked)
+            : setChatBinding(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, isLocked: true, selectedAt: Date.now() });
+        if (getContext().chatId !== captured.chatId || !chatLifecycleEpoch.isCurrent(captured.epoch)) return;
+        chat_metadata[CHAT_CANON_KEY] = { ...canon, revision: `chat-canon:${crypto.randomUUID()}` };
+        await getContext().saveMetadata();
         renderAppearanceList();
     });
 
