@@ -960,6 +960,8 @@ function cinematicRuntimeSettings() {
 function renderCinematicSuggestion(suggestion = cinematicRuntime?.getState()?.suggestion) {
     $('.cig_cinematic_suggestion').remove();
     if (!suggestion?.suggestionId || suggestion.target?.messageId === null || suggestion.target?.messageId === undefined) return;
+    if (suggestion.target?.chatId !== undefined && suggestion.target?.epoch !== undefined
+        && !chatCaptureIsCurrent({ chatId: suggestion.target.chatId, epoch: suggestion.target.epoch })) return;
     const messageElement = $(`.mes[mesid="${Number(suggestion.target.messageId)}"]`);
     if (!messageElement.length) return;
     const root = $(renderCinematicSuggestionCard(suggestion));
@@ -1049,9 +1051,18 @@ function createCinematicSurface() {
     cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
     cinematicUiController = createCinematicUiController({
         getSuggestion: () => cinematicRuntime?.getState()?.suggestion,
-        approve: (id) => cinematicRuntime.approve(id).then((result) => { refreshCinematicSurface(); return result; }),
-        adjust: (id, adjustments) => cinematicRuntime.adjust(id, adjustments).then((result) => { refreshCinematicSurface(); return result; }),
-        dismiss: (id) => cinematicRuntime.dismiss(id).then((result) => { refreshCinematicSurface(); return result; }),
+        approve: (id) => {
+            const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+            return cinematicRuntime.approve(id).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+        },
+        adjust: (id, adjustments) => {
+            const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+            return cinematicRuntime.adjust(id, adjustments).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+        },
+        dismiss: (id) => {
+            const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+            return cinematicRuntime.dismiss(id).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+        },
     });
     installCinematicStyles(document);
     refreshCinematicSurface();
@@ -4312,14 +4323,15 @@ jQuery(async () => {
 
     $('#cig_cinematic_retrigger').on('click', async function () {
         const beat = String($('#cig_cinematic_retrigger_beat').val() || '').trim() || 'missed story beat';
+        const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
         try {
-            const result = await cinematicRuntime?.retrigger(beat, `manual:${Date.now()}`, 'missed or failed beat');
+            const result = await cinematicRuntime?.retrigger(beat, `manual:${Date.now()}`, 'missed or failed beat', captured);
             const status = result?.status === 'suggested'
                 ? 'Manual cinematic suggestion is ready. No chat event was replayed.'
                 : result?.status === 'pending-suppressed'
                     ? 'Finish the current cinematic suggestion before adding another.'
                     : result?.reason || 'Manual cinematic suggestion could not be created.';
-            refreshCinematicSurface(result?.suggestion, status);
+            if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(result?.suggestion, status);
             if (result?.status === 'suggested') toastr.info(status, 'Context Image Generation');
             else if (result?.status === 'pending-suppressed') toastr.info(status, 'Context Image Generation');
             else toastr.info(status, 'Context Image Generation');

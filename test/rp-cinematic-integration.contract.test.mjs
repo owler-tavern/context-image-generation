@@ -52,3 +52,9 @@ test('production cinematic runtime binds manual retriggers to the current chat m
     assert.match(index, /createCinematicRuntime\(\{[\s\S]*getChat: \(\) => getContext\(\)\.chat \|\| \[\]/u);
     assert.match(index, /renderCinematicSuggestion\(suggestionOverride\)/u);
 });
+
+test('production manual retrigger captures lifecycle identity and skips stale refreshes', () => {
+    assert.match(index, /const captured = \{ chatId: getContext\(\)\.chatId, epoch: chatLifecycleEpoch\.capture\(\) \};[\s\S]*cinematicRuntime\?\.retrigger\([\s\S]*captured\)/u);
+    assert.match(index, /if \(chatCaptureIsCurrent\(captured\)\) refreshCinematicSurface\(result\?\.suggestion, status\)/u);
+    assert.match(index, /suggestion\.target\.epoch[\s\S]*chatLifecycleEpoch\.capture\(\)/u);
+});

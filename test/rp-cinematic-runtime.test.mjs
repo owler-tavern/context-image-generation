@@ -95,6 +95,68 @@ test('manual retrigger is explicit provenance and does not replay a chat event',
     assert.equal(calls.dispatch, 0);
 });
 
+test('manual retrigger captures chat identity before queued execution', async () => {
+    let releaseInterpretation;
+    let interpretationStarted;
+    const interpretation = new Promise((resolve) => { releaseInterpretation = resolve; });
+    const started = new Promise((resolve) => { interpretationStarted = resolve; });
+    const { runtime, switchChat } = setup({
+        interpret: async () => {
+            interpretationStarted();
+            return interpretation;
+        },
+        getChat: () => [{ mes: 'Ava enters the library.', name: 'Ava' }],
+    });
+    await runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const observing = runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 0, message: { mes: 'Ava enters the library.' } });
+    await interpretationStarted;
+    const retrigger = runtime.retrigger('beat:missed', 'retry-before-queue', 'missed beat');
+    switchChat('chat-b');
+    runtime.load({ chatId: 'chat-b', epoch: 2 });
+    releaseInterpretation({ accepted: false });
+    await observing;
+    const result = await retrigger;
+    assert.equal(result.status, 'stale');
+    assert.match(result.reason, /chat changed/i);
+    assert.equal(runtime.getState().chatId, 'chat-b');
+    assert.equal(runtime.getState().suggestion, null);
+});
+
+test('manual retrigger does not refresh an active chat after persistence crosses a chat switch', async () => {
+    let activeChat = 'chat-a';
+    let activeEpoch = 1;
+    let releaseSave;
+    let saveStarted;
+    const saveGate = new Promise((resolve) => { releaseSave = resolve; });
+    const started = new Promise((resolve) => { saveStarted = resolve; });
+    const durable = new Map();
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => activeChat,
+        getChat: () => [{ mes: `${activeChat} latest message` }],
+        getEpoch: () => activeEpoch,
+        readState: ({ chatId } = {}) => durable.get(chatId || activeChat) || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value, { chatId } = {}) => durable.set(chatId || activeChat, structuredClone(value)),
+        saveDurableState: async () => { saveStarted(); await saveGate; },
+        saveChat: async () => {},
+        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
+        dispatch: async () => ({ status: 'completed' }),
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const retrigger = runtime.retrigger('beat:missed', 'retry-during-save', 'missed beat');
+    await started;
+    activeChat = 'chat-b';
+    activeEpoch = 2;
+    runtime.load({ chatId: 'chat-b', epoch: 2 });
+    releaseSave();
+    const result = await retrigger;
+    assert.equal(result.status, 'stale');
+    assert.match(result.reason, /chat changed/i);
+    assert.equal(runtime.getState().chatId, 'chat-b');
+    assert.equal(runtime.getState().suggestion, null);
+    assert.ok(durable.get('chat-a')?.cinematicAutomation?.session?.pendingSuggestions);
+});
+
 test('generation-count ceiling stops later suggestions after a completed receipt', async () => {
     const { runtime } = setup({ settings: { enabled: true, mode: 'frequent', generationLimit: 1 } });
     await runtime.load({ chatId: 'chat-a', epoch: 1 });
