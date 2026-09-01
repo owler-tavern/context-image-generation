@@ -8,11 +8,14 @@ import {
     createStoryMemory,
     buildReproductionInput,
     getGenerationDetails,
+    getStoryArtifactProvenance,
     getStoryTimeline,
     listStoryCollectionMembers,
     migrateGalleryEntries,
     migrateStoryMemory,
     planContinueFromScene,
+    removeStoryCollectionMember,
+    resolveArtifactIdAlias,
     searchStoryArtifacts,
     STORY_MEMORY_SCHEMA,
     toggleStoryFavorite,
@@ -87,6 +90,63 @@ test('upgrades legacy story IDs, merges the matching Gallery physical artifact, 
     assert.ok(migrated.artifacts[canonicalId].aliases.includes(legacyId));
     assert.deepEqual(migrated.collections.canon.memberIds, [canonicalId]);
     assert.deepEqual(migrated, migrateStoryMemory(migrated, { gallery, chatId: 'chat-a' }));
+});
+
+test('resolves migrated artifact aliases across every ID-based story-memory entrypoint', () => {
+    const canonicalId = 'story:v1:6:chat-a:14:gallery-legacy';
+    const legacyId = 'story:chat-a:gallery-legacy';
+    const artifact = generated({ id: canonicalId, url: '/legacy.png', chatId: 'chat-a', messageId: 8 });
+    let memory = addStoryArtifact(createStoryMemory(), { ...artifact, aliases: [legacyId] });
+
+    assert.equal(resolveArtifactIdAlias(memory, legacyId), canonicalId);
+    assert.deepEqual(getGenerationDetails(memory, legacyId), getGenerationDetails(memory, canonicalId));
+    assert.deepEqual(getStoryArtifactProvenance(memory, legacyId), getStoryArtifactProvenance(memory, canonicalId));
+    assert.deepEqual(buildReproductionInput(memory, legacyId), buildReproductionInput(memory, canonicalId));
+    assert.deepEqual(planContinueFromScene(memory, legacyId, { at: '2026-08-01' }), planContinueFromScene(memory, canonicalId, { at: '2026-08-01' }));
+
+    memory = toggleStoryFavorite(memory, legacyId, true);
+    assert.equal(memory.artifacts[canonicalId].favorite, true);
+    assert.equal(memory.artifacts[legacyId], undefined);
+
+    memory = addStoryCollectionMember(memory, { collectionId: 'legacy-members', artifactId: legacyId });
+    assert.deepEqual(memory.collections['legacy-members'].memberIds, [canonicalId]);
+    assert.deepEqual(listStoryCollectionMembers(memory, 'legacy-members').map((item) => item.id), [canonicalId]);
+    memory = removeStoryCollectionMember(memory, 'legacy-members', legacyId);
+    assert.deepEqual(memory.collections['legacy-members'].memberIds, []);
+
+    memory = addStoryArtifact(memory, { ...artifact, id: legacyId, prompt: 'updated through alias' });
+    assert.equal(memory.artifacts[canonicalId].prompt, 'updated through alias');
+    assert.equal(Object.keys(memory.artifacts).length, 1);
+    assert.ok(memory.artifacts[canonicalId].aliases.includes(legacyId));
+});
+
+test('migrates collection aliases and rejects unknown or ambiguous alias resolution safely', () => {
+    const canonicalId = 'canonical-artifact';
+    const legacyId = 'legacy-artifact';
+    const migrated = migrateStoryMemory({
+        artifacts: { [canonicalId]: { ...generated({ id: canonicalId }), aliases: [legacyId] } },
+        collections: { canon: { id: 'canon', memberIds: [legacyId] } },
+    });
+    assert.equal(resolveArtifactIdAlias(migrated, legacyId), canonicalId);
+    assert.deepEqual(migrated.collections.canon.memberIds, [canonicalId]);
+    assert.equal(resolveArtifactIdAlias(migrated, 'missing-artifact'), null);
+
+    const ambiguous = {
+        artifacts: {
+            first: { ...generated({ id: 'first' }), aliases: ['shared-alias'] },
+            second: { ...generated({ id: 'second' }), aliases: ['shared-alias'] },
+        },
+    };
+    assert.equal(resolveArtifactIdAlias(ambiguous, 'shared-alias'), null);
+
+    const cyclic = {
+        artifacts: {
+            first: { ...generated({ id: 'first' }), aliases: ['second'] },
+            second: { ...generated({ id: 'second' }), aliases: ['first'] },
+        },
+    };
+    assert.equal(resolveArtifactIdAlias(cyclic, 'first'), null);
+    assert.equal(resolveArtifactIdAlias(cyclic, 'second'), null);
 });
 
 test('artifact IDs are unambiguous for delimiter-heavy chat/source values', () => {
