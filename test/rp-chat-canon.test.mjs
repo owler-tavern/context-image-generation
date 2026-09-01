@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint, clearChatBinding } from '../lib/rp/chat-canon.js';
+import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint, clearChatBinding, getChatAppearanceSource, getChatWandPreferences, setChatAppearanceSource, setChatWandPreferences, clearChatAppearanceSource } from '../lib/rp/chat-canon.js';
 
 test('chat canon contains only schema and bindings', () => {
     const state = migrateChatCanon({ bindings: {} });
@@ -52,4 +52,33 @@ test('binding fingerprint changes across A to B to A revisions', () => {
     const b = { ...setChatBinding(a1, 'character:ava', { activeLookId: 'look:b', expectedAssetId: 'asset:b', selectedAt: 2 }), revision: 'r2' };
     const a2 = { ...setChatBinding(b, 'character:ava', { activeLookId: 'look:a', expectedAssetId: 'asset:a', selectedAt: 3 }), revision: 'r3' };
     assert.notEqual(chatCanonRevisionFingerprint(a1, 'character:ava'), chatCanonRevisionFingerprint(a2, 'character:ava'));
+});
+
+test('chat canon stores bounded appearance source choices as stable identity data', () => {
+    const original = { schema: 1, bindings: {}, appearanceSources: {
+        'user:persona-a.png': { identityId: 'user:persona-a.png', sourceType: 'avatar', role: 'persona', sourceId: 'user:persona-a.png', selectedAt: 1 },
+        unsafe: { identityId: 'user:persona-a.png', sourceType: 'description', sourceId: '/raw/path/should-drop' },
+    } };
+    const state = migrateChatCanon(original);
+    assert.deepEqual(getChatAppearanceSource(state, 'user:persona-a.png'), {
+        identityId: 'user:persona-a.png', sourceType: 'avatar', role: 'persona', sourceId: 'user:persona-a.png', selectedAt: 1,
+    });
+    assert.equal(getChatAppearanceSource(state, 'user:persona-b.png', 'persona').identityId, 'user:persona-a.png');
+    const changed = setChatAppearanceSource(state, 'user:persona-b.png', { identityId: 'user:persona-b.png', sourceType: 'description', role: 'persona', sourceId: 'user:persona-b.png', selectedAt: 2 });
+    assert.equal(getChatAppearanceSource(changed, 'user:persona-b.png', 'persona').sourceType, 'description');
+    assert.equal('unsafe' in changed.appearanceSources, false);
+    const cleared = clearChatAppearanceSource(changed, 'user:persona-a.png');
+    assert.equal(getChatAppearanceSource(cleared, 'user:persona-b.png', 'persona').sourceType, 'description');
+    assert.equal(getChatAppearanceSource(clearChatAppearanceSource(cleared, 'user:persona-b.png'), 'user:persona-b.png', 'persona'), null);
+    assert.deepEqual(original.appearanceSources.unsafe.sourceId, '/raw/path/should-drop');
+});
+
+test('wand framing, continuity, and direction are isolated per chat and bounded', () => {
+    const original = { schema: 1, bindings: {} };
+    const changed = setChatWandPreferences(original, { framing: 'wide', continuity: 'strong', visualDirection: '  blue   hour '.repeat(120) });
+    assert.deepEqual(getChatWandPreferences(original), null);
+    assert.equal(getChatWandPreferences(changed).framing, 'wide');
+    assert.equal(getChatWandPreferences(changed).continuity, 'strong');
+    assert.ok(getChatWandPreferences(changed).visualDirection.length <= 1000);
+    assert.equal(getChatWandPreferences(setChatWandPreferences({}, { framing: 'bad', continuity: 'bad' })).framing, 'auto');
 });

@@ -141,6 +141,12 @@
     }
 }
 
+#cig_chat_appearance_sources_list { display: flex; flex-direction: column; gap: .5rem; margin-top: .75rem; }
+.cig_chat_appearance_row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem); gap: .5rem; align-items: center; }
+.cig_chat_appearance_row select, .cig_chat_appearance_row button { min-height: 44px; width: 100%; }
+.cig_chat_appearance_row small { display: block; opacity: .75; }
+@media (max-width: 480px) { .cig_chat_appearance_row { grid-template-columns: 1fr; } }
+
 #cig_settings .inline-drawer-content {
     display: flex;
     flex-direction: column;
@@ -253,15 +259,6 @@
     max-width: 100%;
     border-radius: 8px;
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-}
-
-#cig_generate_btn.generating {
-    opacity: 0.6;
-    pointer-events: none;
-}
-
-#cig_generate_btn.generating i {
-    animation: spin 1s linear infinite;
 }
 
 @keyframes spin {

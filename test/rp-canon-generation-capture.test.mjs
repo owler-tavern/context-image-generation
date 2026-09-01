@@ -212,3 +212,31 @@ test('group character references stay distinct and materialize through identity-
     assert.deepEqual(Object.keys(assets), ['asset:host-character', 'asset:host-character:character:leo.png']);
     assert.equal(assets['asset:host-character:character:leo.png'].data, 'character:leo.png');
 });
+
+test('description source choice suppresses the host avatar reference without changing identity', () => {
+    const persona = { id: 'user:persona-b.png', kind: 'user', label: 'Persona B', hostKey: 'persona-b.png' };
+    const references = resolveHostAvatarIdentityReferences({
+        identities: [persona],
+        personaAvatar: 'persona-b.png',
+        sourcePreferences: { [persona.id]: { sourceType: 'description' } },
+    });
+    assert.deepEqual(references, []);
+});
+
+test('description choice keeps the stable identity in the provider plan while using written appearance and no avatar asset', () => {
+    const persona = { id: 'user:persona-b.png', kind: 'user', label: 'Persona B', hostKey: 'persona-b.png' };
+    const captured = captureCanonForGeneration({
+        library: { schema: 2, identities: { [persona.id]: { ...persona, looks: [] } }, assets: {} },
+        chatState: { schema: 1, appearanceSources: { [persona.id]: { identityId: persona.id, sourceId: persona.id, sourceType: 'description', role: 'persona' } } },
+        identities: [persona],
+        references: resolveHostAvatarIdentityReferences({ identities: [persona], personaAvatar: persona.hostKey, sourcePreferences: { [persona.id]: { sourceType: 'description' } } }),
+    });
+    const plan = createGenerationPlan({
+        id: 'plan:description-source', invocation: 'director', provider: { ...provider, capabilities: { referenceImages: { maxCount: 4 } } },
+        prompt: { sourceMessage: 'Persona B enters.', descriptionText: 'Persona B has short dark hair and a blue jacket.' },
+        canonSnapshot: captured.canonSnapshot, references: captured.references, identities: [persona],
+    });
+    assert.deepEqual(plan.references, []);
+    assert.match(plan.prompt.descriptionText, /short dark hair and a blue jacket/);
+    assert.equal(plan.identities[0].id, persona.id);
+});

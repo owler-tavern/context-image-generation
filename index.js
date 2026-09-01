@@ -67,7 +67,7 @@ import {
     projectAppearanceLookActionState,
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
-import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
+import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatAppearanceSource, getChatBinding, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedIterationArtifact, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
@@ -1210,6 +1210,8 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     const context = getContext();
     const settings = extension_settings[extensionName] || {};
     const identities = getAppearanceIdentityChoices();
+    const sourcePreferences = appearanceSourcePreferences();
+    const personaIdentity = identities.find((identity) => identity.kind === 'user');
     const recentContext = (context.chat || []).slice(Math.max(0, Number(target?.messageId) - 11), Number(target?.messageId));
     const snapshot = buildSceneGenerationSnapshot({
         selectedPassage: focusText || sourceMessage,
@@ -1234,8 +1236,9 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
         ? resolveHostAvatarIdentityReferences({
             identities,
             activeCharacterAvatar: activeCharacter?.avatar,
-            personaAvatar: user_avatar,
+            personaAvatar: personaIdentity?.hostKey || user_avatar,
             groupCharacterAvatars,
+            sourcePreferences,
         })
         : [];
     const referenceCandidates = buildContinuityReferenceCandidates({
@@ -1248,6 +1251,18 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     });
     const ready = projectContinuityShelf({ identities, truths, candidates: referenceCandidates, includeDescriptions: settings.include_descriptions === true, includeAvatars: settings.use_avatars === true });
     const readyLabels = (ready.identities || []).filter((entry) => entry.sourceType && entry.sourceType !== 'none').map((entry) => `${entry.identityLabel}: ${entry.sourceType} ready`).slice(0, 6);
+    const appearanceSources = identities.filter((identity) => ['character', 'user'].includes(identity.kind)).map((identity) => {
+        const source = getChatAppearanceSource(migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]), identity.id, identity.kind === 'user' ? 'persona' : identity.kind);
+        const truth = truths.find((entry) => entry.identityId === identity.id);
+        return {
+            identityId: identity.id,
+            identityLabel: identity.label || identity.id,
+            sourceType: source?.sourceType || truth?.sourcePreference || 'auto',
+            ready: truth?.sourceType !== 'none',
+            pinned: Boolean(source),
+            ...(identity.kind === 'user' && source?.identityId !== `user:${user_avatar || 'display'}` ? { replaceIdentityId: `user:${user_avatar || 'display'}` } : {}),
+        };
+    });
     const currentSettings = extension_settings[extensionName] || {};
     const routeSummary = directorRouteReadiness(currentSettings).text;
     return {
@@ -1257,6 +1272,7 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
         referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
         routeSummary,
         budgetSummary: 'Exact provider cost is unavailable; one generation will be requested only when Generate is pressed.',
+        appearanceSources,
     };
 }
 
@@ -1446,9 +1462,7 @@ async function loadSettings() {
     $('#cig_regenerate_on_swipe').prop('checked', extension_settings[extensionName].regenerate_on_swipe);
     $('#cig_auto_generate').val(extension_settings[extensionName].auto_generate);
     $('#cig_message_depth').val(extension_settings[extensionName].message_depth);
-    $('#cig_framing_preference').val(extension_settings[extensionName].framing_preference);
-    $('#cig_continuity_strength').val(extension_settings[extensionName].continuity_strength);
-    $('#cig_custom_visual_instruction').val(extension_settings[extensionName].custom_visual_instruction);
+    syncChatWandPreferenceControls();
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
     const cinematicSettings = extension_settings[extensionName].cinematic_automation;
     $('#cig_cinematic_enabled').prop('checked', cinematicSettings.enabled === true);
@@ -1466,10 +1480,10 @@ async function loadSettings() {
     renderSetupRuntimeIssue();
     renderGallery();
     renderAppearanceList();
+    renderChatAppearanceSources();
     createStoryMemorySurface();
     createCinematicSurface();
     createVisualStorySurface();
-    createDirectorSurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -1620,9 +1634,10 @@ function updateSizeDropdown(imageSizeOptions, selectedValue = extension_settings
     $sizeSelect.val(selectedValue);
 }
 
-async function getUserAvatar() {
+async function getUserAvatar(avatarIdentityId = null) {
     try {
-        let avatarUrl = getAvatarPath(user_avatar);
+        const avatarKey = String(avatarIdentityId || '').replace(/^user:/u, '') || user_avatar;
+        let avatarUrl = getAvatarPath(avatarKey);
         if (!avatarUrl) return null;
 
         const response = await fetch(avatarUrl);
@@ -1806,6 +1821,10 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const capability = getReferenceImageCapability(providerId, modelId);
     const referenceCandidates = [];
     const settingsSnapshot = cloneSnapshot(settings) || {};
+    const chatPreferences = chatWandPreferences();
+    if (chatPreferences.framing) settingsSnapshot.framing_preference = chatPreferences.framing;
+    if (chatPreferences.continuity) settingsSnapshot.continuity_strength = chatPreferences.continuity;
+    if (chatPreferences.visualDirection != null) settingsSnapshot.custom_visual_instruction = chatPreferences.visualDirection;
     if (generationOverrides && typeof generationOverrides === 'object') {
         if (typeof generationOverrides.framing === 'string') settingsSnapshot.framing_preference = generationOverrides.framing;
         if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
@@ -1818,6 +1837,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }, ...gallerySnapshot]
         : gallerySnapshot;
     const appearanceIdentities = getAppearanceIdentityChoices();
+    const sourcePreferences = appearanceSourcePreferences();
     if (capability && (settingsSnapshot.use_previous_image || continuationIsCurrent) && continuationGallery.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: continuationIsCurrent ? 'selected story scene' : 'previous image' });
     // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
     // the captured capability/setting snapshot below is the authority.
@@ -1827,8 +1847,9 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referenceCandidates.push(...resolveHostAvatarIdentityReferences({
             identities: appearanceIdentities,
             activeCharacterAvatar: activeCharacter?.avatar,
-            personaAvatar: user_avatar,
+            personaAvatar: appearanceIdentities.find((identity) => identity.kind === 'user')?.hostKey || user_avatar,
             groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
+            sourcePreferences,
         }));
     }
     const canonCapture = captureCanonForGeneration({
@@ -1839,6 +1860,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         references: referenceCandidates,
     });
     const appearanceTruthEntries = continuityTruths(appearanceIdentities);
+    persistAppearanceSourcePins(appearanceIdentities, appearanceTruthEntries);
     const continuityCandidates = buildContinuityReferenceCandidates({
         identities: appearanceIdentities,
         truths: appearanceTruthEntries,
@@ -2266,7 +2288,7 @@ function getAppearanceIdentityChoices() {
     const library = extension_settings[extensionName]?.rp_library;
     const chatIdentities = Object.values(library?.identities || {})
         .filter((identity) => identity.kind === 'npc' && identity.durable === false);
-    return listAppearanceIdentityChoices({
+    const choices = listAppearanceIdentityChoices({
         activeCharacter: character,
         persona: { avatar: user_avatar, name: name1 || 'User' },
         groupMembers,
@@ -2274,6 +2296,19 @@ function getAppearanceIdentityChoices() {
         library,
         currentChatId: context.chatId,
     });
+    // A persona avatar key is part of the stable identity ID. If this chat
+    // already pinned a prior persona, keep that exact identity in the active
+    // catalogue until the player deliberately replaces it.
+    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    const currentPersonaId = user_avatar ? `user:${user_avatar}` : 'user:display';
+    const pinnedPersona = getChatAppearanceSource(canon, currentPersonaId, 'persona');
+    if (pinnedPersona && pinnedPersona.identityId !== currentPersonaId && !choices.some((identity) => identity.id === pinnedPersona.identityId)) {
+        const pinnedHostKey = String(pinnedPersona.sourceId || pinnedPersona.identityId).replace(/^user:/u, '');
+        const currentIndex = choices.findIndex((identity) => identity.kind === 'user');
+        const pinned = { id: pinnedPersona.identityId, kind: 'user', label: 'Pinned persona', hostKey: pinnedHostKey, durable: true };
+        if (currentIndex >= 0) choices.splice(currentIndex, 1, pinned); else choices.push(pinned);
+    }
+    return choices;
 }
 
 function continuityHostSources() {
@@ -2292,8 +2327,13 @@ function continuityHostSources() {
 function identityHostRecord(identity) {
     const id = String(identity?.id || '');
     const hostKey = String(identity?.hostKey || id.replace(/^(?:character|user):/u, '')).trim();
-    return continuityHostSources().find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey)
-        || (identity?.kind === 'user' ? { description: power_user.persona_description || '' } : null);
+    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    const source = getChatAppearanceSource(canon, id, identity?.kind === 'user' ? 'persona' : '');
+    const pinnedHostKey = source?.sourceType === 'avatar' && source.sourceId === id ? String(source.sourceId).replace(/^(?:character|user):/u, '') : '';
+    const current = continuityHostSources().find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey);
+    if (current) return current;
+    if (source?.identityId === id) return pinnedHostKey ? { avatar: pinnedHostKey } : null;
+    return identity?.kind === 'user' ? { description: power_user.persona_description || '' } : null;
 }
 
 function continuityTruths(identities) {
@@ -2305,9 +2345,56 @@ function continuityTruths(identities) {
             const avatar = record.avatar
                 ? { path: identity.kind === 'character' ? `/characters/${encodeURIComponent(record.avatar)}` : getAvatarPath(record.avatar), characterId: identity.id }
                 : null;
-            return { avatar, description: record.description || '' };
+            const source = getChatAppearanceSource(migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]), identity.id, identity.kind === 'user' ? 'persona' : '');
+            return { avatar, description: record.description || '', sourcePreference: source?.sourceType || 'auto' };
         },
     });
+}
+
+function appearanceSourcePreferences() {
+    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    return canon.appearanceSources || {};
+}
+
+function chatWandPreferences() {
+    return getChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY]) || {};
+}
+
+function setChatWandPreference(name, value) {
+    chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { [name]: value });
+    void saveChatConditional();
+}
+
+function persistAppearanceSourcePins(identities, truths) {
+    let next = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    let changed = false;
+    for (const truth of Array.isArray(truths) ? truths : []) {
+        const identity = identities.find((entry) => entry.id === truth.identityId);
+        if (!identity || !['character', 'user'].includes(identity.kind) || !['avatar', 'description'].includes(truth.sourceType)) continue;
+        const role = identity.kind === 'user' ? 'persona' : 'character';
+        if (getChatAppearanceSource(next, identity.id, role)) continue;
+        next = setChatAppearanceSource(next, identity.id, { identityId: identity.id, sourceId: identity.id, sourceType: truth.sourceType, role });
+        changed = true;
+    }
+    if (!changed) return false;
+    chat_metadata[CHAT_CANON_KEY] = next;
+    void saveChatConditional();
+    return true;
+}
+
+function chooseAppearanceSource(identityId, sourceType) {
+    const context = getContext();
+    const identity = getAppearanceIdentityChoices().find((entry) => entry.id === identityId)
+        || (identityId === `user:${user_avatar || 'display'}` ? { id: identityId, kind: 'user', hostKey: user_avatar || 'display', label: name1 || 'User' } : null)
+        || (identityId === `character:${context.characters?.[context.characterId]?.avatar || ''}` ? { id: identityId, kind: 'character', hostKey: context.characters?.[context.characterId]?.avatar, label: context.name2 || 'Character' } : null);
+    if (!identity || !['auto', 'avatar', 'description'].includes(sourceType)) return { status: 'unavailable' };
+    const role = identity.kind === 'user' ? 'persona' : identity.kind;
+    const next = setChatAppearanceSource(chat_metadata?.[CHAT_CANON_KEY], identity.id, { identityId: identity.id, sourceId: identity.id, sourceType, role });
+    chat_metadata[CHAT_CANON_KEY] = next;
+    void saveChatConditional();
+    renderContinuityShelves();
+    renderChatAppearanceSources();
+    return { status: 'selected', identityId: identity.id, sourceType };
 }
 
 function presentContinuityIdentities(message = null) {
@@ -3100,6 +3187,43 @@ async function rememberGalleryAppearance(index, mediaTarget = null) {
     return { activation, identityId: identity.id, lookId: activation.promoted?.look?.id || null };
 }
 
+function renderChatAppearanceSources() {
+    const list = $('#cig_chat_appearance_sources_list');
+    if (!list.length) return;
+    list.empty();
+    const identities = getAppearanceIdentityChoices().filter((identity) => ['character', 'user'].includes(identity.kind));
+    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    if (!identities.length) {
+        $('<p>').text('No current character or persona identity is available.').appendTo(list);
+        return;
+    }
+    const currentPersonaId = `user:${user_avatar || 'display'}`;
+    for (const identity of identities) {
+        const source = getChatAppearanceSource(canon, identity.id, identity.kind === 'user' ? 'persona' : identity.kind);
+        const truth = continuityTruths([identity])[0];
+        const selected = source?.sourceType || truth?.sourcePreference || 'auto';
+        const row = $('<div class="cig_chat_appearance_row"></div>').attr('data-identity-id', identity.id);
+        const controlId = `cig_chat_source_${identity.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
+        const label = $('<label>').attr('for', controlId).text(identity.label || identity.id);
+        $('<small>').text(`${truth?.sourceType === 'none' ? 'Not ready' : `${truth?.sourceType || 'auto'} ready`}${source ? ' · Pinned in this chat.' : ' · Follows this chat identity.'}`).appendTo(label);
+        const select = $('<select class="cig-setting cig_chat_appearance_select"></select>').attr({ id: controlId, 'aria-label': `Appearance source for ${identity.label || identity.id}`, 'data-cig-chat-appearance-source': identity.id });
+        for (const option of [['auto', 'Auto (recommended)'], ['avatar', 'Avatar'], ['description', 'Description']]) $('<option>').val(option[0]).text(option[1]).prop('selected', selected === option[0]).appendTo(select);
+        row.append(label, select);
+        if (identity.kind === 'user' && source && source.identityId !== currentPersonaId) {
+            $('<button type="button" class="menu_button cig_chat_appearance_replace">Replace pinned identity</button>').attr({ 'data-cig-chat-appearance-replace': currentPersonaId, 'data-cig-chat-appearance-old': source.identityId, 'aria-label': 'Replace pinned persona appearance for this chat' }).appendTo(row);
+        }
+        list.append(row);
+    }
+}
+
+function syncChatWandPreferenceControls() {
+    const settings = extension_settings[extensionName] || {};
+    const preferences = chatWandPreferences();
+    $('#cig_framing_preference').val(preferences.framing || settings.framing_preference || 'auto');
+    $('#cig_continuity_strength').val(preferences.continuity || settings.continuity_strength || 'balanced');
+    $('#cig_custom_visual_instruction').val(preferences.visualDirection ?? settings.custom_visual_instruction ?? '');
+}
+
 function renderAppearanceList(lifecycleView = null) {
     const settings = extension_settings[extensionName] || {};
     const list = $('#cig_appearance_list').empty();
@@ -3160,41 +3284,6 @@ function renderAppearanceList(lifecycleView = null) {
         list.append(row);
     }
     renderVisualStoryOverview();
-}
-
-async function generateImage() {
-    const settings = extension_settings[extensionName];
-    const depth = settings.message_depth || 1;
-    const recentMessages = getRecentMessages(depth);
-
-    if (recentMessages.length === 0) {
-        toastr.warning('No message found to generate image from.', 'Context Image Generation');
-        return;
-    }
-
-    const generateBtn = $('#cig_generate_btn');
-    setBusyState(generateBtn, true, { busyTitle: 'Generating image…' });
-    generateBtn.find('i').removeClass('fa-image').addClass('fa-spinner fa-spin');
-
-    const lastMsg = recentMessages[recentMessages.length - 1];
-    const sender = lastMsg.isUser ? `{{user}} (${lastMsg.name})` : `{{char}} (${lastMsg.name})`;
-
-    try {
-        const result = await generateImageFromPrompt(lastMsg.text, sender, null);
-
-        if (result) {
-            const imageDataUrl = `data:${result.mimeType};base64,${result.imageData}`;
-            $('#cig_preview_image').attr('src', imageDataUrl);
-            $('#cig_preview_container').prop('hidden', false);
-            await addToGallery(result.imageData, lastMsg.text, null);
-        }
-
-    } catch (error) {
-        showGenerationError(error);
-    } finally {
-        setBusyState(generateBtn, false);
-        generateBtn.find('i').removeClass('fa-spinner fa-spin').addClass('fa-image');
-    }
 }
 
 async function cigMessageButton($icon, { captureSelection = true, generationInput = null, invocation = 'wand' } = {}) {
@@ -3552,11 +3641,8 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
     const button = $('<button type="button" class="menu_button cig_iteration_improve" data-cig-iteration-open="true" data-cig-iteration-improve="true" style="min-height:44px"></button>')
         .text('Improve')
         .attr({ title: 'Improve this generated image', 'aria-label': 'Improve this generated image', 'data-message-id': String(messageId) });
-    const memoryButton = $('<button type="button" class="menu_button cig_story_memory_inline" style="min-height:44px"></button>')
-        .text('Open story memory')
-        .attr({ title: 'Open this image in visual story memory', 'aria-label': 'Open this image in visual story memory', 'data-message-id': String(messageId) });
     const host = $('<div class="cig_iteration_host" data-cig-iteration-host hidden></div>');
-    root.append(button, memoryButton, host);
+    root.append(button, host);
     const anchor = messageElement.find('.mes_img_container, .mes_media_container').last();
     if (anchor.length) anchor.after(root); else messageElement.append(root);
     button.on('click', () => {
@@ -3807,17 +3893,6 @@ function injectMessageButton(messageId) {
             extraButtons.prepend(cigButton);
         }
     }
-    const message = getContext().chat?.[Number(messageId)];
-    if (!message || message.is_system) return;
-    messageElement.find('.cig_message_director').remove();
-    messageElement.find('.cig_message_visual_story').remove();
-    const directorButton = $('<button type="button" class="menu_button cig_message_director cig_message_director_inline">Direct this scene</button>')
-        .attr({ title: 'Direct this scene', 'aria-label': 'Direct this scene' });
-    const visualStoryButton = $('<button type="button" class="menu_button cig_message_visual_story cig_message_visual_story_inline">Visual Story</button>')
-        .attr({ title: 'Open this chat\'s Visual Story surface', 'aria-label': 'Open this chat\'s Visual Story surface' });
-    const textAnchor = messageElement.find('.mes_text').last();
-    if (textAnchor.length) textAnchor.after(directorButton); else messageElement.append(directorButton);
-    directorButton.after(visualStoryButton);
 }
 
 function visibleCanonMessageSender(message) {
@@ -4467,19 +4542,32 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_framing_preference').on('change', function () {
-        extension_settings[extensionName].framing_preference = $(this).val() || 'auto';
-        saveSettingsDebounced();
+    $('#cig_framing_preference').on('change', function () { setChatWandPreference('framing', $(this).val() || 'auto'); });
+
+    $('#cig_continuity_strength').on('change', function () { setChatWandPreference('continuity', $(this).val() || 'balanced'); });
+
+    $('#cig_custom_visual_instruction').on('input', function () { setChatWandPreference('visualDirection', String($(this).val() || '').slice(0, 1000)); });
+
+    $(document).on('change', '[data-cig-chat-appearance-source]', function (e) {
+        e.preventDefault();
+        try { chooseAppearanceSource($(this).attr('data-cig-chat-appearance-source'), String($(this).val() || 'auto')); }
+        catch (error) { showGenerationError(error, 'Update chat appearance source'); }
     });
 
-    $('#cig_continuity_strength').on('change', function () {
-        extension_settings[extensionName].continuity_strength = $(this).val() || 'balanced';
-        saveSettingsDebounced();
-    });
-
-    $('#cig_custom_visual_instruction').on('input', function () {
-        extension_settings[extensionName].custom_visual_instruction = String($(this).val() || '').slice(0, 4000);
-        saveSettingsDebounced();
+    $(document).on('click', '[data-cig-chat-appearance-replace]', function (e) {
+        e.preventDefault();
+        const nextIdentityId = $(this).attr('data-cig-chat-appearance-replace');
+        const oldIdentityId = $(this).attr('data-cig-chat-appearance-old');
+        if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Replace the pinned appearance for this chat with the current identity?')) return;
+        try {
+            chooseAppearanceSource(nextIdentityId, 'auto');
+            const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+            const sources = { ...(canon.appearanceSources || {}) };
+            delete sources[oldIdentityId];
+            chat_metadata[CHAT_CANON_KEY] = { ...canon, appearanceSources: sources };
+            void saveChatConditional();
+            renderChatAppearanceSources();
+        } catch (error) { showGenerationError(error, 'Replace chat appearance'); }
     });
 
     $('#cig_system_instruction').on('input', function () {
@@ -4487,7 +4575,6 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_generate_btn').on('click', generateImage);
     $('#cig_clear_gallery').on('click', clearGallery);
 
     $(document).on('click', '.cig_gallery_preview', function () {
@@ -4509,11 +4596,6 @@ jQuery(async () => {
         e.stopPropagation();
         const index = $(this).data('index');
         await deleteGalleryImage(index);
-    });
-
-    $(document).on('click', '.cig_story_memory_inline', function (e) {
-        e.stopPropagation();
-        openStoryMemoryArtifact($(this).attr('data-message-id'));
     });
 
     $(document).on('click', '.cig_appearance_stop', async function (e) {
@@ -4632,20 +4714,6 @@ jQuery(async () => {
         return true;
     }
 
-    $(document).on('click', '.cig_message_visual_story', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const result = revealVisualStorySurface();
-        if (result?.status !== 'revealed' && result?.status !== 'pending') toastr.info('Visual Story is not available until the extension settings are mounted.', 'Visual Story');
-    });
-
-    $(document).on('keydown', '.cig_message_visual_story', function (e) {
-        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
-        e.preventDefault();
-        e.stopPropagation();
-        $(e.currentTarget).trigger('click');
-    });
-
     $(document).on('click', '[data-cig-visual-story-action]', function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -4663,111 +4731,6 @@ jQuery(async () => {
             }
             focusVisualStoryTarget('#cig_cinematic_automation');
         }
-    });
-
-    async function openDirectorFromTrigger(trigger) {
-        const messageElement = $(trigger).closest('.mes');
-        const messageId = Number(messageElement.attr('mesid'));
-        const context = getContext();
-        const chatId = context.chatId;
-        const epoch = chatLifecycleEpoch.capture();
-        const message = context.chat?.[messageId];
-        if (!message || message.is_system) return;
-        const sender = visibleCanonMessageSender(message);
-        const captured = captureWandGenerationInput({
-            chatId,
-            messageId,
-            message,
-            messageElement: messageElement[0],
-            selection: document.getSelection?.(),
-            sender,
-            captureSelection: true,
-        });
-        const focusCapture = { trigger, chatId, epoch, messageId };
-        directorFocusCapture = focusCapture;
-        try {
-            const result = await directorUiController?.open({
-                chatId,
-                epoch,
-                messageId,
-                message,
-                messageFingerprint: captured.target?.messageFingerprint,
-                selectionText: captured.focusText,
-            });
-            if (result?.status === 'open' && directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture)) {
-                focusDirectorPanel({ documentLike: document, messageId });
-            } else if (result?.status === 'stale') {
-                toastr.info('That message is no longer current.', 'Direct this scene');
-            }
-        } catch (error) {
-            showGenerationError(error, 'Open Director');
-        }
-    }
-
-    $(document).on('click', '.cig_message_director', async function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        await openDirectorFromTrigger(e.currentTarget);
-    });
-
-    $(document).on('keydown', '.cig_message_director', function (e) {
-        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
-        e.preventDefault();
-        e.stopPropagation();
-        $(e.currentTarget).trigger('click');
-    });
-
-    $(document).on('change', '.cig_director_panel [data-director-field]', async function (e) {
-        e.preventDefault();
-        const panel = $(this).closest('.cig_director_panel');
-        const values = {};
-        panel.find('[data-director-field]').each(function () { values[$(this).attr('data-director-field')] = $(this).val(); });
-        try { await directorUiController?.update(values); }
-        catch (error) { showGenerationError(error, 'Update Director'); }
-    });
-
-    $(document).on('click', '.cig_director_panel [data-director-cast-action]', async function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const button = this;
-        const panel = $(button).closest('.cig_director_panel');
-        const identityId = String($(button).attr('data-director-cast-id') || '');
-        const action = String($(button).attr('data-director-cast-action') || '');
-        const castOverrides = [];
-        panel.find('[data-director-cast-row]').each(function () {
-            const row = $(this);
-            const rowId = String(row.attr('data-director-cast-id') || '');
-            const rowAction = rowId === identityId ? action : String(row.attr('data-current-action') || 'include');
-            if (rowId && ['auto', 'include', 'focus', 'exclude'].includes(rowAction)) castOverrides.push({ identityId: rowId, action: rowAction });
-        });
-        setBusyState(button, true, { busyTitle: 'Updating cast…' });
-        try { await directorUiController?.update({ castOverrides }); }
-        catch (error) { showGenerationError(error, 'Update Director cast'); }
-        finally { setBusyState(button, false); }
-    });
-
-    $(document).on('click', '.cig_director_panel [data-director-action]', async function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const action = $(this).attr('data-director-action');
-        const panel = $(this).closest('.cig_director_panel');
-        const panelMessageId = Number(panel.attr('data-message-id'));
-        const focusCapture = directorFocusCapture;
-        setBusyState(this, true, { busyTitle: action === 'generate' ? 'Generating directed image…' : 'Closing Director…' });
-        try {
-            const result = await directorUiController?.action(action);
-            if (result?.status === 'completed') toastr.success('Directed image generated.', 'Direct this scene');
-            else if (result?.status === 'stale') toastr.info(result.reason || 'This message or draft is no longer current.', 'Direct this scene');
-            else if (result?.status === 'route-invalid') toastr.info(result.reason || 'Choose a ready image route first.', 'Direct this scene');
-            if (action === 'close' && result?.status === 'closed' && focusCapture?.messageId === panelMessageId
-                && directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture)) {
-                restoreDirectorTriggerFocus({
-                    trigger: focusCapture.trigger,
-                    isCurrent: () => directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture),
-                });
-            }
-        } catch (error) { showGenerationError(error, 'Director'); }
-        finally { setBusyState(this, false); }
     });
 
     $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {
@@ -4802,7 +4765,7 @@ jQuery(async () => {
             chatId: getContext().chatId,
             chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
         }),
-        render: (view) => { renderAppearanceList(view); refreshVisibleCanonControls(); },
+        render: (view) => { renderAppearanceList(view); renderChatAppearanceSources(); refreshVisibleCanonControls(); },
     });
 
     function onCigMessageRendered(messageId) {
@@ -4815,22 +4778,20 @@ jQuery(async () => {
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
         });
-        renderDirectorSurface();
         void observeCinematicMessage(messageId);
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        directorFocusCapture = null;
         visualStoryFocusController?.cancel?.();
         visualStoryFocusController = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshStoryMemorySurface();
         refreshCinematicSurface();
-        directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        renderDirectorSurface();
         destroyIterationSurfaceMounts();
         setTimeout(() => {
             injectAllMessageButtons();
+            syncChatWandPreferenceControls();
+            renderChatAppearanceSources();
             renderContinuityShelves();
             $('.mes').each(function () { renderSceneInspection($(this)); });
             $('.mes').each(function () { renderIterationActionSurface($(this)); });
@@ -4852,16 +4813,13 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        directorFocusCapture = null;
         visualStoryFocusController?.cancel?.();
         visualStoryFocusController = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshStoryMemorySurface();
         refreshCinematicSurface();
-        directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        renderDirectorSurface();
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {

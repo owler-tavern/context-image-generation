@@ -29,9 +29,9 @@ test('Preferences presents the four scannable groups in the intended order', () 
     const positions = groupIds.map((id) => preferences.indexOf(`id="${id}"`));
     assert.ok(positions.every((position) => position >= 0), 'all preference groups are present');
     assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]), 'preference groups keep their scan order');
-    assert.match(preferences, /id="cig_preferences_image"[\s\S]*?<h2>Image<\/h2>/);
-    assert.match(preferences, /id="cig_preferences_scene_context"[\s\S]*?<h2>Scene context<\/h2>/);
-    assert.match(preferences, /id="cig_preferences_references"[\s\S]*?<h2>References<\/h2>/);
+    assert.match(preferences, /id="cig_preferences_image"[\s\S]*?<h2>Visual style<\/h2>/);
+    assert.match(preferences, /id="cig_preferences_scene_context"[\s\S]*?<h2[^>]*>Scene details<\/h2>/);
+    assert.match(preferences, /id="cig_preferences_references"[\s\S]*?<h2[^>]*>Consistency options<\/h2>/);
     assert.match(preferences, /id="cig_preferences_automation"[\s\S]*?<h2>Automation<\/h2>/);
     assert.equal((preferences.match(/<details\b/g) || []).length, 0, 'Preferences has no nested disclosure');
 });
@@ -79,13 +79,31 @@ test('Images and Cast leads with Gallery and then a visible Appearance memory se
     assert.match(imagesCast, /Remember this look saves a separate appearance file, then uses it in the current chat\./);
 });
 
-test('primary Gallery actions are semantic buttons with accessible names', () => {
-    for (const id of ['cig_generate_btn', 'cig_clear_gallery']) {
+test('Gallery keeps only semantic non-generative controls; the wand is the sole generation entry', () => {
+    assert.equal(settings.includes('id="cig_generate_btn"'), false);
+    for (const id of ['cig_clear_gallery']) {
         const button = settings.match(new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`));
         assert.ok(button, `${id} is a button`);
         assert.match(button[0], /type="button"/);
         assert.match(button[0], /aria-label="[^"]+"/);
     }
+});
+
+test('Images and Cast exposes current-chat appearance source configuration without a second Generate action', () => {
+    const imagesCast = panelMarkup('cig_settings_panel_images_cast');
+    assert.match(imagesCast, /id="cig_chat_appearance_sources"/);
+    assert.match(imagesCast, /<h2>Current chat characters<\/h2>/);
+    assert.match(imagesCast, /Auto, Avatar, or Description/);
+    assert.doesNotMatch(imagesCast, /Generate image from the last message/);
+});
+
+test('everyday settings use plain task groups and keep advanced/provider language out of them', () => {
+    const preferences = panelMarkup('cig_settings_panel_preferences');
+    const imagesCast = panelMarkup('cig_settings_panel_images_cast');
+    assert.match(preferences, /<h2>Visual style<\/h2>/);
+    assert.match(preferences, /<h2>Automation<\/h2>/);
+    assert.match(imagesCast, /<h2>Current chat characters<\/h2>[\s\S]*?<h2>Story Memory<\/h2>/);
+    assert.doesNotMatch(`${preferences}${imagesCast}`, /canon|reference plan|revision|cast override|route contract/i);
 });
 
 test('gallery preview and appearance actions are semantic and identify their outcome', () => {

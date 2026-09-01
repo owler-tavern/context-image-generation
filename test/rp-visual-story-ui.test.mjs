@@ -10,20 +10,19 @@ const [index, settings, ui] = await Promise.all([
     readFile(new URL('../lib/rp/visual-story-ui.js', import.meta.url), 'utf8'),
 ]);
 
-test('Visual Story adds one visible chat entry beside Direct this scene and opens the current chat surface', () => {
-    assert.match(index, /cig_message_director[\s\S]*cig_message_visual_story/);
-    assert.match(index, /Visual Story/);
+test('Visual Story remains a settings surface while chat keeps the sole host wand', () => {
+    assert.doesNotMatch(index, /cig_message_director|cig_message_visual_story/);
+    assert.match(settings, /Visual story memory/i);
     assert.match(index, /revealVisualStorySurface/);
     assert.match(index, /data-cig-visual-story-action/);
     assert.match(index, /eventSource\.on\(event_types\.CHAT_CHANGED[\s\S]*refreshStoryMemorySurface\(\);[\s\S]*refreshCinematicSurface\(\)/);
     assert.match(index, /eventSource\.on\(event_types\.CHAT_CREATED[\s\S]*refreshStoryMemorySurface\(\);[\s\S]*refreshCinematicSurface\(\)/);
 });
 
-test('Visual Story message injection is idempotent across repeated render hooks', () => {
+test('Visual Story does not inject chat-level controls', () => {
     const injection = index.slice(index.indexOf('function injectMessageButton'), index.indexOf('function visibleCanonMessageSender'));
-    assert.match(injection, /messageElement\.find\('\.cig_message_director'\)\.remove\(\)/);
-    assert.match(injection, /messageElement\.find\('\.cig_message_visual_story'\)\.remove\(\)/);
-    assert.match(injection, /directorButton\.after\(visualStoryButton\)/);
+    assert.match(injection, /cig_message_gen/);
+    assert.doesNotMatch(injection, /cig_message_director|cig_message_visual_story/);
 });
 
 test('Visual Story never presents a previous chat timeline while the current chat is loading', () => {
@@ -54,8 +53,7 @@ test('Visual Story surface explains empty Story Memory, continuity readiness, an
 
 test('Visual Story entry is provider-free, keyboard-safe, and narrow-layout safe', () => {
     assert.doesNotMatch(ui, /attachGeneratedImage|dispatchProviderRoute|fetch\(/);
-    assert.match(index, /keydown[\s\S]*cig_message_visual_story/);
-    assert.match(index, /Enter[\s\S]*Space/);
+    assert.doesNotMatch(index, /keydown[\s\S]*cig_message_visual_story/);
     assert.match(ui, /focusVisualStorySurface/);
     assert.match(settings, /cig_visual_story_surface[\s\S]*cig_story_memory_surface/);
 });
@@ -63,7 +61,7 @@ test('Visual Story entry is provider-free, keyboard-safe, and narrow-layout safe
 test('Visual Story renders an honest empty state and focuses the surface after opening closed drawers', () => {
     const html = renderVisualStorySurface({ memoryState: { timeline: [] }, appearanceSummary: '1 of 2 identities have appearance readiness.', cinematicEnabled: false });
     assert.match(html, /No generated moments yet/);
-    assert.match(html, /Use the wand or Direct this scene/);
+    assert.match(html, /Use the wand/);
     assert.match(html, /<strong>Off<\/strong>/);
     assert.match(ui, /min-height:44px/);
     assert.match(html, /data-cig-visual-story-action="open-memory"/);

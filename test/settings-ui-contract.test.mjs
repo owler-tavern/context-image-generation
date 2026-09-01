@@ -104,8 +104,9 @@ test('Setup exposes separate polite readiness and runtime issue status regions b
 
 test('all index-bound settings controls remain unique in settings markup', () => {
     const boundIds = new Set([...index.matchAll(/#(cig_[\w-]+)/g)].map((match) => match[1]));
+    assert.doesNotMatch(settings, /id="cig_generate_btn"/);
     for (const id of boundIds) {
-        if (DYNAMIC_OR_NON_SETTINGS_IDS.has(id)) continue;
+        if (DYNAMIC_OR_NON_SETTINGS_IDS.has(id) || id === 'cig_generate_btn') continue;
         assert.equal((settings.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} must occur exactly once`);
     }
 });

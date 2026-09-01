@@ -95,3 +95,30 @@ test('character avatar filename identity matches the canonical character ID and 
     assert.equal(result.sourceType, 'avatar');
     assert.deepEqual(result.description, { text: 'Ava has a scar that the image cannot establish.' });
 });
+
+test('explicit description rejects even an informative avatar while auto rejects generic metadata', () => {
+    const identity = { id: 'user:persona-b.png', label: 'Persona B' };
+    const avatar = { url: '/user/images/persona-b.png', characterId: identity.id };
+    const description = 'Persona B has short dark hair and a blue jacket.';
+    assert.equal(resolveAppearanceTruth({ identity, avatar, description, sourcePreference: 'description' }).sourceType, 'description');
+    const generic = resolveAppearanceTruth({
+        identity,
+        avatar: { url: '/user/images/generic-avatar.png', characterId: identity.id },
+        description,
+        sourcePreference: 'auto',
+    });
+    assert.equal(generic.sourceType, 'description');
+    assert.equal(generic.evidence.find((item) => item.source === 'avatar').reason, 'generic-avatar');
+});
+
+test('explicit avatar does not silently fall back when its source is unavailable', () => {
+    const result = resolveAppearanceTruth({
+        identity: { id: 'user:persona-b.png' },
+        avatar: { url: '/user/images/generic-avatar.png', characterId: 'user:persona-b.png' },
+        description: 'Persona B has a written appearance.',
+        sourcePreference: 'avatar',
+    });
+    assert.equal(result.sourceType, 'none');
+    assert.equal(result.source, null);
+    assert.equal(result.sourcePreference, 'avatar');
+});
