@@ -19,6 +19,7 @@ import {
     stageGlobalLookDeletion,
     stageLegacyArtifactMigration,
     finalizeLegacyArtifactMigration,
+    projectAppearanceLookActionState,
 } from '../lib/rp/appearance-library.js';
 
 test('clearing Gallery preserves promoted saved looks and independently materializable assets', () => {
@@ -62,6 +63,12 @@ test('legacy migration groups every look sharing one Gallery artifact into one d
     assert.equal(promoted.identities['user:sam'].looks[0].assetId, targetAssetId);
     assert.equal(promoted.assets['asset:gallery:one'], undefined);
     assert.equal(promoted.operations['migration:gallery:one'], undefined);
+});
+
+test('only the specific tombstoned shared-file look is unavailable to player actions', () => {
+    const source = migrateAppearanceLibrary({ operations: { d: { status: 'deleting', lookId: 'look:one', assetId: 'asset:shared', sharedReferenceCount: 1 } } });
+    assert.deepEqual(projectAppearanceLookActionState(source, 'look:one', true), { available: false, deleting: true });
+    assert.deepEqual(projectAppearanceLookActionState(source, 'look:two', true), { available: true, deleting: false });
 });
 
 test('schema 2 stores promoted appearance assets and looks without changing the frozen global default', async () => {

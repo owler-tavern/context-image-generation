@@ -15,6 +15,13 @@ test('appearance memory exposes distinct local stop and explicit global deletion
     assert.match(source, /Delete this saved look everywhere\? Other chats may use it\. Affected chats will fall back to their avatar or description\. This cannot be undone\./);
     assert.doesNotMatch(source, />Remove</);
 });
+
+test('production Gallery clear uses verified legacy migration and every look action rechecks tombstone availability', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(source, /runClearGalleryPreservingLooks\(\{ gallery: settings\.gallery/);
+    assert.ok((source.match(/projectAppearanceLookActionState\(/g) || []).length >= 5);
+    assert.match(source, /Saved look deletion in progress/);
+});
 import { readFile } from 'node:fs/promises';
 import { getCustomCatalogRefreshMessage, projectCustomConnectionEditor, projectRouteDiagnostics, projectProviderOptions } from '../lib/providers/ui-projection.js';
 import { connectionRevision } from '../lib/providers/custom-connections.js';

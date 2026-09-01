@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, persistVerifiedChatMutation } from '../lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, persistVerifiedChatMutation, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
 
 test('library verification is three-state and checks exact revision', async () => {
     let method;
@@ -13,6 +13,12 @@ test('library verification is three-state and checks exact revision', async () =
     assert.equal(unknown.status, 'indeterminate');
     const realShape = await verifyPersistedExtensionLibrary({ expectedRevision: 'rev:3', fetchImpl: async () => ({ ok: true, json: async () => ({ settings: JSON.stringify({ extension_settings: { 'context-image-generation': { rp_library: { revision: 'rev:3' } } } }) }) }) });
     assert.equal(realShape.status, 'confirmed');
+});
+
+test('Gallery clear verification requires both the exact library revision and empty persisted history', async () => {
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': { rp_library: { revision: 'clear:1' }, gallery: [] } } }) });
+    assert.equal((await verifyPersistedGalleryClear({ expectedRevision: 'clear:1', fetchImpl })).status, 'confirmed');
+    assert.equal((await verifyPersistedGalleryClear({ expectedRevision: 'other', fetchImpl })).status, 'confirmed-absent');
 });
 
 test('chat verification checks the captured target binding and revision', async () => {

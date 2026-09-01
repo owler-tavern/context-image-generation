@@ -59,18 +59,19 @@ import {
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
     listVisibleAppearanceEntries,
-    applyGalleryClear,
     applyGalleryImageDeletion,
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
     planGlobalLookDeletion,
+    projectAppearanceLookActionState,
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
+import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1672,6 +1673,9 @@ async function resumePendingAppearanceOperations() {
     const settings = extension_settings[extensionName];
     const library = migrateAppearanceLibrary(settings?.rp_library);
     if (!Object.keys(library.operations || {}).length) return { status: 'nothing-to-do', library };
+    if (Object.values(library.operations || {}).some((operation) => operation?.status === 'pending-migration')) {
+        return runClearGalleryPreservingLooks({ gallery: settings.gallery || [], io: appearanceMigrationIo(), withinExclusive: true });
+    }
     const result = await reconcileAppearanceOperations({
         library,
         verifyRevision: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
@@ -1682,6 +1686,35 @@ async function resumePendingAppearanceOperations() {
     settings.rp_library = result.library;
     renderAppearanceList();
     return result;
+}
+
+function appearanceMigrationIo() {
+    const settings = extension_settings[extensionName];
+    return {
+        runExclusive: (operation) => enqueueLibraryMutation(operation),
+        readLibrary: async () => readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        saveLibrary: async (library) => { settings.rp_library = library; await saveSettings(); },
+        verifyLibrary: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        readDataUrl: async (item) => {
+            if (item.imageData) return `data:${item.mimeType || 'image/png'};base64,${item.imageData}`;
+            const response = await fetch(item.url, { method: 'GET', headers: getRequestHeaders() });
+            if (!response.ok) throw new Error('The legacy Gallery image could not be read.');
+            return getBase64Async(await response.blob());
+        },
+        saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
+        targetExists: async (url) => {
+            try {
+                const response = await fetch(url, { method: 'GET', headers: getRequestHeaders(), cache: 'no-store', redirect: 'error' });
+                if (response.ok) return { status: 'confirmed-present' };
+                if (response.status === 404) return { status: 'confirmed-absent' };
+                return { status: 'indeterminate' };
+            } catch (error) { return { status: 'indeterminate', error }; }
+        },
+        saveClearedState: async ({ library, gallery }) => { settings.rp_library = library; settings.gallery = gallery; await saveSettings(); },
+        verifyClearedState: (revision) => verifyPersistedGalleryClear({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        setLocalState: ({ library, gallery }) => { settings.rp_library = library; settings.gallery = gallery; renderGallery(); renderAppearanceList(); },
+        uuid: () => crypto.randomUUID(),
+    };
 }
 
 async function persistOrphanCleanupRetry(libraryValue, url, { alreadyQueued = true, operationId = `orphan-cleanup:${crypto.randomUUID()}` } = {}) {
@@ -1830,7 +1863,8 @@ function renderAppearanceList() {
         const binding = getChatBinding(canon, identity.id);
         const effectiveLookId = binding?.activeLookId || identity.activeLookId;
         const active = effectiveLookId === look.id;
-        const isAvailable = available.has(look.assetId);
+        const actionState = projectAppearanceLookActionState(library, look.id, available.has(look.assetId));
+        const isAvailable = actionState.available;
         const row = $('<div class="cig_appearance_item" role="listitem"></div>')
             .attr('data-identity-id', identity.id)
             .attr('data-look-id', look.id);
@@ -1840,7 +1874,7 @@ function renderAppearanceList() {
             $('<small class="cig_appearance_active">Active in this chat</small>').appendTo(text);
             if (binding?.isLocked) $('<small class="cig_appearance_locked">Locked for this chat</small>').appendTo(text);
         }
-        if (!isAvailable) $('<small>').text('Saved look unavailable').appendTo(text);
+        if (!isAvailable) $('<small>').text(actionState.deleting ? 'Saved look deletion in progress' : 'Saved look unavailable').appendTo(text);
         if (!active && isAvailable) {
             const useLabel = `Use ${look.label} for ${identity.label}`;
             $('<button type="button" class="menu_button cig_appearance_use" title="Use this appearance" aria-label="Use this appearance">')
@@ -1860,11 +1894,13 @@ function renderAppearanceList() {
                     .appendTo(row);
             }
         }
-        const deleteLabel = `Delete ${look.label} everywhere for ${identity.label}`;
-        $('<button type="button" class="menu_button cig_appearance_delete_everywhere">')
-            .text('Delete saved look everywhere…')
-            .attr({ title: deleteLabel, 'aria-label': deleteLabel })
-            .appendTo(row);
+        if (isAvailable) {
+            const deleteLabel = `Delete ${look.label} everywhere for ${identity.label}`;
+            $('<button type="button" class="menu_button cig_appearance_delete_everywhere">')
+                .text('Delete saved look everywhere…')
+                .attr({ title: deleteLabel, 'aria-label': deleteLabel })
+                .appendTo(row);
+        }
         row.prepend(text);
         list.append(row);
     }
@@ -2304,16 +2340,12 @@ function injectAllMessageButtons() {
 async function clearGallery() {
     const settings = extension_settings[extensionName];
     if (!await confirmDestructiveAction('Clear Gallery history? Remembered appearances will remain saved.', 'Clear Gallery')) return;
-    const result = applyGalleryClear({ gallery: settings.gallery, library: settings.rp_library, confirmed: true });
-    settings.gallery = result.gallery;
-    const persisted = await persistAppearanceLibraryMutation((latest) => applyGalleryClear({ gallery: settings.gallery, library: latest, confirmed: true }).library);
-    if (persisted.status !== 'confirmed') {
-        toastr.info('Gallery clear verification pending.', 'Context Image Generation');
+    const result = await runClearGalleryPreservingLooks({ gallery: settings.gallery || [], io: appearanceMigrationIo() });
+    if (result.status !== 'confirmed') {
+        toastr.info(result.message, 'Context Image Generation');
         return;
     }
-    renderGallery();
-    renderAppearanceList();
-    toastr.success('Gallery cleared.', 'Context Image Generation');
+    toastr.success(result.message, 'Context Image Generation');
 }
 
 function viewGalleryImage(index) {
@@ -2624,6 +2656,12 @@ jQuery(async () => {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const identityId = row.attr('data-identity-id');
+        const lookId = row.attr('data-look-id');
+        const settings = extension_settings[extensionName];
+        const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
+        const look = identity?.looks.find((entry) => entry.id === lookId);
+        const actionState = projectAppearanceLookActionState(settings.rp_library, lookId, !!look && !!materializeAppearanceAssets(settings.rp_library, settings.gallery || []).assets[look?.assetId]);
+        if (!actionState.available) { toastr.info('Saved look unavailable.', 'Context Image Generation'); return; }
         const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
         const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
         const result = await runStopUsingInChat({
@@ -2644,6 +2682,10 @@ jQuery(async () => {
         const settings = extension_settings[extensionName];
         const identityId = row.data('identity-id');
         const lookId = row.data('look-id');
+        const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
+        const look = identity?.looks.find((entry) => entry.id === lookId);
+        const actionState = projectAppearanceLookActionState(settings.rp_library, lookId, !!look && !!materializeAppearanceAssets(settings.rp_library, settings.gallery || []).assets[look?.assetId]);
+        if (!actionState.available) { toastr.info('Saved look unavailable.', 'Context Image Generation'); return; }
         const plan = planGlobalLookDeletion(settings.rp_library, lookId);
         if (plan.decision === 'not-found') return;
         const warning = 'Delete this saved look everywhere? Other chats may use it. Affected chats will fall back to their avatar or description. This cannot be undone.';
@@ -2675,7 +2717,7 @@ jQuery(async () => {
         const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
         const look = identity?.looks.find((entry) => entry.id === lookId);
         const materialized = materializeAppearanceAssets(settings.rp_library, settings.gallery || []);
-        if (!look || !materialized.assets[look.assetId]) {
+        if (!look || !projectAppearanceLookActionState(settings.rp_library, lookId, !!materialized.assets[look.assetId]).available) {
             toastr.info('Saved look unavailable.', 'Context Image Generation');
             return;
         }
@@ -2705,7 +2747,7 @@ jQuery(async () => {
         const identity = migrateAppearanceLibrary(extension_settings[extensionName].rp_library).identities[identityId];
         const look = identity?.looks.find((entry) => entry.id === lookId);
         const materialized = materializeAppearanceAssets(extension_settings[extensionName].rp_library, extension_settings[extensionName].gallery || []);
-        if (!look || !materialized.assets[look.assetId]) {
+        if (!look || !projectAppearanceLookActionState(extension_settings[extensionName].rp_library, lookId, !!materialized.assets[look.assetId]).available) {
             toastr.info('Saved look unavailable.', 'Context Image Generation');
             return;
         }
