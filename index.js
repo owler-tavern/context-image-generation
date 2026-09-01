@@ -1347,6 +1347,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         settings: settingsSnapshot,
     });
     const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
+    const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state) };
     // The scene snapshot is the provider-facing source of truth for the wand:
     // selected text wins, while the clicked message and nearby context resolve
     // cast, location, and current scene facts.
@@ -1361,7 +1362,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText, intent: 'scene' },
-        scene: sceneMetadata,
+        scene: scenePlan,
         canonSnapshot: canonCapture.canonSnapshot,
         identities: appearanceIdentities,
         references: canonCapture.references,
@@ -1464,7 +1465,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             identities: dispatchedPlan.identities,
             referencePlan: dispatchedPlan.referencePlan,
             activeOutfits: dispatchedPlan.activeOutfits,
-            scene: dispatchedPlan.scene,
+            scene: createSceneArtifactMetadata(dispatchedPlan.scene),
         });
         // Retain only the redacted Advanced projection; prompt/context/assets
         // must not survive the dispatch lifecycle in extension state.
@@ -1525,7 +1526,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: dispatchedPlan.scene, __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state) }
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state) }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -3067,7 +3068,8 @@ function renderSceneInspection(messageElement, messageOverride = null) {
     messageElement?.find('.cig_scene_inspection').remove();
     const messageId = Number(messageElement?.attr('mesid'));
     const message = messageOverride || getContext().chat?.[messageId];
-    const inspection = activeMediaForMessage(message)?.item?.cig_scene_inspection;
+    const artifactInspection = activeMediaForMessage(message)?.item?.cig_scene_inspection;
+    const inspection = artifactInspection?.inspection || artifactInspection;
     if (!inspection || !Array.isArray(inspection.lines)) return;
 
     const confidence = String(inspection.confidence || 'low');

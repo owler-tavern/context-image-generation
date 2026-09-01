@@ -101,3 +101,16 @@ test('wand integration makes scene interpretation visible, persistent, and chat-
     assert.match(settings, /id="cig_continuity_strength"/);
     assert.match(settings, /id="cig_custom_visual_instruction"/);
 });
+
+test('scene state stays internal while the inline artifact keeps a public inspection wrapper', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const snapshot = source.slice(source.indexOf('const sceneSnapshot = buildSceneGenerationSnapshot'), source.indexOf('const connectionId = routeModel.connectionId'));
+    const dispatch = source.slice(source.indexOf('const generatedWithContinuity'), source.indexOf('if (typeof finalize !== \'function\')'));
+    const render = source.slice(source.indexOf('function renderSceneInspection'), source.indexOf('function renderVisibleCanonControls'));
+    assert.match(snapshot, /const scenePlan = \{ \.\.\.sceneMetadata, state: cloneSnapshot\(sceneSnapshot\.state\) \}/);
+    assert.match(source, /scene: scenePlan/);
+    assert.match(dispatch, /__cigSceneMetadata: createSceneArtifactMetadata\(dispatchedPlan\.scene\)/);
+    assert.match(dispatch, /__cigSceneState: cloneSnapshot\(dispatchedPlan\.scene\?\.state\)/);
+    assert.match(render, /cig_scene_inspection/);
+    assert.match(render, /inspection\.lines/);
+});
