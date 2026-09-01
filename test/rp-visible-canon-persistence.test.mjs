@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     applyVisibleCanonPendingResult,
     createVisibleCanonPendingState,
+    finalizeVisibleCanonPendingReplay,
     queueVisibleCanonPending,
     reconcileVisibleCanonPendingLink,
     resumeVisibleCanonPending,
@@ -125,4 +126,26 @@ test('active-chat split keeps foreign recovery global and out of local replay', 
     const split = splitVisibleCanonPendingByChat(state, 'chat-a');
     assert.deepEqual(Object.keys(split.active), [visibleCanonPendingKey(pendingLink)]);
     assert.deepEqual(Object.keys(split.foreign), [visibleCanonPendingKey(foreign)]);
+});
+
+test('global-only replay cleanup keeps the candidate binding and clears pending once', () => {
+    const candidate = { schema: 1, revision: 'chat-canon:next', bindings: { npc: { activeLookId: 'look:npc' } } };
+    const pending = queueVisibleCanonPending(createVisibleCanonPendingState(), { ...pendingLink, candidate });
+    const replayed = { ...candidate, visibleCanonPending: pending.pending };
+    const finalized = finalizeVisibleCanonPendingReplay({ currentCanon: { schema: 1, revision: 'old', bindings: {} }, replayedCanon: replayed, activePending: {} });
+    assert.equal(finalized.revision, candidate.revision);
+    assert.deepEqual(finalized.bindings, candidate.bindings);
+    assert.deepEqual(finalized.visibleCanonPending, {});
+});
+
+test('chat-local replay cleanup does not fall back to the pre-replay canon', () => {
+    const candidate = { schema: 1, revision: 'chat-canon:local', bindings: { persona: { activeLookId: 'look:local' } } };
+    const finalized = finalizeVisibleCanonPendingReplay({
+        currentCanon: { schema: 1, revision: 'chat-canon:old', bindings: { persona: { activeLookId: 'look:old' } } },
+        replayedCanon: { ...candidate, visibleCanonPending: { local: pendingLink } },
+        activePending: {},
+    });
+    assert.equal(finalized.revision, candidate.revision);
+    assert.equal(finalized.bindings.persona.activeLookId, 'look:local');
+    assert.deepEqual(finalized.visibleCanonPending, {});
 });

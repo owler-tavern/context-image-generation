@@ -73,7 +73,7 @@ import { createAppearanceFeatureController, runRememberAppearance } from './lib/
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
 import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
-import { createVisibleCanonPendingState, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
+import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1840,6 +1840,7 @@ async function resumePendingVisibleCanonLinks() {
     const chatSplit = splitVisibleCanonPendingByChat({ pending: canon.visibleCanonPending }, currentChatId);
     const pendingState = createVisibleCanonPendingState({ pending: { ...globalSplit.active, ...chatSplit.active } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
+    let replayedCanon = null;
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
         if (!link.candidate?.revision || !link.expectedFingerprint) return { status: 'confirmed' };
         if (!currentVisibleCanonMedia(link)) return { status: 'confirmed' };
@@ -1847,6 +1848,7 @@ async function resumePendingVisibleCanonLinks() {
         const currentFingerprint = chatCanonRevisionFingerprint(currentCanon, link.identityId);
         if (currentFingerprint !== link.expectedFingerprint && currentCanon.revision !== link.candidate.revision) return { status: 'confirmed' };
         const replayCandidate = { ...link.candidate, visibleCanonPending: pendingState.pending };
+        replayedCanon = replayCandidate;
         chat_metadata[CHAT_CANON_KEY] = replayCandidate;
         return reconcileVisibleCanonPendingLink(link, {
             save: async () => {
@@ -1867,8 +1869,12 @@ async function resumePendingVisibleCanonLinks() {
     const nextGlobalPending = { ...globalSplit.foreign, ...chatSplit.foreign, ...activePending };
     const chatChanged = JSON.stringify(canon.visibleCanonPending || {}) !== JSON.stringify(activePending);
     const settingsChanged = JSON.stringify(globalPending) !== JSON.stringify(nextGlobalPending);
-    if (chatChanged) {
-        chat_metadata[CHAT_CANON_KEY] = { ...canon, visibleCanonPending: activePending };
+    if (chatChanged || replayedCanon) {
+        chat_metadata[CHAT_CANON_KEY] = finalizeVisibleCanonPendingReplay({
+            currentCanon: migrateChatCanon(chat_metadata[CHAT_CANON_KEY]),
+            replayedCanon,
+            activePending,
+        });
         await saveVisibleCanonChat();
     }
     if (settingsChanged) {
