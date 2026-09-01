@@ -107,7 +107,7 @@ test('scene state stays internal while the inline artifact keeps a public inspec
     const snapshot = source.slice(source.indexOf('const sceneSnapshot = buildSceneGenerationSnapshot'), source.indexOf('const connectionId = routeModel.connectionId'));
     const dispatch = source.slice(source.indexOf('const generatedWithContinuity'), source.indexOf('if (typeof finalize !== \'function\')'));
     const render = source.slice(source.indexOf('function renderSceneInspection'), source.indexOf('function renderVisibleCanonControls'));
-    assert.match(snapshot, /const scenePlan = \{ \.\.\.sceneMetadata, state: cloneSnapshot\(sceneSnapshot\.state\) \}/);
+    assert.match(snapshot, /const scenePlan = \{ \.\.\.sceneMetadata, state: cloneSnapshot\(sceneSnapshot\.state\),/);
     assert.match(source, /scene: scenePlan/);
     assert.match(dispatch, /__cigSceneMetadata: createSceneArtifactMetadata\(dispatchedPlan\.scene\)/);
     assert.match(dispatch, /__cigSceneState: cloneSnapshot\(dispatchedPlan\.scene\?\.state\)/);

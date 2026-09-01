@@ -14,6 +14,7 @@ test('Director renders an accessible cast correction section with clear current 
     assert.match(html, /Ava/);
     assert.match(html, /Rowan/);
     assert.match(html, /Include Ava/);
+    assert.match(html, /Auto Ava/);
     assert.match(html, /Focus Ava/);
     assert.match(html, /Exclude Ava/);
     assert.match(html, /Current: included/);

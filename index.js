@@ -1223,6 +1223,7 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
             continuity_strength: directorOptions?.continuity,
             custom_visual_instruction: directorOptions?.visualDirection,
         },
+        castOverrides: Array.isArray(directorOptions?.castOverrides) ? directorOptions.castOverrides : [],
     });
     const truths = continuityTruths(identities);
     const activeCharacter = context.characters?.[context.characterId];
@@ -1875,9 +1876,10 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         identities: appearanceIdentities,
         priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
         settings: settingsSnapshot,
+        castOverrides: Array.isArray(generationOverrides?.castOverrides) ? generationOverrides.castOverrides : [],
     });
     const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
-    const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state) };
+    const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state), ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}) };
     // The scene snapshot is the provider-facing source of truth for the wand:
     // selected text wins, while the clicked message and nearby context resolve
     // cast, location, and current scene facts.
@@ -1907,6 +1909,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
             aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
             thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search,
             ...(generationOverrides ? { framing: settingsSnapshot.framing_preference, continuity: settingsSnapshot.continuity_strength, visualDirection: settingsSnapshot.custom_visual_instruction } : {}),
+            ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}),
         },
         policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
     };
@@ -4735,7 +4738,7 @@ jQuery(async () => {
             const row = $(this);
             const rowId = String(row.attr('data-director-cast-id') || '');
             const rowAction = rowId === identityId ? action : String(row.attr('data-current-action') || 'include');
-            if (rowId && ['include', 'focus', 'exclude'].includes(rowAction)) castOverrides.push({ identityId: rowId, action: rowAction });
+            if (rowId && ['auto', 'include', 'focus', 'exclude'].includes(rowAction)) castOverrides.push({ identityId: rowId, action: rowAction });
         });
         setBusyState(button, true, { busyTitle: 'Updating cast…' });
         try { await directorUiController?.update({ castOverrides }); }

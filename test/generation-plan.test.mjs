@@ -233,6 +233,39 @@ test('retains the bounded scene interpretation on the provider-facing plan', () 
     assert.equal(Object.isFrozen(plan.scene), true);
 });
 
+test('Director cast overrides become bounded provider prompt, reference, and inspection provenance', () => {
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'director-cast-plan',
+        invocation: 'director',
+        identities: [
+            { id: 'character:ava', label: 'Ava', kind: 'character' },
+            { id: 'character:rowan', label: 'Rowan', kind: 'character' },
+        ],
+        references: [
+            { id: 'look:ava', role: 'identity-look', identityId: 'character:ava', assetId: 'asset:ava', label: 'Ava' },
+            { id: 'look:rowan', role: 'identity-look', identityId: 'character:rowan', assetId: 'asset:rowan', label: 'Rowan' },
+        ],
+        provider: { ...baseInput.provider, capabilities: { referenceImages: { maxCount: 2 } } },
+        prompt: { ...baseInput.prompt, sourceMessage: 'Ava and Rowan meet.' },
+        scene: {
+            sourcePassage: 'Ava and Rowan meet.',
+            prompt: 'Ava and Rowan meet.\nPresent cast: Rowan.\nComposition priority: Rowan.\nDo not depict: Ava.',
+            state: { schema: 1, sceneFacts: { cast: [{ identityId: 'character:rowan', label: 'Rowan' }] } },
+            inspection: { title: 'Scene interpretation', confidence: 'high', lines: ['Cast correction: Rowan focused; Ava excluded.'], warnings: [] },
+            castOverrides: [{ identityId: 'character:ava', action: 'exclude' }, { identityId: 'character:rowan', action: 'focus' }],
+        },
+        options: { ...baseInput.options, castOverrides: [{ identityId: 'character:ava', action: 'exclude' }, { identityId: 'character:rowan', action: 'focus' }] },
+    });
+    assert.equal(plan.references[0].identityId, 'character:rowan');
+    assert.equal(plan.references.some((reference) => reference.identityId === 'character:ava'), false);
+    assert.match(plan.scene.prompt, /Composition priority: Rowan/);
+    assert.match(plan.scene.prompt, /Do not depict: Ava/);
+    assert.deepEqual(plan.scene.castOverrides, [{ identityId: 'character:ava', action: 'exclude' }, { identityId: 'character:rowan', action: 'focus' }]);
+    assert.deepEqual(plan.scene.inspection.castOverrides, plan.scene.castOverrides);
+    assert.throws(() => createGenerationPlan({ ...baseInput, id: 'director-invalid-cast', invocation: 'director', identities: [{ id: 'character:ava', label: 'Ava' }], options: { castOverrides: [{ identityId: 'character:gone', action: 'include' }] } }), /cast override/i);
+});
+
 test('final available reference set excludes a missing canon asset from plan and message parts', () => {
     const missing = { id: 'look:missing', role: 'identity-look', identityId: 'character:ava.png', assetId: 'asset:missing', label: 'Ava' };
     const plan = createGenerationPlan({
