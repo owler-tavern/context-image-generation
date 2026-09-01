@@ -1514,7 +1514,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const capturedIterationArtifact = {
             ...createIterationArtifact({
                 artifactId: `artifact:${dispatchedPlan.id}`,
-                sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId },
+                sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId, userVisible: true },
                 effectivePrompt: dispatchedPlan.prompt.messageContent || dispatchedPlan.prompt.sourceMessage,
                 references: dispatchedPlan.references,
                 model: dispatchedPlan.resolved,
@@ -2739,7 +2739,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             if (currentMessageElement.length === 0) return { safe: false, reason: 'unavailable' };
             return validation;
         },
-        appendMedia: ({ result, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
+        appendMedia: ({ result, storedIterationArtifact, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
             const previousExtra = currentMessage.extra && typeof currentMessage.extra === 'object'
                 ? {
                     ...currentMessage.extra,
@@ -2764,7 +2764,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 cig_owner: extensionName,
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
                 ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
-                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: cloneSnapshot(result.__cigIterationArtifact) } : {}),
+                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: storedIterationArtifact || sanitizeIterationArtifactForStorage(result.__cigIterationArtifact) } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;

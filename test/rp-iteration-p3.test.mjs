@@ -2,10 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createIterationArtifact, planIterationAction, sanitizeIterationArtifactForStorage } from '../lib/rp/iteration-domain.js';
 import { createIterationSurfaceController } from '../lib/rp/iteration-ui.js';
+import { attachGeneratedImageSafely } from '../lib/rp-attachment.js';
 
 const source = createIterationArtifact({
     artifactId: 'artifact:p3-source',
-    sourcePassage: { text: 'Ava waits.', messageId: 'm-1' },
+    sourcePassage: { text: 'Ava waits.', messageId: 'm-1', userVisible: true },
     effectivePrompt: 'Ava waits.',
     references: [{ id: 'look:ava', role: 'identity-look', identityId: 'ava', assetId: 'asset:ava' }],
     model: { providerId: 'p', modelId: 'm', transportId: 't' },
@@ -76,4 +77,63 @@ test('persisted iteration metadata omits provider messages, assets, URLs, and se
     const serialized = JSON.stringify(stored);
     assert.doesNotMatch(serialized, /AAAA|data:image|providerMessages|secret context|systemInstruction|messages|referenceAssets/u);
     assert.equal(stored.references[0].assetId, 'asset:1');
+});
+
+test('save/reload persistence sanitizes both chat media and Gallery iteration recipes', async () => {
+    const artifact = {
+        ...source,
+        generationPlan: {
+            planId: 'plan:p3',
+            revision: 'route:r1',
+            messages: [{ role: 'user', content: 'raw provider context' }],
+            referenceAssets: { 'asset:ava': { data: 'AAAA', url: 'data:image/png;base64,AAAA' } },
+        },
+        providerMessages: [{ role: 'user', content: 'raw provider context' }],
+        imageData: 'AAAA',
+    };
+    const message = { extra: { media: [] } };
+    let chatJson;
+    let galleryJson;
+    const attached = await attachGeneratedImageSafely({
+        target: { chatId: 'chat:p3', messageId: 1 },
+        prompt: 'Ava waits.',
+        generate: async () => ({ imageData: 'AAAA', __cigIterationArtifact: artifact }),
+        saveImage: async () => 'context-image-generation/cig.png',
+        getCurrentTarget: () => ({ safe: true, message }),
+        appendMedia: ({ storedIterationArtifact }) => {
+            message.extra.media.push({ cig_iteration_artifact: storedIterationArtifact });
+            chatJson = JSON.stringify(message.extra.media.at(-1));
+        },
+        saveChat: async () => ({ saved: true }),
+        addToGallery: async (_image, _prompt, _messageId, _path, metadata) => {
+            galleryJson = JSON.stringify(metadata?.iterationArtifact || null);
+        },
+        notify: () => {},
+    });
+    assert.equal(attached, true);
+    assert.equal(JSON.parse(chatJson).cig_iteration_artifact.recipeAvailable, true);
+    assert.equal(JSON.parse(chatJson).cig_iteration_artifact.sourcePassage.text, 'Ava waits.');
+    assert.deepEqual(JSON.parse(galleryJson), JSON.parse(chatJson).cig_iteration_artifact);
+    assert.doesNotMatch(`${chatJson}${galleryJson}`, /raw provider context|AAAA|data:image|referenceAssets|providerMessages/u);
+
+    const reloaded = JSON.parse(chatJson).cig_iteration_artifact;
+    assert.equal(reloaded.sourcePassage.text, 'Ava waits.');
+    assert.equal(reloaded.recipeAvailable, true);
+    const reused = planIterationAction({
+        action: 'reuse-recipe',
+        sourceArtifact: reloaded,
+        invocationId: 'reload-reuse',
+        reserveInvocation: () => true,
+        allowUnquotedSingle: true,
+        generationPlan: { planId: 'plan:p3', revision: 'route:r1', capabilities: { imageGeneration: true } },
+        verifyGenerationPlan: ({ planId, revision }) => ({ status: 'verified', planId, revision, authorityToken: 'a', routeResolved: true, capabilities: { imageGeneration: true } }),
+    });
+    assert.equal(reused.artifacts[0].sourcePassage.text, 'Ava waits.');
+});
+
+test('persisted recipe without explicitly user-visible source text is unavailable', () => {
+    const hiddenSourcePassage = { text: 'hidden context', messageId: 'm-1' };
+    const stored = sanitizeIterationArtifactForStorage({ ...source, sourcePassage: hiddenSourcePassage, recipe: { ...source.recipe, sourcePassage: hiddenSourcePassage } });
+    assert.equal(stored.recipeAvailable, false);
+    assert.equal(Object.hasOwn(stored.sourcePassage, 'text'), false);
 });
