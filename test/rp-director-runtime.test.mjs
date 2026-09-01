@@ -152,6 +152,22 @@ test('Director reload rebinds only an exact target and recovers selection withou
     assert.match(stale.panel.previewError, /replaced|current/i);
 });
 
+test('Director restored stale state remains non-dispatchable until reopened', async () => {
+    let dispatchCount = 0;
+    const runtime = createDirectorRuntime({
+        getChatId: () => 'chat-a',
+        getEpoch: () => 5,
+        readState: () => ({ director: { schema: 1, revision: 2, panel: { messageId: 8, status: 'stale', previewError: 'Reopen Director to choose the current message.', target: { chatId: 'chat-a', messageId: 8, messageFingerprint: 'old', epoch: 1 } } } }),
+        validateTarget: () => ({ safe: false, reason: 'replaced' }),
+        dispatch: async () => { dispatchCount += 1; return { status: 'completed' }; },
+    });
+    const loaded = runtime.load({ chatId: 'chat-a', epoch: 5 });
+    assert.equal(loaded.panel.status, 'stale');
+    assert.match(loaded.panel.previewError, /reopen|current/i);
+    assert.equal((await runtime.generate()).status, 'stale');
+    assert.equal(dispatchCount, 0);
+});
+
 test('Director settles inactive chat through durable state and keeps active chat untouched', async () => {
     const durable = new Map();
     let resolveDispatch;

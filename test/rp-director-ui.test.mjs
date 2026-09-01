@@ -18,3 +18,14 @@ test('Director UI routes open/edit/close/generate actions explicitly', async () 
     await controller.action('generate');
     assert.deepEqual(calls, [['open', { messageId: 2 }], ['update', { framing: 'wide' }], ['close'], ['generate']]);
 });
+
+test('Director restored stale panel shows recovery explanation and disables Generate', () => {
+    const html = renderDirectorPanel({
+        messageId: 8,
+        status: 'stale',
+        previewError: 'This message is no longer current. Reopen Director to choose it again.',
+        moment: 'A stale scene preview.',
+    });
+    assert.match(html, /This message is no longer current\. Reopen Director to choose it again\./);
+    assert.match(html, /data-director-action="generate"[^>]* disabled/);
+});
