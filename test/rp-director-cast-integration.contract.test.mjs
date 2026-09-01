@@ -14,7 +14,8 @@ test('production Director wiring captures cast correction and sends it through t
     assert.match(index, /castCandidates/);
     assert.match(index, /castOverrides/);
     assert.match(index, /attachGeneratedImage\(message, element, prompt, sender, messageId, focusText \|\| null, target, 'director', \{ framing, continuity, visualDirection, castOverrides \}\)/);
-    assert.match(index, /castOverrides: Array\.isArray\(generationOverrides\?\.castOverrides\)/);
+    assert.match(index, /const effectiveCastOverrides =/);
+    assert.match(index, /castOverrides: effectiveCastOverrides/);
     assert.match(scene, /validateDirectorCastOverrides/);
     assert.match(scene, /castCorrection\?\.promptLine/);
     assert.match(cast, /Do not depict/);

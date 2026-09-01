@@ -51,7 +51,7 @@ import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
 import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
-import { enforcePreviousImagePolicy } from './lib/rp/reference-policy.js';
+import { enforcePreviousImagePolicy, projectSelectedReferenceAssets } from './lib/rp/reference-policy.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -68,7 +68,7 @@ import {
     projectAppearanceLookActionState,
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
-import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, clearChatIdentityPin, getChatAppearanceSource, getChatBinding, getChatIdentityPin, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatIdentityPin, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
+import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, clearChatIdentityPin, getChatAppearanceSource, getChatBinding, getChatCastOverrides, getChatIdentityPin, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatCastOverride, setChatIdentityPin, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedIterationArtifact, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
@@ -90,6 +90,7 @@ import { createCinematicUiController, focusCinematicSuggestionCard, installCinem
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
 import { inferDirectorCast } from './lib/rp/director-cast.js';
+import { renderCastCorrectionControls, CAST_CORRECTION_SETTINGS_CSS } from './lib/rp/cast-settings-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1838,6 +1839,9 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
         if (typeof generationOverrides.visualDirection === 'string') settingsSnapshot.custom_visual_instruction = generationOverrides.visualDirection.slice(0, 1000);
     }
+    const effectiveCastOverrides = Array.isArray(generationOverrides?.castOverrides)
+        ? generationOverrides.castOverrides
+        : invocation === 'wand' ? chatCastPreferences() : [];
     const currentChatId = String(getContext().chatId || '');
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery)
         ? settingsSnapshot.gallery.filter((item) => currentChatId && String(item?.chatId || '') === currentChatId)
@@ -1911,7 +1915,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         identities: appearanceIdentities,
         priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
         settings: settingsSnapshot,
-        castOverrides: Array.isArray(generationOverrides?.castOverrides) ? generationOverrides.castOverrides : [],
+        castOverrides: effectiveCastOverrides,
     });
     const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
     const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state), ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}) };
@@ -2090,8 +2094,25 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         const missingReferenceOmissions = policyReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
         const availableReferenceIds = availableReferences.map((reference) => reference.id);
         const plan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
-        const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
-        const dispatchedPlan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions, messages });
+        const selectedProjection = projectSelectedReferenceAssets({ references: plan.references, assets });
+        const dispatchCanonSnapshot = { ...policyCanonSnapshot, references: selectedProjection.references, assets: selectedProjection.assets };
+        const dispatchPlanInput = {
+            ...policyPlanInput,
+            canonSnapshot: dispatchCanonSnapshot,
+            // Rebuild from the exact selected set so the immutable provider plan,
+            // message parts, and asset map cannot drift back to omitted identities.
+            references: selectedProjection.references,
+            referencePlan: policyPlanInput.referencePlan && typeof policyPlanInput.referencePlan === 'object'
+                ? { ...policyPlanInput.referencePlan, selected: selectedProjection.references, omitted: [] }
+                : { selected: selectedProjection.references, omitted: [] },
+        };
+        const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, selectedProjection.assets);
+        const dispatchedPlan = createGenerationPlan({
+            ...dispatchPlanInput,
+            availableReferenceIds: selectedProjection.references.map((reference) => reference.id),
+            referenceOmissions: [],
+            messages,
+        });
         const capturedIterationPlan = {
             planId: dispatchedPlan.id,
             revision: dispatchedPlan.resolved.routeEvidence?.revision || `${dispatchedPlan.resolved.providerId}:${dispatchedPlan.resolved.modelId}:${dispatchedPlan.resolved.transportId}`,
@@ -2400,9 +2421,22 @@ function chatWandPreferences() {
     return getChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY]) || {};
 }
 
+function chatCastPreferences() {
+    return getChatCastOverrides(chat_metadata?.[CHAT_CANON_KEY]);
+}
+
 function setChatWandPreference(name, value) {
     chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { [name]: value });
     void saveChatConditional();
+}
+
+function chooseChatCastOverride(identityId, action) {
+    const identity = getAppearanceIdentityChoices().find((entry) => entry.id === identityId);
+    if (!identity) return { status: 'unavailable' };
+    chat_metadata[CHAT_CANON_KEY] = setChatCastOverride(chat_metadata?.[CHAT_CANON_KEY], identity.id, action);
+    void saveChatConditional();
+    renderChatAppearanceSources();
+    return { status: 'selected', identityId: identity.id, action };
 }
 
 function chooseAppearanceSource(identityId, sourceType) {
@@ -3228,10 +3262,12 @@ function renderChatAppearanceSources() {
     const list = $('#cig_chat_appearance_sources_list');
     if (!list.length) return;
     list.empty();
-    const identities = getAppearanceIdentityChoices().filter((identity) => ['character', 'user'].includes(identity.kind));
+    const castHost = $('#cig_chat_cast_corrections');
+    const identities = getAppearanceIdentityChoices().filter((identity) => ['character', 'user', 'npc'].includes(identity.kind));
     const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
     if (!identities.length) {
         $('<p>').text('No current character or persona identity is available.').appendTo(list);
+        castHost.html(renderCastCorrectionControls({ identities: [], overrides: chatCastPreferences() }));
         renderChatOutfitControls([]);
         return;
     }
@@ -3257,6 +3293,7 @@ function renderChatAppearanceSources() {
         else $('<button type="button" class="menu_button cig_chat_appearance_pin">Pin this identity</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'pin', 'aria-label': `Pin ${identity.label || identity.id} for this chat` }).appendTo(row);
         list.append(row);
     }
+    castHost.html(renderCastCorrectionControls({ identities, overrides: chatCastPreferences() }));
     renderChatOutfitControls(identities);
 }
 
@@ -4202,6 +4239,12 @@ jQuery(async () => {
         if (!response.ok) throw new Error(`Failed to load template: ${response.status}`);
         const settingsHtml = await response.text();
         $('#extensions_settings').append(settingsHtml);
+        if (!document.getElementById('cig_cast_settings_styles')) {
+            const castStyle = document.createElement('style');
+            castStyle.id = 'cig_cast_settings_styles';
+            castStyle.textContent = CAST_CORRECTION_SETTINGS_CSS;
+            document.head.appendChild(castStyle);
+        }
     } catch (error) {
         console.error(`[${extensionName}] Error loading settings template:`, error);
         toastr.error('Failed to load extension settings.', 'Context Image Generation');
@@ -4475,6 +4518,13 @@ jQuery(async () => {
         e.preventDefault();
         try { chooseAppearanceSource($(this).attr('data-cig-chat-appearance-source'), String($(this).val() || 'auto')); }
         catch (error) { showGenerationError(error, 'Update chat appearance source'); }
+    });
+
+    $(document).on('change', '[data-cig-chat-cast-action]', function (e) {
+        e.preventDefault();
+        try {
+            chooseChatCastOverride($(this).attr('data-cig-chat-cast-action'), String($(this).val() || 'auto'));
+        } catch (error) { showGenerationError(error, 'Update current chat cast'); }
     });
 
     $(document).on('click', '[data-cig-chat-appearance-pin]', function (e) {

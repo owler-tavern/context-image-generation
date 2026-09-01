@@ -33,6 +33,54 @@ test('selected passage is the immutable scene focus while recent context only en
     assert.equal(snapshot.sourcePassage, 'Ava raises the lantern.');
 });
 
+test('a long clicked message is bounded instead of losing the scene moment', () => {
+    const opening = 'Ava crosses the desert with thirty riders while a sandstorm gathers. ';
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Ava', role: 'character', mes: opening + 'x'.repeat(13000) },
+        identities,
+        settings: { framing_preference: 'wide', continuity_strength: 'balanced' },
+    });
+
+    assert.equal(snapshot.interpretation.focusPassage.source, 'clicked-message');
+    assert.match(snapshot.sourcePassage, /^Ava crosses the desert with thirty riders/u);
+    assert.match(snapshot.prompt, /^Ava crosses the desert with thirty riders/u);
+    assert.doesNotMatch(snapshot.prompt, /Scene moment unavailable/u);
+    assert.ok(snapshot.sourcePassage.length <= 12000);
+});
+
+test('the ordinary wand keeps the exact clicked message as primary source when no highlight is selected', () => {
+    const clicked = 'A quiet exchange happens under the old bridge, with no named location cue.';
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Ava', role: 'character', mes: clicked },
+        identities,
+    });
+    assert.equal(snapshot.sourcePassage, clicked);
+    assert.match(snapshot.prompt, new RegExp(`^${clicked.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')}`));
+});
+
+test('a selected highlight wins over the clicked message while interpretation remains supporting context', () => {
+    const snapshot = buildSceneGenerationSnapshot({
+        focusText: 'Ava lifts the blue lantern.',
+        selectedPassage: 'Ava lifts the blue lantern.',
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava waits beside the old bridge.' },
+        identities,
+    });
+    assert.equal(snapshot.sourcePassage, 'Ava lifts the blue lantern.');
+    assert.match(snapshot.prompt, /^Ava lifts the blue lantern\./u);
+    assert.doesNotMatch(snapshot.prompt, /^Ava waits beside/u);
+});
+
+test('an uncertain or empty interpretation cannot replace a non-empty original source', () => {
+    const source = 'Ava pauses in a moment the interpreter does not classify.';
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Ava', role: 'character', mes: source },
+        recentContext: [],
+        identities: [],
+    });
+    assert.equal(snapshot.sourcePassage, source);
+    assert.doesNotMatch(snapshot.prompt, /Scene moment unavailable/u);
+});
+
 test('prompt excludes narrator, absent, and obsolete facts while preserving unknown state as unknown', () => {
     const snapshot = buildSceneGenerationSnapshot({
         clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava is at the library.' },
