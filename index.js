@@ -980,7 +980,8 @@ function createCinematicSurface() {
             cinematicAutomation: chat_metadata?.[CHAT_CANON_KEY]?.[CINEMATIC_AUTOMATION_KEY],
             storyState: chat_metadata?.[SCENE_STATE_METADATA_KEY],
         }),
-        writeState: (value) => {
+        writeState: (value, { chatId } = {}) => {
+            if (chatId && String(chatId) !== String(getContext().chatId)) return;
             if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
             chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = value.cinematicAutomation;
             chat_metadata[SCENE_STATE_METADATA_KEY] = value.storyState;
@@ -1019,7 +1020,11 @@ function createCinematicSurface() {
             const shot = suggestion.adjustments?.prompt || suggestion.proposedShot || '';
             const prompt = shot ? `${message.mes}\n\nCinematic shot direction: ${shot}` : message.mes;
             const result = await attachGeneratedImage(message, element, prompt, sender, messageId, null, target, 'cinematic-automation');
-            return { status: 'completed', receipt: result?.receipt || result };
+            // attachGeneratedImage resolves to true only after media append and
+            // chat persistence succeed. False means stale/gallery-only or an
+            // otherwise non-terminal attachment, so it must release the plan.
+            if (result !== true) return { status: 'failed', attachmentStatus: 'not-attached', reason: 'The generated image was not attached to the story message.' };
+            return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
         },
     });
     cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });

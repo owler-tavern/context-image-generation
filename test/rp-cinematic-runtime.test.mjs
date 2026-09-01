@@ -104,6 +104,96 @@ test('generation-count ceiling stops later suggestions after a completed receipt
     assert.equal(runtime.getState().suggestion, null);
 });
 
+test('non-attached, stale, or gallery-only dispatch releases the reservation without spending a generation', async () => {
+    for (const receipt of [false, { status: 'stale' }, { status: 'failed', attachmentStatus: 'not-attached' }]) {
+        const { runtime, calls } = setup({ dispatch: async () => { calls.dispatch += 1; return receipt; } });
+        await runtime.load({ chatId: 'chat-a', epoch: 1 });
+        const suggestion = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 11, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+        const result = await runtime.approve(suggestion.suggestion.suggestionId);
+        assert.equal(result.status, 'failed');
+        assert.equal(runtime.getState().session.generationCount, 0);
+        assert.equal(runtime.getState().session.reservedGenerationCount, 0);
+        assert.equal(runtime.getState().session.settledPlans[result.receipt?.planId || Object.keys(runtime.getState().session.settledPlans)[0]]?.outcome, 'failed');
+        assert.equal(calls.dispatch, 1);
+    }
+});
+
+test('approval settlement stays with chat A while chat B is active, then restores A on return', async () => {
+    let resolveDispatch;
+    const pending = new Promise((resolve) => { resolveDispatch = resolve; });
+    let dispatchStarted;
+    const started = new Promise((resolve) => { dispatchStarted = resolve; });
+    const states = new Map();
+    let activeChat = 'chat-a';
+    let activeEpoch = 1;
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => activeChat,
+        getEpoch: () => activeEpoch,
+        readState: ({ chatId } = {}) => states.get(chatId || activeChat) || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value, { chatId } = {}) => states.set(chatId || activeChat, structuredClone(value)),
+        saveChat: async () => {},
+        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
+        dispatch: async () => { dispatchStarted(); return pending; },
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const card = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 12, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    const approval = runtime.approve(card.suggestion.suggestionId);
+    await started;
+    activeChat = 'chat-b';
+    activeEpoch = 2;
+    runtime.load({ chatId: 'chat-b', epoch: 2 });
+    assert.equal(runtime.getState().chatId, 'chat-b');
+    assert.equal(runtime.getState().session.generationCount, 0);
+    resolveDispatch({ status: 'completed', receipt: { actualCost: null } });
+    const result = await approval;
+    assert.equal(result.status, 'completed');
+    assert.equal(runtime.getState().chatId, 'chat-b');
+    assert.equal(runtime.getState().session.generationCount, 0);
+    activeChat = 'chat-a';
+    activeEpoch = 3;
+    const restored = runtime.load({ chatId: 'chat-a', epoch: 3 });
+    assert.equal(restored.chatId, 'chat-a');
+    assert.equal(runtime.getState().session.generationCount, 1);
+    assert.equal(runtime.getState().session.reservedGenerationCount, 0);
+});
+
+test('late failed approval releases chat A reservation without changing chat B', async () => {
+    let rejectDispatch;
+    const pending = new Promise((_resolve, reject) => { rejectDispatch = reject; });
+    let dispatchStarted;
+    const started = new Promise((resolve) => { dispatchStarted = resolve; });
+    let activeChat = 'chat-a';
+    let activeEpoch = 1;
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => activeChat,
+        getEpoch: () => activeEpoch,
+        readState: () => ({ storyState: { schema: 1, sceneFacts: {} } }),
+        writeState: () => {},
+        saveChat: async () => {},
+        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
+        dispatch: async () => { dispatchStarted(); return pending; },
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const card = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 13, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    const approval = runtime.approve(card.suggestion.suggestionId);
+    await started;
+    activeChat = 'chat-b';
+    activeEpoch = 2;
+    runtime.load({ chatId: 'chat-b', epoch: 2 });
+    rejectDispatch(new Error('provider failed'));
+    const result = await approval;
+    assert.equal(result.status, 'failed');
+    assert.equal(runtime.getState().chatId, 'chat-b');
+    assert.equal(runtime.getState().session.generationCount, 0);
+    activeChat = 'chat-a';
+    activeEpoch = 3;
+    runtime.load({ chatId: 'chat-a', epoch: 3 });
+    assert.equal(runtime.getState().session.generationCount, 0);
+    assert.equal(runtime.getState().session.reservedGenerationCount, 0);
+});
+
 test('runtime accepts the real scene interpretation delta, not a message counter', async () => {
     const { runtime } = setup({
         interpret: ({ message, priorStoryState }) => buildSceneGenerationSnapshot({

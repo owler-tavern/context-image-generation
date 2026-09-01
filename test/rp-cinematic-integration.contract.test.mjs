@@ -17,6 +17,8 @@ test('cinematic automation is mounted into real chat lifecycle hooks and uses st
     assert.match(index, /buildSceneGenerationSnapshot\(/);
     assert.match(index, /getMessageFingerprint/);
     assert.match(index, /attachGeneratedImage\(message, element, prompt/);
+    assert.match(index, /if \(result !== true\).*attachmentStatus: 'not-attached'/s);
+    assert.match(index, /writeState: \(value, \{ chatId \} = \{\}\)/);
     assert.match(index, /cinematicRuntime\.approve/);
 });
 
