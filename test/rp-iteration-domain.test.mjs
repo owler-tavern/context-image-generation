@@ -48,7 +48,7 @@ function planIterationAction(input) {
         verifyGenerationPlan,
         verifyCanonicalEligibility,
         invocationId: input.invocationId || input.actionId || 'test-invocation',
-        paidConsent: input.paidConsent ? { costUnavailableAcknowledged: true, ...input.paidConsent } : input.paidConsent,
+        paidConsent: input.paidConsent ? { cost: 0.01, ...input.paidConsent } : input.paidConsent,
     });
 }
 
@@ -143,7 +143,7 @@ test('edit and reuse actions have stable seams and edit only the requested recip
     assert.equal(first.artifacts[0].artifactId, second.artifacts[0].artifactId);
 });
 
-test('missing explicit paid consent blocks dispatch and two-up records count and unknown cost', () => {
+test('missing explicit paid consent blocks dispatch and two-up records count but unknown cost cannot dispatch', () => {
     const blocked = planIterationAction({ action: 'vary-shot', sourceArtifact: source, actionId: 'blocked', changes: { composition: { framing: 'close' } } });
     assert.equal(blocked.status, 'consent-required');
     assert.equal(blocked.dispatch.allowed, false);
@@ -155,12 +155,14 @@ test('missing explicit paid consent blocks dispatch and two-up records count and
         actionId: 'two-up',
         twoUp: true,
         changes: { composition: { framing: 'wide' } },
-        paidConsent: { approved: true, outputCount: 2 },
+        paidConsent: { approved: true, outputCount: 2, cost: null },
     });
     assert.equal(twoUp.artifacts.length, 2);
     assert.equal(twoUp.consent.outputCount, 2);
     assert.equal(twoUp.consent.cost, null);
     assert.equal(twoUp.consent.costDisclosure, 'unknown');
+    assert.equal(twoUp.status, 'consent-required');
+    assert.equal(twoUp.dispatch.allowed, false);
     assert.notEqual(twoUp.artifacts[0].artifactId, twoUp.artifacts[1].artifactId);
 });
 
@@ -181,6 +183,28 @@ test('retry with repaired prompt returns a reviewable draft and never permits au
     assert.equal(plan.dispatch.allowed, false);
     assert.equal(plan.dispatch.reason, 'manual-confirmation-required');
     assert.equal(plan.artifacts[0].effectivePrompt, draft.repairedPrompt);
+});
+
+test('two-up cannot dispatch when cost is unavailable even after acknowledgement', () => {
+    const plan = rawPlanIterationAction({
+        action: 'vary-shot',
+        sourceArtifact: source,
+        invocationId: 'two-up-unknown-cost',
+        reserveInvocation,
+        generationPlan,
+        verifyGenerationPlan,
+        twoUp: true,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: {
+            approved: true,
+            outputCount: 2,
+            costUnavailableAcknowledged: true,
+        },
+    });
+
+    assert.equal(plan.consent.cost, null);
+    assert.equal(plan.status, 'consent-required');
+    assert.equal(plan.dispatch.allowed, false);
 });
 
 test('making canonical roles updates only selected active look, prior scene, or chat background', () => {
