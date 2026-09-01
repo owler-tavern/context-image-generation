@@ -85,3 +85,13 @@ test('identity-owned avatar and description are accepted when explicit arguments
     assert.equal(result.sourceType, 'avatar');
     assert.deepEqual(result.textTraits, [{ key: 'coat', value: 'red', text: 'red' }]);
 });
+
+test('character avatar filename identity matches the canonical character ID and raw description remains available', () => {
+    const result = resolveAppearanceTruth({
+        identity: { id: 'character:ava portrait 01.png' },
+        avatar: { url: '/user/images/ava portrait 01.png', characterId: 'ava portrait 01.png' },
+        description: 'Ava has a scar that the image cannot establish.',
+    });
+    assert.equal(result.sourceType, 'avatar');
+    assert.deepEqual(result.description, { text: 'Ava has a scar that the image cannot establish.' });
+});

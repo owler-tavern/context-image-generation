@@ -8,6 +8,7 @@ import {
     setChatOutfitLock,
     getChatOutfitBinding,
 } from '../lib/rp/outfit-lock.js';
+import { isStableIdentityId } from '../lib/rp/identities.js';
 
 const catalog = migrateOutfitCatalog({ outfits: [
     { id: 'outfit:casual', identityId: 'character:ava', name: 'Casual', items: ['blue shirt', 'jeans'] },
@@ -62,4 +63,14 @@ test('catalog maps may provide the outfit id as the map key', () => {
         'outfit:casual': { identityId: 'character:ava', name: 'Casual', items: ['blue shirt'] },
     } });
     assert.equal(mapped.outfits[0].id, 'outfit:casual');
+});
+
+test('canonical stable identity validation accepts character, persona, and multi-part NPC IDs with spaces', () => {
+    for (const id of [
+        'character:ava file.png',
+        'user:persona portrait 01.png',
+        'persona:Sam Morgan',
+        'npc:chat-42:Captain Mira Vale',
+    ]) assert.equal(isStableIdentityId(id), true, id);
+    for (const id of ['Ava', 'npc:chat-42', 'character:', 'npc::', 'character:avatar\\file.png']) assert.equal(isStableIdentityId(id), false, id);
 });
