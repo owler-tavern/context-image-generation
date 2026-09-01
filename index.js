@@ -82,7 +82,7 @@ import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, pers
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
-import { createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
+import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 
 const extensionName = 'context-image-generation';
@@ -879,6 +879,13 @@ function createStoryMemorySurface() {
     });
     const dependencies = {
         ...runtime,
+        canContinueFromScene: () => {
+            const currentSettings = extension_settings[extensionName] || {};
+            const capability = getReferenceImageCapability(currentSettings.provider || 'makersuite', currentSettings.model);
+            return capability?.maxCount > 0
+                ? { allowed: true }
+                : { allowed: false, reason: 'The current model cannot accept a prior scene image. Choose a model with image-reference support before continuing.' };
+        },
         continuePlanner: async (request) => {
             const captured = { chatId: request.chatId, epoch: chatLifecycleEpoch.capture() };
             if (!String(getContext().chatId) || String(getContext().chatId) !== String(captured.chatId) || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
@@ -919,7 +926,8 @@ function refreshStoryMemorySurface() {
 function openStoryMemoryArtifact(messageId) {
     activateSettingsTab('images-cast');
     const message = getContext().chat?.[Number(messageId)];
-    const media = message?.extra?.media?.find((item) => isCigOwnedMedia(item));
+    const activeMedia = activeMediaForMessage(message);
+    const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
     const entry = storyMemoryController?.getState().timeline?.find((item) => item.messageId === Number(messageId) && item.url === media?.url);
     if (entry) storyMemoryController.setSelectedArtifact(entry.id);
     document.getElementById('cig_story_memory_surface')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
@@ -1676,7 +1684,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state), __cigIterationArtifact: capturedIterationArtifact }
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state), __cigStoryMemoryFacts: buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state), __cigIterationArtifact: capturedIterationArtifact }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -2844,6 +2852,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 cig_owner: extensionName,
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
                 ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
+                ...(Array.isArray(result.__cigStoryMemoryFacts) && result.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(result.__cigStoryMemoryFacts) } : {}),
                 ...(result.__cigIterationArtifact ? { cig_iteration_artifact: storedIterationArtifact || sanitizeIterationArtifactForStorage(result.__cigIterationArtifact) } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
@@ -2960,6 +2969,7 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
         title: String(artifact.effectivePrompt || '').slice(0, 100),
         source: MEDIA_SOURCE.GENERATED,
         cig_owner: extensionName,
+        ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
         cig_iteration_artifact: iterationArtifactForStorage(artifact, plan),
         cig_iteration_persistence: { planId: plan.planId, invocationId: plan.invocationId },
     });
@@ -2975,6 +2985,7 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
     }
     await addToGallery(artifact.imageData, artifact.effectivePrompt || '', messageId, filePath, {
         iterationArtifact: iterationArtifactForStorage(artifact, plan),
+        ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { storyMemoryFacts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
         source: 'iteration', chatId: target.chatId, messageId,
     });
     renderIterationActionSurface(messageElement, message);

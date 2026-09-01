@@ -3,11 +3,14 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
+    buildStoryMemoryFactSnapshot,
+    compactStoryMemory,
     collectStoryMemoryMedia,
     createStoryMemoryRuntime,
+    STORY_MEMORY_PERSISTENCE_LIMITS,
     STORY_MEMORY_SETTINGS_KEY,
 } from '../lib/rp/story-memory-runtime.js';
-import { createStoryMemoryController } from '../lib/rp/story-memory-ui.js';
+import { createStoryMemoryController, renderStoryMemorySurface } from '../lib/rp/story-memory-ui.js';
 
 const extensionName = 'context-image-generation';
 
@@ -78,7 +81,7 @@ test('mounted seam behavior searches, persists favorite/collection, and stages C
     const settings = { [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} }, gallery: [] };
     let providerCalls = 0;
     const runtime = createStoryMemoryRuntime({ extensionName, settings, getChat: () => chat(), getChatId: () => 'chat-a', saveSettings: async () => {}, fetchImpl: async () => ({ ok: true, async json() { return { extension_settings: { [extensionName]: settings } }; } }) });
-    const controller = createStoryMemoryController({ ...runtime, continuePlanner: async (request) => { providerCalls += 1; return { status: 'planned', artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId }; } });
+    const controller = createStoryMemoryController({ ...runtime, canContinueFromScene: () => ({ allowed: true }), continuePlanner: async (request) => { providerCalls += 1; return { status: 'planned', artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId }; } });
     await controller.load({ chatId: 'chat-a' });
     const filtered = controller.setFilters({ characterId: 'ava', taskId: 'task-station' });
     assert.deepEqual(filtered.timeline.map((entry) => entry.url), ['/images/station.png']);
@@ -105,4 +108,79 @@ test('production index imports and mounts the story memory surface in Images & C
     assert.match(index, /storyMemoryController/u);
     assert.match(settings, /Visual story memory/u);
     assert.match(settings, /cig_story_memory_surface/u);
+});
+
+test('real P2 scene state becomes bounded valid story facts on CIG media', () => {
+    const facts = buildStoryMemoryFactSnapshot({ schema: 1, sceneFacts: {
+        cast: [{ identityId: 'ava', label: 'Ava', confidence: 'high' }],
+        location: 'Quiet station',
+        objects: [{ identityId: 'ava', value: 'silver key', confidence: 'medium' }],
+    } });
+    assert.ok(facts.length > 0);
+    const entries = collectStoryMemoryMedia({ chatId: 'chat-a', extensionName, chat: [{ extra: { media: [media('/images/facts.png', { cig_story_memory_facts: facts })] } }] });
+    assert.ok(entries[0].facts.length > 0);
+    assert.match(entries[0].facts[0].text, /Ava|station|key/u);
+    assert.equal(JSON.stringify(entries[0].facts).includes('provider'), false);
+});
+
+test('stale persistence compensates a remote write after chat switches mid-save', async () => {
+    const settings = { [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} } };
+    const previous = JSON.parse(JSON.stringify(settings[STORY_MEMORY_SETTINGS_KEY]));
+    let activeChat = 'chat-a';
+    let release;
+    let saves = 0;
+    let backing;
+    const runtime = createStoryMemoryRuntime({ extensionName, settings, getChatId: () => activeChat, isCurrent: ({ chatId }) => chatId === activeChat, saveSettings: async () => {
+        saves += 1;
+        if (saves === 1) {
+            activeChat = 'chat-b';
+            await new Promise((resolve) => { release = resolve; });
+        }
+        backing = JSON.parse(JSON.stringify(settings[STORY_MEMORY_SETTINGS_KEY]));
+    }, fetchImpl: async () => ({ ok: true, async json() { return { extension_settings: { [extensionName]: { [STORY_MEMORY_SETTINGS_KEY]: backing } } }; } }) });
+    const pending = runtime.persistMemory({ chatId: 'chat-a', epoch: 1, memory: { schema: 2, artifacts: { x: { id: 'x', chatId: 'chat-a', url: '/images/x.png', favorite: true } }, collections: {} } });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    release();
+    await assert.rejects(pending, /chat changed/i);
+    assert.deepEqual(backing, previous);
+    assert.equal(saves, 2);
+});
+
+test('story-memory persistence is bounded and strips unknown provider content', () => {
+    const artifacts = Object.fromEntries(Array.from({ length: STORY_MEMORY_PERSISTENCE_LIMITS.maxArtifacts + 40 }, (_, index) => [`a-${index}`, {
+        id: `a-${index}`, chatId: 'chat-a', url: `/images/${index}.png`, messageId: index, prompt: 'x'.repeat(5000), sourceMoment: { passage: 'y'.repeat(5000) }, providerMessages: 'secret'.repeat(1000), facts: [{ text: 'fact'.repeat(1000) }],
+    }]));
+    const compact = compactStoryMemory({ schema: 2, artifacts, collections: { huge: { id: 'huge', label: 'z'.repeat(1000), memberIds: Object.keys(artifacts) } } });
+    assert.ok(Object.keys(compact.artifacts).length <= STORY_MEMORY_PERSISTENCE_LIMITS.maxArtifacts);
+    assert.ok(Object.values(compact.artifacts).filter((entry) => entry.chatId === 'chat-a').length <= STORY_MEMORY_PERSISTENCE_LIMITS.maxArtifactsPerChat);
+    assert.ok(Buffer.byteLength(JSON.stringify(compact), 'utf8') <= STORY_MEMORY_PERSISTENCE_LIMITS.maxBytes);
+    assert.equal(JSON.stringify(compact).includes('providerMessages'), false);
+});
+
+test('Continue blocks before planning when the current route cannot accept image references', async () => {
+    const { deps, calls } = (() => {
+        const result = { calls: 0 };
+        const memory = { schema: 2, artifacts: { x: { id: 'x', url: '/images/x.png', chatId: 'chat-a', messageId: 1, version: 1, facts: [], sourceMoment: {}, generation: {} } }, collections: {} };
+        return { calls: result, deps: { readMemory: async () => memory, hydrateGallery: async ({ memory: value }) => ({ memory: value }), persistMemory: async () => ({ memory }), readbackMemory: async () => ({ memory }), canContinueFromScene: () => ({ allowed: false, reason: 'The current model cannot accept a prior image.' }), continuePlanner: async () => { result.calls += 1; return { status: 'planned', artifactId: 'x', artifactVersion: 1, requestId: 'x' }; } } };
+    })();
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    const result = await controller.continueFromScene('x');
+    assert.equal(result.status, 'error');
+    assert.match(result.error, /cannot accept a prior image/u);
+    assert.equal(calls.calls, 0);
+});
+
+test('story cards expose named collection assignment controls', () => {
+    const html = renderStoryMemorySurface({ status: 'ready', timeline: [{ id: 'x', url: '/images/x.png', chatId: 'chat-a', messageId: 1, sourceMoment: { passage: 'A moment' }, facts: [], generation: {} }], collections: [{ id: 'canon-id', label: 'Canon moments', kind: 'moment', memberIds: [] }] });
+    assert.match(html, /data-story-action="add-member-from-card"/u);
+    assert.match(html, /Canon moments/u);
+    assert.doesNotMatch(html, />canon-id</u);
+});
+
+test('inline opener follows the active media index rather than the first CIG media', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /const activeMedia = activeMediaForMessage\(message\)/u);
+    assert.match(index, /activeMedia\?\.item/u);
+    assert.doesNotMatch(index, /message\?\.extra\?\.media\?\.find\(\(item\) => isCigOwnedMedia\(item\)\)/u);
 });
