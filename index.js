@@ -89,6 +89,7 @@ import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMAT
 import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
+import { inferDirectorCast } from './lib/rp/director-cast.js';
 import { createVisualStoryFocusController, renderVisualStorySurface, revealVisualStorySurface as revealVisualStorySurfaceUi, VISUAL_STORY_UI_CSS } from './lib/rp/visual-story-ui.js';
 
 const extensionName = 'context-image-generation';
@@ -1251,6 +1252,7 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     return {
         moment: snapshot.sourcePassage || focusText || sourceMessage,
         inspection: snapshot.inspection?.lines || [],
+        castCandidates: inferDirectorCast({ interpretation: snapshot.interpretation, identities }),
         referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
         routeSummary,
         budgetSummary: 'Exact provider cost is unavailable; one generation will be requested only when Generate is pressed.',
@@ -1291,7 +1293,7 @@ function createDirectorSurface() {
             const readiness = directorRouteReadiness(settings);
             return readiness.ready ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: readiness.text };
         },
-        dispatch: async ({ sourceMessage, focusText, target, framing, continuity, visualDirection }) => {
+        dispatch: async ({ sourceMessage, focusText, target, framing, continuity, visualDirection, castOverrides }) => {
             const context = getContext();
             const messageId = Number(target.messageId);
             const message = context.chat?.[messageId];
@@ -1299,7 +1301,7 @@ function createDirectorSurface() {
             if (!message || !element.length) throw new Error('The directed story message is no longer available.');
             const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
             const prompt = sourceMessage || message.mes || '';
-            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director', { framing, continuity, visualDirection });
+            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director', { framing, continuity, visualDirection, castOverrides });
             if (attached !== true) return { status: 'failed', reason: 'The image was not attached to this message. Your draft is still available.' };
             return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
         },
@@ -4719,6 +4721,26 @@ jQuery(async () => {
         panel.find('[data-director-field]').each(function () { values[$(this).attr('data-director-field')] = $(this).val(); });
         try { await directorUiController?.update(values); }
         catch (error) { showGenerationError(error, 'Update Director'); }
+    });
+
+    $(document).on('click', '.cig_director_panel [data-director-cast-action]', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const button = this;
+        const panel = $(button).closest('.cig_director_panel');
+        const identityId = String($(button).attr('data-director-cast-id') || '');
+        const action = String($(button).attr('data-director-cast-action') || '');
+        const castOverrides = [];
+        panel.find('[data-director-cast-row]').each(function () {
+            const row = $(this);
+            const rowId = String(row.attr('data-director-cast-id') || '');
+            const rowAction = rowId === identityId ? action : String(row.attr('data-current-action') || 'include');
+            if (rowId && ['include', 'focus', 'exclude'].includes(rowAction)) castOverrides.push({ identityId: rowId, action: rowAction });
+        });
+        setBusyState(button, true, { busyTitle: 'Updating cast…' });
+        try { await directorUiController?.update({ castOverrides }); }
+        catch (error) { showGenerationError(error, 'Update Director cast'); }
+        finally { setBusyState(button, false); }
     });
 
     $(document).on('click', '.cig_director_panel [data-director-action]', async function (e) {
