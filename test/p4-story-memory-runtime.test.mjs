@@ -77,6 +77,31 @@ test('runtime blocks stale mutation after chat switch and never invokes a provid
     assert.equal(typeof runtime.generate, 'undefined');
 });
 
+test('a current story memory reload clears an obsolete prior load error', async () => {
+    const settings = { [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} } };
+    let failRead = true;
+    const deps = {
+        readMemory: async () => {
+            if (failRead) throw new Error('Story memory action was blocked because the chat changed.');
+            return { memory: settings[STORY_MEMORY_SETTINGS_KEY], gallery: [] };
+        },
+        hydrateGallery: async ({ memory }) => ({ memory, gallery: [] }),
+        persistMemory: async ({ memory }) => ({ memory }),
+        readbackMemory: async () => ({ memory: settings[STORY_MEMORY_SETTINGS_KEY] }),
+    };
+    const controller = createStoryMemoryController(deps);
+    const failed = await controller.load({ chatId: 'chat-a' });
+    assert.equal(failed.status, 'error');
+    assert.match(failed.error, /chat changed/i);
+    failRead = false;
+    const reloading = controller.load({ chatId: 'chat-a' });
+    assert.equal(controller.getState().status, 'loading');
+    assert.equal(controller.getState().error, null);
+    const loaded = await reloading;
+    assert.equal(loaded.status, 'ready');
+    assert.equal(loaded.error, null);
+});
+
 test('Gallery-only current-chat media remains ready across hydration, persistence, and readback', async () => {
     const settings = {
         [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
@@ -128,6 +153,11 @@ test('production index imports and mounts the story memory surface in Images & C
     assert.match(index, /storyMemoryController/u);
     assert.match(settings, /Visual story memory/u);
     assert.match(settings, /cig_story_memory_surface/u);
+});
+
+test('production initializes the shared chat epoch before the first scoped story memory load', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /renderProviderDropdown\(\);[\s\S]*chatLifecycleEpoch\.advance\(\);[\s\S]*await loadSettings\(\)/u);
 });
 
 test('production story memory mount disables the unscoped auto-load before explicit chat-scoped load', async () => {

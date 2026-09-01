@@ -4122,6 +4122,7 @@ jQuery(async () => {
     }
 
     renderProviderDropdown();
+    chatLifecycleEpoch.advance();
     await loadSettings();
 
     $('#cig_settings [data-cig-tab]').on('click', function () {
