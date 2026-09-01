@@ -1397,13 +1397,6 @@ async function loadSettings() {
         cigSettings.cinematic_automation_sessions.chats = {};
         settingsMigrated = true;
     }
-    if (!cigSettings.director_sessions || typeof cigSettings.director_sessions !== 'object' || Array.isArray(cigSettings.director_sessions)) {
-        cigSettings.director_sessions = { schema: 1, chats: {} };
-        settingsMigrated = true;
-    } else if (!cigSettings.director_sessions.chats || typeof cigSettings.director_sessions.chats !== 'object' || Array.isArray(cigSettings.director_sessions.chats)) {
-        cigSettings.director_sessions.chats = {};
-        settingsMigrated = true;
-    }
     const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
     if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
         cigSettings.rp_library = migratedAppearanceLibrary;
