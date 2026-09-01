@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat } from '../lib/rp/chat-canon.js';
+import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint } from '../lib/rp/chat-canon.js';
 
 test('chat canon contains only schema and bindings', () => {
     const state = migrateChatCanon({ bindings: {} });
@@ -24,6 +24,8 @@ test('future schemas are read-only and unsafe or oversized unknown fields are di
     assert.equal('fn' in state, false);
     assert.equal('huge' in state, false);
     assert.deepEqual(state.safe, ['ok']);
+    const total = migrateChatCanon({ bindings: {}, a: 'x'.repeat(5000), b: 'y'.repeat(5000) });
+    assert.ok(JSON.stringify(total).length <= 8400);
 });
 
 test('using a different look protects a locked binding unless confirmed and rejects stale revisions', () => {
@@ -34,4 +36,11 @@ test('using a different look protects a locked binding unless confirmed and reje
     assert.equal(changed.status, 'selected');
     assert.equal(getChatBinding(changed.state, 'character:ava').activeLookId, 'look:b');
     assert.equal(getChatBinding(changed.state, 'character:ava').isLocked, true);
+});
+
+test('binding fingerprint changes across A to B to A revisions', () => {
+    const a1 = { ...setChatBinding({}, 'character:ava', { activeLookId: 'look:a', expectedAssetId: 'asset:a', selectedAt: 1 }), revision: 'r1' };
+    const b = { ...setChatBinding(a1, 'character:ava', { activeLookId: 'look:b', expectedAssetId: 'asset:b', selectedAt: 2 }), revision: 'r2' };
+    const a2 = { ...setChatBinding(b, 'character:ava', { activeLookId: 'look:a', expectedAssetId: 'asset:a', selectedAt: 3 }), revision: 'r3' };
+    assert.notEqual(chatCanonRevisionFingerprint(a1, 'character:ava'), chatCanonRevisionFingerprint(a2, 'character:ava'));
 });

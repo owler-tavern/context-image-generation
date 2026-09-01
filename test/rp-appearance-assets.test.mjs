@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { promoteGalleryArtifact, validateAppearanceAssetUrl } from '../lib/rp/appearance-assets.js';
+import { promoteGalleryArtifact, validateAppearanceAssetUrl, deleteAppearanceAssetFile } from '../lib/rp/appearance-assets.js';
 
 const uuid = '123e4567-e89b-42d3-a456-426614174000';
 const png = 'iVBORw0KGgo=';
@@ -41,4 +41,13 @@ test('promotion rejects invalid image data and quota excess before upload', asyn
     const assets = Object.fromEntries(Array.from({ length: 100 }, (_, i) => [`asset:${i}`, { kind: 'appearance', byteCount: 1 }]));
     await assert.rejects(() => promoteGalleryArtifact({ item: { id: 'g', url: '/g' }, identityId: 'character:ava', library: { assets }, uuid: () => uuid, readDataUrl: async () => `data:image/png;base64,${png}`, saveBase64: async () => { uploads++; } }), /100 appearance assets/i);
     assert.equal(uploads, 0);
+});
+
+test('confirmed-absent cleanup deletes only the exact owned path', async () => {
+    const calls = [];
+    const url = `/user/images/context-image-generation-appearances/cig-appearance-${uuid}.png`;
+    assert.equal(await deleteAppearanceAssetFile(url, async (...args) => { calls.push(args); return { ok: true, status: 200 }; }, () => ({ csrf: 'x' })), true);
+    assert.equal(calls[0][0], '/api/images/delete');
+    assert.deepEqual(JSON.parse(calls[0][1].body), { path: url });
+    await assert.rejects(() => deleteAppearanceAssetFile('/user/images/other/a.png', async () => ({ ok: true })), /unsafe/i);
 });
