@@ -119,6 +119,72 @@ test('mounted action click selects without dispatching and renders the selected 
     assert.equal(calls.dispatch.length, 0);
 });
 
+test('mounted scene submit uses the selected action and sends the complete scene payload', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const listeners = new Map();
+    const fields = new Map([
+        ['[name="twoUp"]', { checked: false }],
+        ['[name="paidConsent"]', { checked: true }],
+        ['[name="sourcePassage"]', { value: 'Ava enters the observatory.' }],
+        ['[name="prompt"]', { value: 'Ava enters beneath a clear dome.' }],
+        ['[name="scene.location"]', { value: 'Observatory' }],
+        ['[name="scene.cast"]', { value: 'Ava, Rowan' }],
+    ]);
+    const host = {
+        innerHTML: '',
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        removeEventListener() {},
+        querySelector(selector) { return fields.get(selector) || null; },
+    };
+    mountIterationSurface(host, controller);
+    const selectScene = { getAttribute(name) { return name === 'data-iteration-action' ? 'keep-characters-change-scene' : name === 'data-iteration-select' ? 'true' : null; }, closest() { return selectScene; } };
+    listeners.get('click')({ target: selectScene, preventDefault() {} });
+    await controller.quote({ action: 'keep-characters-change-scene', changes: { sourcePassage: fields.get('[name="sourcePassage"]').value, prompt: fields.get('[name="prompt"]').value, scene: { location: 'Observatory', cast: 'Ava, Rowan' } } });
+    const submit = { getAttribute(name) { return name === 'data-iteration-submit' ? 'true' : null; }, closest() { return submit; } };
+    listeners.get('click')({ target: submit, preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(controller.getState().status, 'completed');
+    assert.equal(calls.dispatch.length, 1);
+    const output = calls.dispatch[0].artifacts[0];
+    assert.equal(output.sourcePassage.text, 'Ava enters the observatory.');
+    assert.equal(output.effectivePrompt, 'Ava enters beneath a clear dome.');
+    assert.deepEqual(output.canonSnapshot.priorScene, { location: 'Observatory', cast: 'Ava, Rowan' });
+});
+
+test('mounted canonical submit uses the selected action and sends exact role payload', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const listeners = new Map();
+    const fields = new Map([
+        ['[name="twoUp"]', { checked: false }],
+        ['[name="activeLook.identityId"]', { value: 'ava' }],
+        ['[name="activeLook.lookId"]', { value: 'look:2' }],
+        ['[name="priorScene"]', { value: 'Observatory' }],
+        ['[name="chatBackground"]', { value: 'Quiet suspense' }],
+    ]);
+    const host = {
+        innerHTML: '',
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        removeEventListener() {},
+        querySelector(selector) { return fields.get(selector) || null; },
+    };
+    mountIterationSurface(host, controller);
+    const selectCanonical = { getAttribute(name) { return name === 'data-iteration-action' ? 'make-canonical' : name === 'data-iteration-select' ? 'true' : null; }, closest() { return selectCanonical; } };
+    listeners.get('click')({ target: selectCanonical, preventDefault() {} });
+    const submit = { getAttribute(name) { return name === 'data-iteration-submit' ? 'true' : null; }, closest() { return submit; } };
+    listeners.get('click')({ target: submit, preventDefault() {} });
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(controller.getState().status, 'completed');
+    assert.equal(calls.dispatch.length, 0);
+    assert.equal(calls.canonical.length, 1);
+    assert.deepEqual(calls.canonical[0].mutation.roles, {
+        activeLook: { identityId: 'ava', lookId: 'look:2' },
+        priorScene: 'Observatory',
+        chatBackground: 'Quiet suspense',
+    });
+});
+
 test('controller quotes finite two-up cost and requires matching explicit consent before dispatch', async () => {
     const { deps, calls } = dependencies();
     const controller = createIterationSurfaceController(deps);
