@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { focusVisualStorySurface, renderVisualStorySurface, revealVisualStorySurface } from '../lib/rp/visual-story-ui.js';
+import * as visualStoryUi from '../lib/rp/visual-story-ui.js';
 
 const [index, settings, ui] = await Promise.all([
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
@@ -35,6 +36,11 @@ test('Visual Story never presents a previous chat timeline while the current cha
     assert.doesNotMatch(html, /1 generated moment is ready/);
     const changed = index.slice(index.indexOf('eventSource.on(event_types.CHAT_CHANGED'), index.indexOf('eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED'));
     assert.ok(changed.indexOf('refreshStoryMemorySurface();') < changed.indexOf('refreshCinematicSurface();'));
+});
+
+test('Visual Story lifecycle refresh projects the loading state before the async memory read completes', () => {
+    const refresh = index.slice(index.indexOf('function refreshStoryMemorySurface'), index.indexOf('function openStoryMemoryArtifact'));
+    assert.match(refresh, /void loadStoryMemoryForCurrentChat\(\);\s*renderVisualStoryOverview\(\);/);
 });
 
 test('Visual Story surface explains empty Story Memory, continuity readiness, and cinematic On or Off state', () => {
@@ -114,4 +120,41 @@ test('Visual Story retries heading focus after host tab activation mounts the su
     assert.equal(result.status, 'pending');
     await new Promise((resolve) => setTimeout(resolve, 100));
     assert.equal(focusCount, 1);
+});
+
+test('Visual Story focus retry stops after success, respects user focus, and cancels stale chat work', () => {
+    assert.equal(typeof visualStoryUi.createVisualStoryFocusController, 'function');
+    const create = visualStoryUi.createVisualStoryFocusController;
+    const origin = {};
+    const userControl = {};
+    const timers = [];
+    const heading = { setAttribute() {}, focus() { this.focused = true; } };
+    const surface = { style: { display: 'block' }, scrollIntoView() {}, querySelector() { return heading; } };
+    const documentLike = {
+        activeElement: origin,
+        body: {},
+        querySelector(selector) { return selector === '#cig_visual_story_surface' ? surface : null; },
+        defaultView: { getComputedStyle: (element) => element.style },
+    };
+    const controller = create({ documentLike, setTimeoutLike: (callback) => { timers.push(callback); return timers.length; }, clearTimeoutLike() {}, queueMicrotaskLike: (callback) => callback() });
+    controller.schedule({ origin });
+    assert.equal(heading.focused, true);
+    assert.equal(timers.length, 0);
+
+    const pendingTimers = [];
+    const pendingDocument = { ...documentLike, activeElement: origin, querySelector(selector) { return null; } };
+    const pendingController = create({ documentLike: pendingDocument, setTimeoutLike: (callback) => { pendingTimers.push(callback); return pendingTimers.length; }, clearTimeoutLike() {}, queueMicrotaskLike: (callback) => callback() });
+    pendingController.schedule({ origin });
+    pendingDocument.activeElement = userControl;
+    pendingTimers.shift()?.();
+    assert.equal(pendingTimers.length, 0);
+
+    let current = true;
+    const staleTimers = [];
+    const staleDocument = { ...pendingDocument, activeElement: origin };
+    const staleController = create({ documentLike: staleDocument, isCurrent: () => current, setTimeoutLike: (callback) => { staleTimers.push(callback); return staleTimers.length; }, clearTimeoutLike() {}, queueMicrotaskLike: (callback) => callback() });
+    staleController.schedule({ origin });
+    current = false;
+    staleTimers.shift()?.();
+    assert.equal(staleTimers.length, 0);
 });

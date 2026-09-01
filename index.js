@@ -89,7 +89,7 @@ import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMAT
 import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
-import { renderVisualStorySurface, revealVisualStorySurface as revealVisualStorySurfaceUi, VISUAL_STORY_UI_CSS } from './lib/rp/visual-story-ui.js';
+import { createVisualStoryFocusController, renderVisualStorySurface, revealVisualStorySurface as revealVisualStorySurfaceUi, VISUAL_STORY_UI_CSS } from './lib/rp/visual-story-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -151,6 +151,7 @@ let cinematicUiController = null;
 let directorRuntime = null;
 let directorUiController = null;
 let directorFocusCapture = null;
+let visualStoryFocusController = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -971,7 +972,19 @@ function createVisualStorySurface() {
 }
 
 function revealVisualStorySurface(tab = 'images-cast') {
-    return revealVisualStorySurfaceUi({ documentLike: document, activateTab: (tabId) => activateSettingsTab(tabId), tab });
+    visualStoryFocusController?.cancel?.();
+    const capture = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+    visualStoryFocusController = createVisualStoryFocusController({
+        documentLike: document,
+        isCurrent: () => chatCaptureIsCurrent(capture),
+    });
+    return revealVisualStorySurfaceUi({
+        documentLike: document,
+        activateTab: (tabId) => activateSettingsTab(tabId),
+        focusController: visualStoryFocusController,
+        focusOrigin: document.activeElement,
+        tab,
+    });
 }
 
 function loadStoryMemoryForCurrentChat(captured = null) {
@@ -988,6 +1001,7 @@ function refreshStoryMemorySurface() {
     if (!storyMemoryController) return;
     pendingStoryMemoryContinuation = null;
     void loadStoryMemoryForCurrentChat();
+    renderVisualStoryOverview();
 }
 
 function openStoryMemoryArtifact(messageId) {
@@ -4782,6 +4796,8 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         directorFocusCapture = null;
+        visualStoryFocusController?.cancel?.();
+        visualStoryFocusController = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshStoryMemorySurface();
         refreshCinematicSurface();
@@ -4812,6 +4828,8 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CREATED, () => {
         directorFocusCapture = null;
+        visualStoryFocusController?.cancel?.();
+        visualStoryFocusController = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshStoryMemorySurface();
         refreshCinematicSurface();
