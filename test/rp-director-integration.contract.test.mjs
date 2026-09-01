@@ -54,3 +54,13 @@ test('Director uses the shared invocation and immutable P2 override seams', () =
     assert.match(index, /Exact provider cost is unavailable; one generation will be requested only when Generate is pressed/);
     assert.match(dispatch, /\['settings', 'wand', 'slash', 'director'\]/);
 });
+
+test('Director trigger is one visible semantic inline action outside the host button strip', () => {
+    const mount = index.slice(index.indexOf('function injectMessageButton'), index.indexOf('function visibleCanonMessageSender'));
+    assert.match(mount, /messageElement\.find\('\.cig_message_director'\)\.remove\(\)/);
+    assert.match(mount, /<button type="button" class="menu_button cig_message_director cig_message_director_inline">Direct this scene<\/button>/);
+    assert.match(mount, /const textAnchor = messageElement\.find\('\.mes_text'\)\.last\(\)/);
+    assert.match(mount, /textAnchor\.length\) textAnchor\.after\(directorButton\)/);
+    assert.doesNotMatch(mount, /directorButton\)\.after|extraButtons\.(?:after|prepend)\(directorButton\)/);
+    assert.match(ui, /cig_message_director_inline[^{]*\{[^}]*min-height:\s*44px/s);
+});

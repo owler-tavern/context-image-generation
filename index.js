@@ -3670,9 +3670,7 @@ function injectMessageButton(messageId) {
     renderVisibleCanonControls(messageElement);
 
     const extraButtons = messageElement.find('.extraMesButtons');
-    if (extraButtons.length === 0) return;
-
-    if (extraButtons.find('.cig_message_gen').length === 0) {
+    if (extraButtons.length > 0 && extraButtons.find('.cig_message_gen').length === 0) {
         const cigButton = $(`
         <div title="Generate with Gemini 🍌" 
              class="mes_button cig_message_gen fa-solid fa-wand-magic-sparkles" 
@@ -3688,11 +3686,12 @@ function injectMessageButton(messageId) {
         }
     }
     const message = getContext().chat?.[Number(messageId)];
-    if (message?.is_system || extraButtons.find('.cig_message_director').length > 0) return;
-    const directorButton = $('<button type="button" class="mes_button cig_message_director">Direct this scene</button>')
+    if (!message || message.is_system) return;
+    messageElement.find('.cig_message_director').remove();
+    const directorButton = $('<button type="button" class="menu_button cig_message_director cig_message_director_inline">Direct this scene</button>')
         .attr({ title: 'Direct this scene', 'aria-label': 'Direct this scene' });
-    const wandButton = extraButtons.find('.cig_message_gen');
-    if (wandButton.length) wandButton.after(directorButton); else extraButtons.prepend(directorButton);
+    const textAnchor = messageElement.find('.mes_text').last();
+    if (textAnchor.length) textAnchor.after(directorButton); else messageElement.append(directorButton);
 }
 
 function visibleCanonMessageSender(message) {
