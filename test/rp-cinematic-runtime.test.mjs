@@ -61,6 +61,32 @@ test('adjust and dismiss never dispatch, while approve dispatches once and settl
     assert.equal(runtime.getState().session.costSpent, 0);
 });
 
+test('dismiss removes the current card and does not immediately resurrect queued work after reload', async () => {
+    const { runtime, persisted } = setup();
+    await runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const first = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 1, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    const queued = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 2, message: { mes: 'Ava feels hopeful.' }, acceptedSceneDelta: { ...interpretationDelta(), revision: 'revision:queued', updatedSceneFacts: {}, emotionalBeat: { id: 'hope', label: 'hope' } } });
+    assert.equal(queued.status, 'pending-suppressed');
+    const dismissed = await runtime.dismiss(first.suggestion.suggestionId);
+    assert.equal(dismissed.status, 'dismissed');
+    assert.equal(dismissed.suggestion, null);
+    assert.equal(runtime.getState().suggestion, null);
+    const restarted = setup();
+    restarted.persisted.cinematicAutomation = persisted.cinematicAutomation;
+    await restarted.runtime.load({ chatId: 'chat-a', epoch: 1 });
+    assert.equal(restarted.runtime.getState().suggestion, null);
+});
+
+test('dismiss refuses a card after the active chat changes without mutating the source session', async () => {
+    const { runtime, switchChat } = setup();
+    await runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const first = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 1, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    switchChat('chat-b');
+    const result = await runtime.dismiss(first.suggestion.suggestionId);
+    assert.equal(result.status, 'stale');
+    assert.notEqual(runtime.getState().session.dismissedSuggestionIds.includes(first.suggestion.suggestionId), true);
+});
+
 test('duplicate accepted event is idempotent and stale approval cannot dispatch after chat switch', async () => {
     const { runtime, calls, switchChat } = setup();
     await runtime.load({ chatId: 'chat-a', epoch: 1 });

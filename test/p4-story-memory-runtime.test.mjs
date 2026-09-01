@@ -178,6 +178,7 @@ test('production story memory opener reveals host and extension drawers before s
     assert.match(index, /activateTab: \(tab\) => activateSettingsTab\(tab\)/u);
     assert.match(index, /selectStoryMemoryEntryWhenReady\(/u);
     assert.match(index, /storyMemoryController\?\.setSelectedArtifact\(artifactId\)/u);
+    assert.match(index, /focusStoryMemoryArtifact\(\{ documentLike: document, artifactId: entry\.id \}\)/u);
     assert.match(index, /chatCaptureIsCurrent\(captured\)/u);
     assert.match(entry, /scrollIntoView/u);
 });

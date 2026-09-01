@@ -57,3 +57,13 @@ test('UI controller routes card actions without hidden network calls', async () 
     await controller.action('approve');
     assert.deepEqual(calls, [['adjust', 'suggestion:test'], ['dismiss', 'suggestion:test'], ['approve', 'suggestion:test']]);
 });
+
+test('UI controller honors the clicked card identity for stale-safe dismissal', async () => {
+    const calls = [];
+    const controller = createCinematicUiController({
+        getSuggestion: () => suggestion,
+        dismiss: async (id) => calls.push(id),
+    });
+    await controller.action('dismiss', '', 'suggestion:clicked-card');
+    assert.deepEqual(calls, ['suggestion:clicked-card']);
+});

@@ -42,6 +42,11 @@ test('suggestion actions and narrow-safe controls are accessible', () => {
     assert.match(style, /@media \(max-width: 480px\)[\s\S]*cig_cinematic_suggestion_actions/);
 });
 
+test('production dismiss refreshes the card from the settled runtime result', () => {
+    assert.match(index, /if \(result\?\.status === 'dismissed'\) refreshCinematicSurface\(null, 'Cinematic suggestion dismissed\./u);
+    assert.match(index, /data-cig-cinematic-id/);
+});
+
 test('manual cinematic retrigger reports a visible suggestion result even before a message card can mount', () => {
     assert.match(index, /refreshCinematicSurface\(result\?\.suggestion, status\)/u);
     assert.match(index, /Manual cinematic suggestion is ready/u);

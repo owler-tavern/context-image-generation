@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from '../lib/rp/story-memory-entry.js';
+import { focusStoryMemoryArtifact, revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from '../lib/rp/story-memory-entry.js';
 
 function fixture({ hostVisible = false, contentVisible = false } = {}) {
     const calls = { hostToggle: 0, contentToggle: 0, tab: [], selected: [], focus: 0, scroll: 0 };
@@ -98,4 +98,20 @@ test('story memory entry refuses a pending artifact selection after chat switch'
     const result = await selecting;
     assert.equal(result.status, 'stale');
     assert.equal(selected, 0);
+});
+
+test('story memory entry focuses the selected Details control, not the surface heading', () => {
+    const calls = { scroll: 0, focus: 0 };
+    const details = { setAttribute() {}, getAttribute() { return null; }, focus() { calls.focus += 1; } };
+    const card = {
+        getAttribute(name) { return name === 'data-story-artifact-id' ? 'story:12' : null; },
+        querySelector(selector) { return selector === '[data-story-action="select-details"]' ? details : null; },
+        scrollIntoView() { calls.scroll += 1; },
+    };
+    const result = focusStoryMemoryArtifact({
+        documentLike: { querySelectorAll() { return [card]; } },
+        artifactId: 'story:12',
+    });
+    assert.deepEqual(result, { status: 'focused', artifactId: 'story:12' });
+    assert.deepEqual(calls, { scroll: 1, focus: 1 });
 });

@@ -82,7 +82,7 @@ import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, pers
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
-import { revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from './lib/rp/story-memory-entry.js';
+import { focusStoryMemoryArtifact, revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from './lib/rp/story-memory-entry.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
@@ -973,13 +973,7 @@ function openStoryMemoryArtifact(messageId) {
         messageId: Number(messageId),
         mediaUrl: media?.url,
         selectArtifact: (artifactId) => storyMemoryController?.setSelectedArtifact(artifactId),
-        focusSelected: (entry) => {
-            const cards = [...document.querySelectorAll('#cig_story_memory_surface [data-story-artifact-id]')];
-            const card = cards.find((node) => node.getAttribute('data-story-artifact-id') === String(entry.id));
-            const focusTarget = card?.querySelector('[data-story-action="select-details"]') || card;
-            card?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-            focusTarget?.focus?.({ preventScroll: true });
-        },
+        focusSelected: (entry) => focusStoryMemoryArtifact({ documentLike: document, artifactId: entry.id }),
     }).then((result) => {
         if (result.status === 'stale') toastr.info(result.reason, 'Story Memory');
         else if (result.status === 'unavailable' || result.status === 'error') toastr.info(result.reason, 'Story Memory');
@@ -1102,7 +1096,13 @@ function createCinematicSurface() {
         },
         dismiss: (id) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
-            return cinematicRuntime.dismiss(id).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+            return cinematicRuntime.dismiss(id).then((result) => {
+                if (chatCaptureIsCurrent(captured)) {
+                    if (result?.status === 'dismissed') refreshCinematicSurface(null, 'Cinematic suggestion dismissed. Waiting for the next accepted story change.');
+                    else refreshCinematicSurface();
+                }
+                return result;
+            });
         },
     });
     installCinematicStyles(document);
@@ -4609,12 +4609,14 @@ jQuery(async () => {
         e.preventDefault();
         e.stopPropagation();
         const action = $(this).attr('data-cig-cinematic-action');
+        const suggestionId = $(this).attr('data-cig-cinematic-id');
         const input = $(this).closest('.cig_cinematic_suggestion').find('[data-cig-cinematic-adjust-input]').val();
         setBusyState(this, true, { busyTitle: 'Updating cinematic suggestion…' });
         try {
-            const result = await cinematicUiController?.action(action, input);
+            const result = await cinematicUiController?.action(action, input, suggestionId);
             if (result?.status === 'failed' || result?.status === 'stale') toastr.info(result.reason || 'This suggestion is no longer current.', 'Context Image Generation');
             else if (result?.status === 'completed') toastr.success('Cinematic image generated.', 'Context Image Generation');
+            else if (result?.status === 'dismissed') toastr.info('Cinematic suggestion dismissed.', 'Context Image Generation');
         } catch (error) {
             showGenerationError(error, 'Cinematic suggestion');
         } finally {
