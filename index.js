@@ -1841,6 +1841,7 @@ async function resumePendingVisibleCanonLinks() {
     const pendingState = createVisibleCanonPendingState({ pending: { ...globalSplit.active, ...chatSplit.active } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
     const pendingLinks = Object.values(pendingState.pending);
+    const isCurrent = (link) => getContext().chatId === currentChatId && Boolean(currentVisibleCanonMedia(link));
     let replayedCanon = null;
     let replayIncomplete = false;
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
@@ -1852,6 +1853,7 @@ async function resumePendingVisibleCanonLinks() {
         const replayCandidate = { ...link.candidate, visibleCanonPending: pendingState.pending };
         chat_metadata[CHAT_CANON_KEY] = replayCandidate;
         const result = await reconcileVisibleCanonPendingLink(link, {
+            isCurrent,
             save: async () => {
                 setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
                 await saveVisibleCanonChat();
@@ -1868,13 +1870,13 @@ async function resumePendingVisibleCanonLinks() {
         if (result?.status === 'confirmed') replayedCanon = replayCandidate;
         else replayIncomplete = true;
         return result;
-    }, { isCurrent: (link) => getContext().chatId === currentChatId && Boolean(currentVisibleCanonMedia(link)) });
+    }, { isCurrent });
     const activePending = resumed.state.pending;
     const nextGlobalPending = { ...globalSplit.foreign, ...chatSplit.foreign, ...activePending };
     const pendingChanged = JSON.stringify(pendingState.pending) !== JSON.stringify(activePending);
     const chatCleanupNeeded = !replayIncomplete && (Boolean(replayedCanon) || (Object.keys(chatSplit.active).length > 0 && pendingChanged));
     const settingsChanged = JSON.stringify(globalPending) !== JSON.stringify(nextGlobalPending);
-    const lifecycleCurrent = getContext().chatId === currentChatId && pendingLinks.every((link) => Boolean(currentVisibleCanonMedia(link)));
+    const lifecycleCurrent = pendingLinks.every(isCurrent);
     if (!lifecycleCurrent) return resumed;
     if (chatCleanupNeeded) {
         chat_metadata[CHAT_CANON_KEY] = finalizeVisibleCanonPendingReplay({
