@@ -149,3 +149,31 @@ test('chat-local replay cleanup does not fall back to the pre-replay canon', () 
     assert.equal(finalized.bindings.persona.activeLookId, 'look:local');
     assert.deepEqual(finalized.visibleCanonPending, {});
 });
+
+test('replay sequence skips cleanup after a media switch during save or failed replay', async () => {
+    let lifecycleCurrent = true;
+    let operationSaves = 0;
+    let verificationCalls = 0;
+    let cleanupSaves = 0;
+    const switched = await reconcileVisibleCanonPendingLink(pendingLink, {
+        isCurrent: () => lifecycleCurrent,
+        save: async () => { operationSaves++; lifecycleCurrent = false; },
+        verify: async () => { verificationCalls++; return { status: 'confirmed' }; },
+    });
+    if (switched.status === 'confirmed' && lifecycleCurrent) cleanupSaves++;
+    assert.equal(switched.status, 'stale');
+    assert.equal(operationSaves, 1);
+    assert.equal(verificationCalls, 0);
+    assert.equal(cleanupSaves, 0);
+
+    lifecycleCurrent = true;
+    const failed = await reconcileVisibleCanonPendingLink(pendingLink, {
+        isCurrent: () => lifecycleCurrent,
+        save: async () => { operationSaves++; throw new Error('offline'); },
+        verify: async () => { verificationCalls++; return { status: 'confirmed' }; },
+    });
+    if (failed.status === 'confirmed' && lifecycleCurrent) cleanupSaves++;
+    assert.equal(failed.status, 'indeterminate');
+    assert.equal(verificationCalls, 0);
+    assert.equal(cleanupSaves, 0);
+});

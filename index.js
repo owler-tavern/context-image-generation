@@ -1840,17 +1840,18 @@ async function resumePendingVisibleCanonLinks() {
     const chatSplit = splitVisibleCanonPendingByChat({ pending: canon.visibleCanonPending }, currentChatId);
     const pendingState = createVisibleCanonPendingState({ pending: { ...globalSplit.active, ...chatSplit.active } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
+    const pendingLinks = Object.values(pendingState.pending);
     let replayedCanon = null;
+    let replayIncomplete = false;
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
         if (!link.candidate?.revision || !link.expectedFingerprint) return { status: 'confirmed' };
-        if (!currentVisibleCanonMedia(link)) return { status: 'confirmed' };
+        if (!currentVisibleCanonMedia(link)) return { status: 'stale' };
         const currentCanon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
         const currentFingerprint = chatCanonRevisionFingerprint(currentCanon, link.identityId);
         if (currentFingerprint !== link.expectedFingerprint && currentCanon.revision !== link.candidate.revision) return { status: 'confirmed' };
         const replayCandidate = { ...link.candidate, visibleCanonPending: pendingState.pending };
-        replayedCanon = replayCandidate;
         chat_metadata[CHAT_CANON_KEY] = replayCandidate;
-        return reconcileVisibleCanonPendingLink(link, {
+        const result = await reconcileVisibleCanonPendingLink(link, {
             save: async () => {
                 setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
                 await saveVisibleCanonChat();
@@ -1864,12 +1865,18 @@ async function resumePendingVisibleCanonLinks() {
                     : { status: binding.status === 'indeterminate' || media.status === 'indeterminate' ? 'indeterminate' : 'confirmed-absent', binding, media };
             },
         });
-    }, { isCurrent: (link) => getContext().chatId === link.chatId });
+        if (result?.status === 'confirmed') replayedCanon = replayCandidate;
+        else replayIncomplete = true;
+        return result;
+    }, { isCurrent: (link) => getContext().chatId === currentChatId && Boolean(currentVisibleCanonMedia(link)) });
     const activePending = resumed.state.pending;
     const nextGlobalPending = { ...globalSplit.foreign, ...chatSplit.foreign, ...activePending };
-    const chatChanged = JSON.stringify(canon.visibleCanonPending || {}) !== JSON.stringify(activePending);
+    const pendingChanged = JSON.stringify(pendingState.pending) !== JSON.stringify(activePending);
+    const chatCleanupNeeded = !replayIncomplete && (Boolean(replayedCanon) || (Object.keys(chatSplit.active).length > 0 && pendingChanged));
     const settingsChanged = JSON.stringify(globalPending) !== JSON.stringify(nextGlobalPending);
-    if (chatChanged || replayedCanon) {
+    const lifecycleCurrent = getContext().chatId === currentChatId && pendingLinks.every((link) => Boolean(currentVisibleCanonMedia(link)));
+    if (!lifecycleCurrent) return resumed;
+    if (chatCleanupNeeded) {
         chat_metadata[CHAT_CANON_KEY] = finalizeVisibleCanonPendingReplay({
             currentCanon: migrateChatCanon(chat_metadata[CHAT_CANON_KEY]),
             replayedCanon,
