@@ -48,8 +48,8 @@ import { connectionRevision, createCustomConnectionId, customCredentialRef, migr
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
-import { materializeReferences } from './lib/rp/references.js';
-import { captureCanonForGeneration, notifyBrokenCanon } from './lib/rp/canon-generation-capture.js';
+import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
+import { buildReferenceMessageParts } from './lib/rp/reference-message-parts.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -1250,18 +1250,24 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const referenceCandidates = [];
     const settingsSnapshot = cloneSnapshot(settings) || {};
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
+    const appearanceIdentities = getAppearanceIdentityChoices();
     if (capability && settingsSnapshot.use_previous_image && gallerySnapshot.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
     // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
     // the captured capability/setting snapshot below is the authority.
     if (capability && settingsSnapshot.use_avatars) {
-        referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: 'character' });
-        referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: 'user' });
+        const context = getContext();
+        const activeCharacter = context.characters?.[context.characterId];
+        referenceCandidates.push(...resolveHostAvatarIdentityReferences({
+            identities: appearanceIdentities,
+            activeCharacterAvatar: activeCharacter?.avatar,
+            personaAvatar: user_avatar,
+        }));
     }
     const canonCapture = captureCanonForGeneration({
         library: settingsSnapshot.rp_library,
         gallery: gallerySnapshot,
         chatState: chat_metadata[CHAT_CANON_KEY],
-        identities: getAppearanceIdentityChoices(),
+        identities: appearanceIdentities,
         references: referenceCandidates,
     });
     const connectionId = routeModel.connectionId || `${providerId}:default`;
@@ -1275,7 +1281,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         canonSnapshot: canonCapture.canonSnapshot,
-        identities: getAppearanceIdentityChoices(),
+        identities: appearanceIdentities,
         references: canonCapture.references,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
@@ -1313,13 +1319,7 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
     if (plan.prompt.descriptionText) contentParts.push({ type: 'text', text: plan.prompt.descriptionText });
     contentParts.push({ type: 'text', text: plan.prompt.messageContent || plan.prompt.sourceMessage });
-    const materialized = materializeReferences(plan.references, { assets: referenceAssets });
-    for (const reference of materialized.references) {
-        contentParts.push({ type: 'text', text: `[Reference image: ${reference.label || reference.role}]` });
-        const asset = reference.asset;
-        const url = asset.url || `data:${asset.mimeType || 'image/png'};base64,${asset.data}`;
-        contentParts.push({ type: 'image_url', image_url: { url } });
-    }
+    contentParts.push(...buildReferenceMessageParts(plan, referenceAssets));
 
     return [{ role: 'user', content: contentParts }];
 }
