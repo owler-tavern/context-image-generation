@@ -51,6 +51,7 @@ import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
 import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
+import { enforcePreviousImagePolicy } from './lib/rp/reference-policy.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -921,6 +922,32 @@ function createStoryMemorySurface() {
     });
     const dependencies = {
         ...runtime,
+        getContinuePreviewContext: ({ artifact } = {}) => {
+            const currentSettings = extension_settings[extensionName] || {};
+            const capability = getReferenceImageCapability(currentSettings.provider || 'makersuite', currentSettings.model);
+            return {
+                previousImageEnabled: currentSettings.use_previous_image === true,
+                identityLabel: artifact?.sourceMoment?.sender || artifact?.sourceMoment?.name || 'Current chat',
+                readiness: capability?.maxCount > 0
+                    ? 'Ready: the current model accepts a prior image.'
+                    : 'Not ready: the current model cannot accept a prior image.',
+            };
+        },
+        enablePreviousImage: ({ chatId, epoch } = {}) => {
+            if (String(getContext().chatId) !== String(chatId) || !chatLifecycleEpoch.isCurrent(epoch)) throw new Error('Previous image setting was not changed because the chat changed.');
+            const currentSettings = extension_settings[extensionName] || {};
+            currentSettings.use_previous_image = true;
+            currentSettings.previous_image_opt_in_version = 1;
+            $('#cig_use_previous_image').prop('checked', true);
+            saveSettingsDebounced();
+            return { status: 'enabled', previousImageEnabled: true };
+        },
+        clearContinue: ({ chatId, epoch, stageToken } = {}) => {
+            if (String(getContext().chatId) !== String(chatId) || !chatLifecycleEpoch.isCurrent(epoch)) throw new Error('The staged scene was not cleared because the chat changed.');
+            if (!pendingStoryMemoryContinuation || !stageToken || pendingStoryMemoryContinuation.stageToken !== stageToken) return { status: 'stale', stale: true };
+            pendingStoryMemoryContinuation = null;
+            return { status: 'cleared' };
+        },
         canContinueFromScene: () => {
             const currentSettings = extension_settings[extensionName] || {};
             const capability = getReferenceImageCapability(currentSettings.provider || 'makersuite', currentSettings.model);
@@ -929,7 +956,7 @@ function createStoryMemorySurface() {
                 : { allowed: false, reason: 'The current model cannot accept a prior scene image. Choose a model with image-reference support before continuing.' };
         },
         continuePlanner: async (request) => {
-            const captured = { chatId: request.chatId, epoch: chatLifecycleEpoch.capture() };
+            const captured = { chatId: request.chatId, epoch: request.epoch };
             if (!String(getContext().chatId) || String(getContext().chatId) !== String(captured.chatId) || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
                 throw new Error('Continue from this scene was blocked because the chat changed.');
             }
@@ -939,6 +966,7 @@ function createStoryMemorySurface() {
                 artifactId: request.artifactId,
                 artifactVersion: request.artifactVersion,
                 requestId: request.requestId,
+                stageToken: request.stageToken,
                 chatId: captured.chatId,
                 epoch: captured.epoch,
             };
@@ -1815,11 +1843,11 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         ? settingsSnapshot.gallery.filter((item) => currentChatId && String(item?.chatId || '') === currentChatId)
         : [];
     const previousImageEnabled = settingsSnapshot.use_previous_image === true;
-    const continuationIsCurrent = previousImageEnabled && continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
+    const continuationIsCurrent = invocation === 'wand' && previousImageEnabled && continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
         && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
     const continuationGallery = previousImageEnabled
         ? (continuationIsCurrent
-            ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }, ...gallerySnapshot]
+            ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }]
             : gallerySnapshot)
         : [];
     const appearanceIdentities = getAppearanceIdentityChoices();
@@ -2009,7 +2037,6 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
         snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation, pendingStoryMemoryContinuation, generationOverrides);
-        if (snapshot.storyMemoryContinuation) pendingStoryMemoryContinuation = null;
         if (iterationRecipe && typeof iterationRecipe === 'object') {
             assertExactIterationRoute(snapshot, iterationRecipe);
             const savedReferences = Array.isArray(iterationRecipe.references) ? cloneSnapshot(iterationRecipe.references) : [];
@@ -2038,17 +2065,33 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             if (missingSavedReference) throw new Error(`Saved recipe reference ${missingSavedReference.id || missingSavedReference.assetId} is unavailable; generation is blocked.`);
         }
         notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
-        const assets = await materializeSnapshotAssets(snapshot);
+        const materializedAssets = await materializeSnapshotAssets(snapshot);
         const capturedBaseReferences = [
             ...(snapshot.planInput.references || []),
             ...(snapshot.planInput.canonSnapshot?.references || []),
         ].filter((reference, index, all) => all.findIndex((candidate) => candidate.id === reference.id) === index);
-        const availableReferences = capturedBaseReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
-        const missingReferenceOmissions = capturedBaseReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
+        const dispatchPolicy = enforcePreviousImagePolicy({
+            references: capturedBaseReferences,
+            assets: materializedAssets,
+            enabled: snapshot.settingsSnapshot.use_previous_image === true,
+        });
+        const assets = dispatchPolicy.assets;
+        const policyReferences = dispatchPolicy.references;
+        const policyCanonSnapshot = {
+            ...(snapshot.planInput.canonSnapshot || {}),
+            assets: dispatchPolicy.assets,
+            references: dispatchPolicy.references,
+        };
+        const policyPlanInput = {
+            ...snapshot.planInput,
+            canonSnapshot: policyCanonSnapshot,
+        };
+        const availableReferences = policyReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
+        const missingReferenceOmissions = policyReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
         const availableReferenceIds = availableReferences.map((reference) => reference.id);
-        const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
+        const plan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
-        const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions, messages });
+        const dispatchedPlan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions, messages });
         const capturedIterationPlan = {
             planId: dispatchedPlan.id,
             revision: dispatchedPlan.resolved.routeEvidence?.revision || `${dispatchedPlan.resolved.providerId}:${dispatchedPlan.resolved.modelId}:${dispatchedPlan.resolved.transportId}`,
@@ -3415,6 +3458,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         message,
     });
     const attachmentLifecycleEpoch = chatLifecycleEpoch.capture();
+    const stagedContinuationAtStart = pendingStoryMemoryContinuation ? cloneSnapshot(pendingStoryMemoryContinuation) : null;
     let currentMessageElement = null;
 
     const attached = await attachGeneratedImageSafely({
@@ -3521,6 +3565,15 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
         rollbackMedia: (rollback) => rollback?.(),
     });
+    if (attached === true && invocation === 'wand' && stagedContinuationAtStart
+        && pendingStoryMemoryContinuation?.chatId === stagedContinuationAtStart.chatId
+        && pendingStoryMemoryContinuation?.epoch === stagedContinuationAtStart.epoch
+        && pendingStoryMemoryContinuation?.artifactId === stagedContinuationAtStart.artifactId
+        && pendingStoryMemoryContinuation?.stageToken === stagedContinuationAtStart.stageToken
+        && String(getContext().chatId || '') === String(stagedContinuationAtStart.chatId || '')
+        && chatLifecycleEpoch.isCurrent(attachmentLifecycleEpoch)) {
+        pendingStoryMemoryContinuation = null;
+    }
     return attached;
 }
 

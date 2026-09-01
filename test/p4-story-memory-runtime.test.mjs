@@ -153,6 +153,7 @@ test('production index imports and mounts the story memory surface in Images & C
     assert.match(index, /storyMemoryController/u);
     assert.match(settings, /Story Memory/u);
     assert.match(settings, /cig_story_memory_surface/u);
+    assert.match(settings, /review the selected scene before staging it/u);
     assert.match(index, /extraStoryToolEnabled\('storyMemory'\)/u);
 });
 
@@ -172,6 +173,57 @@ test('production keeps Story Memory inside opt-in settings without a chat opener
     assert.doesNotMatch(index, /revealStoryMemoryEntry\(/u);
     assert.doesNotMatch(index, /selectStoryMemoryEntryWhenReady\(/u);
     assert.match(index, /if \(!extraStoryToolEnabled\('storyMemory'\)\) return/u);
+});
+
+test('production Story Memory wires preview, explicit opt-in, clear, and request-epoch callbacks', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /getContinuePreviewContext:/u);
+    assert.match(index, /enablePreviousImage:/u);
+    assert.match(index, /clearContinue:/u);
+    assert.match(index, /epoch: request\.epoch/u);
+    assert.match(index, /previous_image_opt_in_version = 1/u);
+});
+
+test('a staged Story Memory continuation projects only its selected image, not the rest of the gallery', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const continuationBlock = index.match(/const continuationGallery = previousImageEnabled[\s\S]*?const appearanceIdentities/u)?.[0] || '';
+    assert.match(continuationBlock, /\[\{ id: `story-memory:\$\{continuation\.artifactId\}`[\s\S]*?\}\]/u);
+    assert.doesNotMatch(continuationBlock, /\}, \.\.\.gallerySnapshot/u);
+    assert.match(index, /materializeSnapshotAssets[\s\S]*?snapshot\.gallerySnapshot\[0\]/u);
+});
+
+test('Story Memory continuation is cleared only after an attached completion, never before dispatch', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const block = index.match(/async function attachGeneratedImage\([\s\S]*?\nfunction isCigOwnedMedia/u)?.[0] || '';
+    assert.match(block, /stagedContinuationAtStart/u);
+    assert.match(block, /if \(attached === true[\s\S]*pendingStoryMemoryContinuation = null/u);
+    assert.doesNotMatch(index, /snapshot\.storyMemoryContinuation\) pendingStoryMemoryContinuation = null/u);
+});
+
+test('a staged Story Memory continuation is reserved for the next wand invocation', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /const continuationIsCurrent = invocation === 'wand' && previousImageEnabled/u);
+    assert.match(index, /attached === true && invocation === 'wand' && stagedContinuationAtStart/u);
+    assert.match(index, /invocation === 'wand'/u);
+});
+
+test('continuation settlement is bound to a unique stage nonce, not only artifact identity', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const ui = await readFile(new URL('../lib/rp/story-memory-ui.js', import.meta.url), 'utf8');
+    assert.match(ui, /stageToken/u);
+    assert.match(ui, /stagedContinuation: \{[\s\S]*stageToken/u);
+    assert.match(index, /stageToken: request\.stageToken/u);
+    assert.match(index, /clearContinue: \(\{ chatId, epoch, stageToken \}/u);
+    assert.match(index, /pendingStoryMemoryContinuation\.stageToken !== stageToken/u);
+    assert.match(index, /pendingStoryMemoryContinuation\?\.stageToken === stagedContinuationAtStart\.stageToken/u);
+});
+
+test('final generation plans receive the filtered previous-image canon snapshot', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /const policyCanonSnapshot = \{/u);
+    assert.match(index, /canonSnapshot: policyCanonSnapshot/u);
+    assert.match(index, /assets: dispatchPolicy\.assets/u);
+    assert.match(index, /references: dispatchPolicy\.references/u);
 });
 
 test('real P2 scene state becomes bounded valid story facts on CIG media', () => {

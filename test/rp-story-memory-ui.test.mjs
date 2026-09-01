@@ -410,3 +410,108 @@ test('mount destroy is idempotent and does not remove a style while a second own
     second.destroy();
     assert.equal(styles.length, 0);
 });
+
+test('Continue opens a provider-free preview with the selected image and explicit opt-in guidance', async () => {
+    const { deps, calls } = dependencies({
+        getContinuePreviewContext: () => ({ previousImageEnabled: false, identityLabel: 'Ava', readiness: 'Ready' }),
+        continuePlanner: async () => { calls.continue.push('must-not-run'); },
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    const preview = controller.openContinuePreview('story:a');
+    assert.equal(preview.status, 'ready');
+    assert.equal(preview.continuePreview.artifactId, 'story:a');
+    assert.equal(preview.continuePreview.chatId, 'chat-a');
+    assert.equal(preview.continuePreview.previousImageEnabled, false);
+    assert.equal(calls.continue.length, 0);
+    const html = renderStoryMemorySurface(preview);
+    assert.match(html, /Continue from this scene/u);
+    assert.match(html, /One prior image will be used by the next wand generation/u);
+    assert.match(html, /Turn on Use previous image/u);
+    assert.match(html, /data-story-action="enable-previous-image"/u);
+    assert.match(html, /data-story-action="cancel-continue"/u);
+});
+
+test('Continue confirmation stages only the exact selected artifact after the second explicit action', async () => {
+    const { deps, calls } = dependencies({
+        getContinuePreviewContext: () => ({ previousImageEnabled: true, identityLabel: 'Ava', readiness: 'Ready' }),
+        continuePlanner: async (request) => { calls.continue.push(request); return { status: 'planned', artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId }; },
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    controller.openContinuePreview('story:a');
+    assert.equal(calls.continue.length, 0);
+    const cancelled = controller.cancelContinuePreview();
+    assert.equal(cancelled.continuePreview, null);
+    controller.openContinuePreview('story:a');
+    const staged = await controller.confirmContinuePreview();
+    assert.equal(staged.stagedContinuation.artifactId, 'story:a');
+    assert.equal(calls.continue.length, 1);
+    assert.equal(calls.continue[0].plan.selectedImage.artifactId, 'story:a');
+    assert.equal(calls.continue[0].plan.selectedImage.url, '/images/story:a.png');
+    assert.match(renderStoryMemorySurface(staged), /Staged for the next wand/u);
+    assert.match(renderStoryMemorySurface(staged), /data-story-action="clear-continue"/u);
+});
+
+test('Continue confirmation remains blocked with previous image Off and can explicitly enable it without planning', async () => {
+    const { deps, calls } = dependencies({
+        getContinuePreviewContext: () => ({ previousImageEnabled: false, identityLabel: 'Ava', readiness: 'Ready' }),
+        enablePreviousImage: async () => { calls.enable = (calls.enable || 0) + 1; },
+        continuePlanner: async () => { calls.continue.push('must-not-run'); },
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    controller.openContinuePreview('story:a');
+    const blocked = await controller.confirmContinuePreview();
+    assert.equal(blocked.status, 'ready');
+    assert.match(blocked.message, /Turn on Use previous image/u);
+    assert.equal(calls.continue.length, 0);
+    assert.equal(calls.enable, undefined);
+    const enabled = await controller.enablePreviousImage();
+    assert.equal(enabled.status, 'ready');
+    assert.equal(calls.enable, 1);
+});
+
+test('Continue confirmation does not stage an old scene after the chat changes while planning', async () => {
+    let release;
+    const { deps, calls } = dependencies({
+        getContinuePreviewContext: () => ({ previousImageEnabled: true, identityLabel: 'Ava', readiness: 'Ready' }),
+        continuePlanner: async (request) => { calls.continue.push(request); await new Promise((resolve) => { release = resolve; }); return { status: 'planned', artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId }; },
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    controller.openContinuePreview('story:a');
+    const pending = controller.confirmContinuePreview();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const switched = controller.load({ chatId: 'chat-b' });
+    await switched;
+    release();
+    const result = await pending;
+    assert.equal(result.stale, true);
+    assert.equal(controller.getState().chatId, 'chat-b');
+    assert.equal(controller.getState().stagedContinuation, null);
+    assert.equal(calls.continue.length, 1);
+});
+
+test('same-artifact restaging receives a new nonce and stale clear cannot remove the newer stage', async () => {
+    const { deps } = dependencies({
+        getContinuePreviewContext: () => ({ previousImageEnabled: true, identityLabel: 'Ava', readiness: 'Ready' }),
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+
+    controller.openContinuePreview('story:a');
+    const first = await controller.confirmContinuePreview();
+    const firstToken = first.stagedContinuation.stageToken;
+    assert.ok(firstToken);
+
+    controller.openContinuePreview('story:a');
+    const second = await controller.confirmContinuePreview();
+    const secondToken = second.stagedContinuation.stageToken;
+    assert.ok(secondToken);
+    assert.notEqual(secondToken, firstToken);
+
+    const stale = await controller.clearStagedContinuation(firstToken);
+    assert.equal(stale.stale, true);
+    assert.equal(controller.getState().stagedContinuation.stageToken, secondToken);
+});
