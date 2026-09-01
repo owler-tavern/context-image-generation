@@ -73,7 +73,7 @@ import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebased
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
-import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
+import { buildVisibleCanonMediaArtifactId, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact } from './lib/rp/visible-canon.js';
 import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
 import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitPrompt, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
@@ -140,6 +140,7 @@ const defaultSettings = {
     regenerate_on_swipe: false,
     include_descriptions: false,
     use_previous_image: false,
+    previous_image_opt_in_version: 1,
     message_depth: 1,
     framing_preference: 'auto',
     continuity_strength: 'balanced',
@@ -1308,6 +1309,7 @@ async function observeCinematicMessage(messageId) {
 
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
+    const hadExplicitPreviousImageOptIn = Number(extension_settings[extensionName].previous_image_opt_in_version) >= 1;
     let settingsMigrated = false;
 
     for (const [key, value] of Object.entries(defaultSettings)) {
@@ -1326,6 +1328,13 @@ async function loadSettings() {
         settingsMigrated = true;
     }
     const cigSettings = extension_settings[extensionName];
+    if (!hadExplicitPreviousImageOptIn) {
+        // Privacy-first migration: old versions could leave this enabled as
+        // test/profile state. Require one deliberate opt-in on the new UI.
+        cigSettings.use_previous_image = false;
+        cigSettings.previous_image_opt_in_version = 1;
+        settingsMigrated = true;
+    }
     const normalizedExtras = normalizeExtraStoryTools(cigSettings.extra_story_tools);
     if (JSON.stringify(cigSettings.extra_story_tools) !== JSON.stringify(normalizedExtras)) {
         cigSettings.extra_story_tools = normalizedExtras;
@@ -1801,7 +1810,10 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
         if (typeof generationOverrides.visualDirection === 'string') settingsSnapshot.custom_visual_instruction = generationOverrides.visualDirection.slice(0, 1000);
     }
-    const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
+    const currentChatId = String(getContext().chatId || '');
+    const gallerySnapshot = Array.isArray(settingsSnapshot.gallery)
+        ? settingsSnapshot.gallery.filter((item) => currentChatId && String(item?.chatId || '') === currentChatId)
+        : [];
     const previousImageEnabled = settingsSnapshot.use_previous_image === true;
     const continuationIsCurrent = previousImageEnabled && continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
         && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
@@ -2183,7 +2195,7 @@ async function galleryItemToDataUrl(item) {
 }
 
 async function addToGallery(imageData, prompt, messageId = null, existingPath = null, sourceMetadata = undefined) {
-    if (!extraStoryToolEnabled('gallery')) return;
+    if (!extraStoryToolEnabled('gallery') && !extraStoryToolEnabled('appearanceMemory')) return;
     const settings = extension_settings[extensionName];
 
     if (!settings.gallery) {
@@ -2360,7 +2372,6 @@ function chooseAppearanceSource(identityId, sourceType) {
     const next = setChatAppearanceSource(chat_metadata?.[CHAT_CANON_KEY], identity.id, { identityId: identity.id, sourceId: identity.id, sourceType, role });
     chat_metadata[CHAT_CANON_KEY] = next;
     void saveChatConditional();
-    renderContinuityShelves();
     renderChatAppearanceSources();
     return { status: 'selected', identityId: identity.id, sourceType };
 }
@@ -2378,7 +2389,6 @@ function chooseIdentityPin(identityId, action = 'pin') {
         chat_metadata[CHAT_CANON_KEY] = setChatIdentityPin(canon, identity.id, { sourceId: identity.id, role });
     }
     void saveChatConditional();
-    renderContinuityShelves();
     renderChatAppearanceSources();
     return { status: action === 'unpin' ? 'unpinned' : 'pinned', identityId: identity.id };
 }
@@ -2699,7 +2709,7 @@ async function persistChatOutfitState(identityId, nextState) {
     } else if (result.status === 'indeterminate') {
         scheduleOutfitPendingRetry();
     }
-    renderContinuityShelves();
+    renderChatOutfitControls();
     return result;
 }
 
@@ -2726,7 +2736,7 @@ async function resumePendingOutfitState() {
         settings.outfit_pending = resumed.state;
         await saveSettings();
     }
-    renderContinuityShelves();
+    renderChatOutfitControls();
     return resumed;
 }
 
@@ -2769,7 +2779,7 @@ async function createChatOutfit(identityId, name, description) {
     }
     settings.rp_outfits = { ...migrateOutfitCatalog(settings.rp_outfits), outfits: [...migrateOutfitCatalog(settings.rp_outfits).outfits, created.outfit] };
     await saveSettings();
-    renderContinuityShelves();
+    renderChatOutfitControls();
     return created;
 }
 
@@ -2854,7 +2864,6 @@ function scheduleChatCanonReconciliation({ operationId, captured, target, candid
                 chat_metadata[CHAT_CANON_KEY] = candidate;
                 if (mediaTarget) setVisibleCanonMediaLink(mediaTarget, { identityId, lookId: mediaTarget.lookId });
                 renderAppearanceList();
-                refreshVisibleCanonControls();
             }
             return verification;
         }).then((result) => {
@@ -3166,7 +3175,6 @@ async function rememberGalleryAppearance(index, mediaTarget = null) {
         await persistVisibleCanonGalleryLink({ artifactId, identityId: identity.id, lookId: activation.promoted.look.id });
     }
     renderAppearanceList();
-    refreshVisibleCanonControls();
     if (activation.status === 'confirmed' || activation.status === 'alternate') toastr.success(activation.message, 'Context Image Generation');
     else if (activation.status === 'confirmed-absent') toastr.warning(activation.message, 'Context Image Generation');
     else toastr.info(activation.message, 'Context Image Generation');
@@ -3181,6 +3189,7 @@ function renderChatAppearanceSources() {
     const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
     if (!identities.length) {
         $('<p>').text('No current character or persona identity is available.').appendTo(list);
+        renderChatOutfitControls([]);
         return;
     }
     const currentPersonaId = `user:${user_avatar || 'display'}`;
@@ -3205,6 +3214,36 @@ function renderChatAppearanceSources() {
         else $('<button type="button" class="menu_button cig_chat_appearance_pin">Pin this identity</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'pin', 'aria-label': `Pin ${identity.label || identity.id} for this chat` }).appendTo(row);
         list.append(row);
     }
+    renderChatOutfitControls(identities);
+}
+
+function renderChatOutfitControls(identities = null) {
+    const host = $('#cig_chat_outfit_controls').empty();
+    if (!host.length) return;
+    const currentIdentities = (identities || getAppearanceIdentityChoices()).filter((identity) => ['character', 'user'].includes(identity.kind));
+    const catalog = migrateOutfitCatalog(extension_settings[extensionName]?.rp_outfits);
+    const outfitState = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
+    $('<h3>').text('Current chat outfits').appendTo(host);
+    $('<small class="cig-setting-help">Optional outfit choices are saved in this chat and used by the wand.</small>').appendTo(host);
+    let rendered = 0;
+    for (const identity of currentIdentities) {
+        const outfits = catalog.outfits.filter((outfit) => outfit.identityId === identity.id);
+        rendered += 1;
+        const active = resolveActiveChatOutfit(outfitState, identity.id, catalog);
+        const row = $('<div class="cig_chat_outfit_row"></div>').attr('data-identity-id', identity.id);
+        $('<strong>').text(identity.label || identity.id).appendTo(row);
+        const select = $('<select class="text_pole cig_chat_outfit_select"></select>').attr('aria-label', `Choose outfit for ${identity.label || identity.id}`);
+        $('<option value="">No active outfit</option>').appendTo(select);
+        for (const outfit of outfits) $('<option>').val(outfit.id).text(outfit.name).prop('selected', outfit.id === active?.outfit?.id).appendTo(select);
+        select.appendTo(row);
+        if (outfits.length) $('<button type="button" class="menu_button cig_chat_outfit_activate">Activate</button>').attr('aria-label', `Activate selected outfit for ${identity.label || identity.id}`).appendTo(row);
+        if (active?.outfit) $('<button type="button" class="menu_button cig_chat_outfit_lock"></button>').text(active.binding?.isLocked ? 'Unlock outfit' : 'Lock outfit').attr({ 'aria-pressed': String(active.binding?.isLocked === true), 'aria-label': `${active.binding?.isLocked ? 'Unlock' : 'Lock'} outfit for ${identity.label || identity.id}` }).appendTo(row);
+        $('<input type="text" class="text_pole cig_chat_outfit_name" maxlength="80" placeholder="New outfit name">').attr('aria-label', `New outfit name for ${identity.label || identity.id}`).appendTo(row);
+        $('<input type="text" class="text_pole cig_chat_outfit_details" maxlength="240" placeholder="Outfit details">').attr('aria-label', `New outfit details for ${identity.label || identity.id}`).appendTo(row);
+        $('<button type="button" class="menu_button cig_chat_outfit_create">Create outfit</button>').attr('aria-label', `Create outfit for ${identity.label || identity.id}`).appendTo(row);
+        host.append(row);
+    }
+    if (!rendered) $('<small class="cig-setting-help">No current chat characters are available for outfit choices.</small>').appendTo(host);
 }
 
 function renderExtraStoryTools() {
@@ -3256,6 +3295,9 @@ function renderAppearanceList(lifecycleView = null) {
     $('#cig_appearances').prop('hidden', !visible);
     if (!visible) return;
     const settings = extension_settings[extensionName] || {};
+    const currentChatIdForAppearance = String(lifecycleView?.chatId ?? getContext().chatId ?? '');
+    const hasCurrentChatImage = (settings.gallery || []).some((item) => currentChatIdForAppearance && String(item?.chatId || '') === currentChatIdForAppearance);
+    $('#cig_appearance_remember_latest').prop('hidden', !hasCurrentChatImage);
     const list = $('#cig_appearance_list').empty();
     const empty = $('#cig_appearance_empty');
     const library = migrateAppearanceLibrary(settings.rp_library);
@@ -3430,9 +3472,6 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
             appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
-            renderContinuityShelf(currentMessageElement, currentMessage);
-            renderSceneInspection(currentMessageElement, currentMessage);
-            renderVisibleCanonControls(currentMessageElement, currentMessage);
             scheduleImageArrowConfiguration({
                 schedule: (callback) => setTimeout(callback, 0),
                 reconfigure: () => configureCigImageArrows(currentMessageElement),
@@ -3447,15 +3486,13 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                     };
                 }
                 appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
-                renderContinuityShelf(currentMessageElement, currentMessage);
-                renderSceneInspection(currentMessageElement, currentMessage);
                 scheduleImageArrowConfiguration({
                     schedule: (callback) => setTimeout(callback, 0),
                     reconfigure: () => configureCigImageArrows(currentMessageElement),
                 });
             };
         },
-        saveChat: async () => {
+        saveChat: async (result) => {
             const saveEpoch = attachmentLifecycleEpoch;
             const beforeSave = validateMessageTarget({
                 target: effectiveTarget,
@@ -3484,7 +3521,6 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
         rollbackMedia: (rollback) => rollback?.(),
     });
-    refreshVisibleCanonControls();
     return attached;
 }
 
@@ -3512,7 +3548,7 @@ function iterationSourceArtifact(message, activeMedia) {
         effectivePrompt: item.title || '',
         references: [], model: {}, route: {}, options: {}, canonSnapshot: {},
     });
-    return { ...legacy, mediaUrl: item.url || null, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: visibleCanonMessageSender(message) };
+    return { ...legacy, mediaUrl: item.url || null, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: message?.is_user ? `{{user}} (${message.name || name1 || 'User'})` : `{{char}} (${message?.name || getContext().name2 || 'Character'})` };
 }
 
 function iterationGenerationPlan(sourceArtifact) {
@@ -3733,7 +3769,6 @@ function cigImageArrows(messageElement) {
 
 function configureCigImageArrows(messageElement) {
     if (!imageNavigationContext(messageElement)) return;
-    renderVisibleCanonControls(messageElement);
     renderIterationActionSurface(messageElement);
     messageElement.find('.mes_img_swipe_left')
         .attr({ tabindex: '0', role: 'button', title: 'Previous image', 'aria-label': 'Previous image' })
@@ -3906,8 +3941,6 @@ function injectMessageButton(messageId) {
     const messageElement = $(`.mes[mesid="${messageId}"]`);
     if (messageElement.length === 0) return;
 
-    renderVisibleCanonControls(messageElement);
-
     const extraButtons = messageElement.find('.extraMesButtons');
     if (extraButtons.length > 0 && extraButtons.find('.cig_message_gen').length === 0) {
         const cigButton = $(`
@@ -3924,199 +3957,6 @@ function injectMessageButton(messageId) {
             extraButtons.prepend(cigButton);
         }
     }
-}
-
-function visibleCanonMessageSender(message) {
-    if (message?.is_user) return `{{user}} (${message.name || name1 || 'User'})`;
-    const context = getContext();
-    return `{{char}} (${message?.name || context.name2 || 'Character'})`;
-}
-
-function createVisibleCanonButton(className, label, attributes = {}) {
-    return $('<button type="button"></button>')
-        .addClass(`menu_button ${className}`)
-        .text(label)
-        .attr({ ...attributes, 'aria-label': attributes['aria-label'] || label, title: attributes.title || label });
-}
-
-function renderContinuityShelf(messageElement, messageOverride = null) {
-    messageElement?.find('.cig_continuity_shelf').remove();
-    if (!messageElement?.length) return;
-    const messageId = Number(messageElement.attr('mesid'));
-    const context = getContext();
-    const message = messageOverride || context.chat?.[messageId];
-    const activeMedia = activeMediaForMessage(message);
-    const continuitySurface = activeMedia?.item?.cig_continuity_snapshot;
-    if (!continuitySurface?.referencePlan?.identities?.length) return;
-    const settings = extension_settings[extensionName] || {};
-    const catalog = migrateOutfitCatalog(settings.rp_outfits);
-    const outfitState = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
-    const shelf = {
-        ...continuitySurface.referencePlan,
-        identities: continuitySurface.referencePlan.identities.map((entry) => {
-            const outfitResult = resolveActiveChatOutfit(outfitState, entry.identityId, catalog);
-            return {
-                ...entry,
-                activeOutfit: outfitResult?.outfit ? {
-                    id: outfitResult.outfit.id,
-                    name: outfitResult.outfit.name,
-                    items: cloneSnapshot(outfitResult.outfit.items || []),
-                    description: outfitResult.outfit.description || null,
-                    isLocked: outfitResult.binding?.isLocked === true,
-                } : null,
-                outfits: catalog.outfits.filter((outfit) => outfit.identityId === entry.identityId).map((outfit) => ({ id: outfit.id, name: outfit.name, items: cloneSnapshot(outfit.items), description: outfit.description })),
-            };
-        }),
-    };
-    const root = $('<details class="cig_continuity_shelf"></details>')
-        .attr({ 'data-message-id': String(messageId), 'aria-label': 'Visual continuity shelf' });
-    const summary = $('<summary class="cig_continuity_shelf_summary"></summary>')
-        .text(`Continuity · ${shelf.identities.map((entry) => entry.identityLabel).join(' + ')}`)
-        .appendTo(root);
-    summary.attr('title', 'Show continuity sources and outfit controls');
-    $('<small class="cig_continuity_shelf_limit" role="status"></small>')
-        .text(shelf.modelLimit.maxReferences === null ? 'Reference limit unknown; image references are held.' : `${shelf.modelLimit.used}/${shelf.modelLimit.maxReferences} image references selected.`)
-        .appendTo(root);
-    for (const entry of shelf.identities) {
-        const row = $('<article class="cig_continuity_identity"></article>').attr('data-identity-id', entry.identityId);
-        const heading = $('<div class="cig_continuity_identity_heading"></div>').appendTo(row);
-        if (entry.thumbnail) $('<img class="cig_continuity_thumbnail" alt=""></img>').attr('src', entry.thumbnail).appendTo(heading);
-        $('<strong></strong>').text(entry.identityLabel).appendTo(heading);
-        $('<span class="cig_continuity_source"></span>').text(`Source: ${entry.sourceType}`).appendTo(heading);
-        if (entry.description) $('<details class="cig_continuity_description"><summary>Written details</summary><p></p></details>').find('p').text(entry.description).end().appendTo(row);
-        const refs = $('<small class="cig_continuity_refs"></small>');
-        if (entry.selected.length) refs.append($('<span></span>').text(`Selected: ${entry.selected.map((ref) => ref.sourceType).join(', ')}`));
-        if (entry.omitted.length) refs.append($('<span></span>').text(` Omitted: ${entry.omitted.map((ref) => `${ref.sourceType} (${ref.reason})`).join(', ')}`));
-        refs.appendTo(row);
-        const outfitLabel = $('<label class="cig_continuity_outfit_label"></label>').text('Outfit');
-        const outfitSelect = $('<select class="text_pole cig_continuity_outfit_select"></select>').attr({ 'aria-label': `Choose outfit for ${entry.identityLabel}` });
-        $('<option value="">No active outfit</option>').appendTo(outfitSelect);
-        for (const outfit of entry.outfits) $('<option></option>').attr('value', outfit.id).text(outfit.name).prop('selected', outfit.id === entry.activeOutfit?.id).appendTo(outfitSelect);
-        outfitLabel.append(outfitSelect).appendTo(row);
-        if (entry.outfits.length) {
-            $('<button type="button" class="menu_button cig_continuity_outfit_activate">Activate</button>').attr({ 'aria-label': `Activate selected outfit for ${entry.identityLabel}` }).appendTo(row);
-            if (entry.activeOutfit) $('<button type="button" class="menu_button cig_continuity_outfit_lock"></button>').text(entry.activeOutfit.isLocked ? 'Unlock outfit' : 'Lock outfit').attr({ 'aria-pressed': String(entry.activeOutfit.isLocked), 'aria-label': `${entry.activeOutfit.isLocked ? 'Unlock' : 'Lock'} outfit for ${entry.identityLabel}` }).appendTo(row);
-        }
-        $('<input type="text" class="text_pole cig_continuity_outfit_name" maxlength="80" placeholder="New outfit name">').attr('aria-label', `New outfit name for ${entry.identityLabel}`).appendTo(row);
-        $('<input type="text" class="text_pole cig_continuity_outfit_details" maxlength="240" placeholder="Outfit details">').attr('aria-label', `New outfit details for ${entry.identityLabel}`).appendTo(row);
-        $('<button type="button" class="menu_button cig_continuity_outfit_create">Create outfit</button>').attr('aria-label', `Create outfit for ${entry.identityLabel}`).appendTo(row);
-        row.appendTo(root);
-    }
-    const mediaContainer = messageElement.find('.mes_img_container, .mes_media_container').last();
-    if (mediaContainer.length) mediaContainer.after(root);
-    else messageElement.find('.mes_text').after(root);
-}
-
-function renderContinuityShelves() {
-    $('.mes').each(function () { renderContinuityShelf($(this)); });
-}
-
-function renderSceneInspection(messageElement, messageOverride = null) {
-    messageElement?.find('.cig_scene_inspection').remove();
-    const messageId = Number(messageElement?.attr('mesid'));
-    const message = messageOverride || getContext().chat?.[messageId];
-    const artifactInspection = activeMediaForMessage(message)?.item?.cig_scene_inspection;
-    const inspection = artifactInspection?.inspection || artifactInspection;
-    if (!inspection || !Array.isArray(inspection.lines)) return;
-
-    const confidence = String(inspection.confidence || 'low');
-    const root = $('<details class="cig_scene_inspection"></details>')
-        .attr({ 'data-message-id': String(messageId), 'aria-label': 'Scene interpretation inspection' });
-    $('<summary class="cig_scene_inspection_summary"></summary>')
-        .text(`Scene interpretation · ${confidence} confidence`)
-        .appendTo(root);
-    const lines = $('<ul class="cig_scene_inspection_lines"></ul>').appendTo(root);
-    for (const line of inspection.lines.slice(0, 8)) $('<li></li>').text(String(line)).appendTo(lines);
-    for (const warning of Array.isArray(inspection.warnings) ? inspection.warnings.slice(0, 4) : []) {
-        $('<p class="cig_scene_inspection_warning" role="note"></p>').text(`Note: ${String(warning)}`).appendTo(root);
-    }
-    messageElement?.find('.mes_text, .mes_img_container, .mes_media_container').last().after(root);
-}
-
-function renderVisibleCanonControls(messageElement, messageOverride = null) {
-    const messageId = Number(messageElement?.attr('mesid'));
-    const context = getContext();
-    const message = messageOverride || context.chat?.[messageId];
-    const activeMedia = activeMediaForMessage(message);
-    const controls = messageElement?.find('.cig_visible_canon');
-    controls?.remove();
-    if (!messageElement?.length || !activeMedia || !isCigOwnedMedia(activeMedia.item)) return;
-
-    const settings = extension_settings[extensionName] || {};
-    const library = migrateAppearanceLibrary(settings.rp_library);
-    const materialized = materializeAppearanceAssets(library, settings.gallery || []);
-    const fallbackIdentityId = getStableSpeakerIdentityId(visibleCanonMessageSender(message));
-    const identityId = resolveVisibleCanonIdentityId({
-        fallbackIdentityId,
-        media: activeMedia.item,
-        messageId,
-        gallery: settings.gallery,
-    });
-    const projection = projectVisibleCanon({
-        library,
-        chatState: chat_metadata[CHAT_CANON_KEY],
-        identityId,
-        availableAssetIds: Object.keys(materialized.assets),
-    });
-    const root = $('<section class="cig_visible_canon" aria-label="Visual canon controls"></section>')
-        .attr({
-            'data-message-id': String(messageId),
-            'data-media-url': activeMedia.item.url || '',
-            'data-identity-id': projection.identityId,
-        });
-    $('<span class="cig_visible_canon_status" role="status" aria-live="polite"></span>')
-        .text(visibleCanonStatus(projection))
-        .appendTo(root);
-
-    const remember = createVisibleCanonButton('cig_visible_canon_remember', 'Remember character look', {
-        'data-message-id': String(messageId),
-        'data-media-url': activeMedia.item.url || '',
-    });
-    remember.appendTo(root);
-
-    if (projection.looks.length > 0) {
-        const selectId = `cig_visible_canon_select_${messageId}`;
-        const label = $('<label class="cig_visible_canon_select_label"></label>')
-            .attr('for', selectId)
-            .text('Saved look');
-        const select = $('<select class="text_pole cig_visible_canon_select"></select>')
-            .attr({ id: selectId, 'aria-label': `Choose a saved look for ${projection.identityLabel}` });
-        for (const look of projection.looks) {
-            $('<option></option>').attr('value', look.id).text(look.label).prop('selected', look.id === projection.activeLookId).appendTo(select);
-        }
-        label.append(select).appendTo(root);
-        createVisibleCanonButton('cig_visible_canon_change', 'Change look', {
-            'data-message-id': String(messageId),
-            'data-media-url': activeMedia.item.url || '',
-            'data-identity-id': projection.identityId,
-        }).appendTo(root);
-    }
-
-    if (projection.active) {
-        createVisibleCanonButton('cig_visible_canon_lock', projection.locked ? 'Unlock look' : 'Lock look', {
-            'data-message-id': String(messageId),
-            'data-media-url': activeMedia.item.url || '',
-            'data-identity-id': projection.identityId,
-            'data-look-id': projection.activeLookId,
-            'aria-pressed': projection.locked ? 'true' : 'false',
-        }).appendTo(root);
-        createVisibleCanonButton('cig_visible_canon_stop', 'Stop using look', {
-            'data-message-id': String(messageId),
-            'data-media-url': activeMedia.item.url || '',
-            'data-identity-id': projection.identityId,
-            'data-look-id': projection.activeLookId,
-        }).appendTo(root);
-    }
-
-    const mediaContainer = messageElement.find('.mes_img_container, .mes_media_container').last();
-    if (mediaContainer.length) mediaContainer.after(root);
-    else messageElement.append(root);
-}
-
-function refreshVisibleCanonControls() {
-    $('.mes').each(function () {
-        renderVisibleCanonControls($(this));
-    });
 }
 
 function injectAllMessageButtons() {
@@ -4137,6 +3977,10 @@ async function clearGallery() {
         return;
     }
     toastr.success(result.message, 'Context Image Generation');
+}
+
+function removeRetiredMessageSurfaces() {
+    $('.cig_visible_canon, .cig_scene_inspection, .cig_continuity_shelf').remove();
 }
 
 function viewGalleryImage(index) {
@@ -4235,7 +4079,6 @@ async function useAppearanceLook(identityId, lookId, mediaTarget = null) {
     });
     if (action.status === 'confirmed') {
         renderAppearanceList();
-        refreshVisibleCanonControls();
         toastr.success(action.message, 'Context Image Generation');
     } else toastr.info(action.message, 'Context Image Generation');
 }
@@ -4259,7 +4102,6 @@ async function toggleAppearanceLookLock(identityId, lookId, mediaTarget = null) 
     });
     if (action.status === 'confirmed') {
         renderAppearanceList();
-        refreshVisibleCanonControls();
         toastr.success(action.message, 'Context Image Generation');
     } else toastr.info(action.message, 'Context Image Generation');
 }
@@ -4285,20 +4127,8 @@ async function stopAppearanceLook(identityId, lookId, mediaTarget = null) {
     });
     if (result.status === 'confirmed') {
         renderAppearanceList();
-        refreshVisibleCanonControls();
         toastr.success(result.message, 'Context Image Generation');
     } else toastr.info(result.message, 'Context Image Generation');
-}
-
-async function rememberVisibleCanonImage(messageId, mediaUrl) {
-    const settings = extension_settings[extensionName];
-    const index = (settings.gallery || []).findIndex((item) => item.url === mediaUrl && String(item.messageId) === String(messageId));
-    if (index < 0) {
-        toastr.info('This image is not available in the Gallery yet.', 'Context Image Generation');
-        return;
-    }
-    await rememberGalleryAppearance(index, visibleCanonMediaTarget(messageId, mediaUrl));
-    refreshVisibleCanonControls();
 }
 
 function visibleCanonMediaTarget(messageId, mediaUrl) {
@@ -4310,24 +4140,9 @@ function visibleCanonMediaTarget(messageId, mediaUrl) {
     return { messageId: Number(messageId), mediaUrl, artifactId: buildVisibleCanonMediaArtifactId({ messageId, media: item }) };
 }
 
-function visibleCanonActionController() {
-    return createVisibleCanonActionController({
-        actions: {
-            remember: ({ messageId, mediaUrl }) => rememberVisibleCanonImage(messageId, mediaUrl),
-            change: ({ identityId, lookId, messageId, mediaUrl }) => useAppearanceLook(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
-            lock: ({ identityId, lookId, messageId, mediaUrl }) => toggleAppearanceLookLock(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
-            stop: ({ identityId, lookId, messageId, mediaUrl }) => stopAppearanceLook(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
-        },
-        refresh: refreshVisibleCanonControls,
-    });
-}
-
-function visibleCanonDomController() {
-    return createVisibleCanonDomController({ dispatch: (action, payload) => visibleCanonActionController().run(action, payload) });
-}
-
 jQuery(async () => {
     console.log(`[${extensionName}] Initializing extension...`);
+    removeRetiredMessageSurfaces();
 
     try {
         const response = await fetch(`/scripts/extensions/third-party/${extensionName}/settings.html`);
@@ -4515,6 +4330,7 @@ jQuery(async () => {
 
     $('#cig_use_previous_image').on('change', function () {
         extension_settings[extensionName].use_previous_image = $(this).prop('checked');
+        extension_settings[extensionName].previous_image_opt_in_version = 1;
         if (!extension_settings[extensionName].use_previous_image) {
             // A staged Story Memory continuation is a reference candidate, so
             // turning the opt-in off must remove it from the next wand plan
@@ -4636,6 +4452,18 @@ jQuery(async () => {
         }
     });
 
+    $('#cig_appearance_remember_latest').on('click', async function () {
+        const gallery = extension_settings[extensionName]?.gallery || [];
+        const currentChatId = String(getContext().chatId || '');
+        const index = gallery.findIndex((item) => currentChatId && String(item?.chatId || '') === currentChatId);
+        if (index < 0) {
+            toastr.info('Generate an image first.', 'Context Image Generation');
+            return;
+        }
+        try { await rememberGalleryAppearance(index); }
+        catch (error) { showGenerationError(error, 'Remember latest generated image'); }
+    });
+
     $(document).on('click', '.cig_gallery_delete', async function (e) {
         e.stopPropagation();
         const index = $(this).data('index');
@@ -4692,56 +4520,27 @@ jQuery(async () => {
         await toggleAppearanceLookLock(row.attr('data-identity-id'), row.attr('data-look-id'));
     });
 
-    $(document).on('click', '.cig_continuity_outfit_activate', async function (e) {
+    $(document).on('click', '.cig_chat_outfit_activate', async function (e) {
         e.stopPropagation();
-        const row = $(this).closest('.cig_continuity_identity');
-        const outfitId = row.find('.cig_continuity_outfit_select').val();
+        const row = $(this).closest('.cig_chat_outfit_row');
+        const outfitId = row.find('.cig_chat_outfit_select').val();
         if (!outfitId) return;
         try { await activateChatOutfit(row.attr('data-identity-id'), outfitId); }
         catch (error) { showGenerationError(error, 'Activate outfit'); }
     });
 
-    $(document).on('click', '.cig_continuity_outfit_lock', async function (e) {
+    $(document).on('click', '.cig_chat_outfit_lock', async function (e) {
         e.stopPropagation();
-        try { await toggleChatOutfitLock($(this).closest('.cig_continuity_identity').attr('data-identity-id')); }
+        try { await toggleChatOutfitLock($(this).closest('.cig_chat_outfit_row').attr('data-identity-id')); }
         catch (error) { showGenerationError(error, 'Change outfit lock'); }
     });
 
-    $(document).on('click', '.cig_continuity_outfit_create', async function (e) {
+    $(document).on('click', '.cig_chat_outfit_create', async function (e) {
         e.stopPropagation();
-        const row = $(this).closest('.cig_continuity_identity');
+        const row = $(this).closest('.cig_chat_outfit_row');
         try {
-            await createChatOutfit(row.attr('data-identity-id'), row.find('.cig_continuity_outfit_name').val(), row.find('.cig_continuity_outfit_details').val());
+            await createChatOutfit(row.attr('data-identity-id'), row.find('.cig_chat_outfit_name').val(), row.find('.cig_chat_outfit_details').val());
         } catch (error) { showGenerationError(error, 'Create outfit'); }
-    });
-
-    $(document).on('click', '.cig_visible_canon_remember', async function (e) {
-        e.stopPropagation();
-        try {
-            await visibleCanonDomController().activate(this, e);
-        } catch (error) {
-            showGenerationError(error, 'Remember character look');
-        }
-    });
-
-    $(document).on('click', '.cig_visible_canon_change', async function (e) {
-        e.stopPropagation();
-        const root = $(this).closest('.cig_visible_canon');
-        const lookId = root.find('.cig_visible_canon_select').val();
-        if (lookId) {
-            this.dataset.lookId = lookId;
-            await visibleCanonDomController().activate(this, e);
-        }
-    });
-
-    $(document).on('click', '.cig_visible_canon_lock', async function (e) {
-        e.stopPropagation();
-        await visibleCanonDomController().activate(this, e);
-    });
-
-    $(document).on('click', '.cig_visible_canon_stop', async function (e) {
-        e.stopPropagation();
-        await visibleCanonDomController().activate(this, e);
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {
@@ -4780,14 +4579,12 @@ jQuery(async () => {
             chatId: getContext().chatId,
             chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
         }),
-        render: (view) => { renderAppearanceList(view); renderChatAppearanceSources(); refreshVisibleCanonControls(); },
+        render: (view) => { renderAppearanceList(view); renderChatAppearanceSources(); },
     });
 
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
-        renderContinuityShelf(messageElement);
-        renderSceneInspection(messageElement);
         if (extraStoryToolEnabled('iteration')) renderIterationActionSurface(messageElement);
         scheduleImageArrowConfiguration({
             schedule: (callback) => setTimeout(callback, 0),
@@ -4797,6 +4594,7 @@ jQuery(async () => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        removeRetiredMessageSurfaces();
         if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
         if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
@@ -4805,8 +4603,6 @@ jQuery(async () => {
             injectAllMessageButtons();
             syncChatWandPreferenceControls();
             renderChatAppearanceSources();
-            renderContinuityShelves();
-            $('.mes').each(function () { renderSceneInspection($(this)); });
             if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
@@ -4830,13 +4626,11 @@ jQuery(async () => {
         if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
         if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); renderContinuityShelves(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {
         injectAllMessageButtons();
-        renderContinuityShelves();
-        $('.mes').each(function () { renderSceneInspection($(this)); });
         if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
         configureAllCigImageArrows();
     }, 500);

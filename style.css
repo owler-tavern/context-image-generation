@@ -3,29 +3,6 @@
     width: 100%;
 }
 
-.cig_scene_inspection {
-    margin-top: 0.5rem;
-    padding: 0.5rem 0.75rem;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 0.4rem;
-    max-width: 48rem;
-}
-
-.cig_scene_inspection_summary {
-    cursor: pointer;
-    font-size: 0.9em;
-}
-
-.cig_scene_inspection_lines {
-    margin: 0.5rem 0 0;
-    padding-inline-start: 1.25rem;
-}
-
-.cig_scene_inspection_warning {
-    margin: 0.5rem 0 0;
-    color: var(--SmartThemeWarningColor, #d98c10);
-}
-
 .cig-model-row {
     display: flex;
     align-items: stretch;
@@ -146,6 +123,11 @@
 .cig_chat_appearance_row select, .cig_chat_appearance_row button { min-height: 44px; width: 100%; }
 .cig_chat_appearance_row small { display: block; opacity: .75; }
 @media (max-width: 480px) { .cig_chat_appearance_row { grid-template-columns: 1fr; } }
+#cig_chat_outfit_controls { margin-top: .75rem; }
+.cig_chat_outfit_controls h3 { margin: .5rem 0 .25rem; }
+.cig_chat_outfit_row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem); gap: .5rem; align-items: center; padding-top: .5rem; }
+.cig_chat_outfit_row :is(select, input, button) { min-height: 44px; width: 100%; min-width: 0; }
+@media (max-width: 480px) { .cig_chat_outfit_row { grid-template-columns: 1fr; } }
 
 #cig_settings .inline-drawer-content {
     display: flex;
@@ -433,141 +415,6 @@
 
 .cig_appearance_remove {
     flex: 0 0 auto;
-}
-
-.cig_visible_canon {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin: 8px 0 4px;
-    padding: 8px;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 4px;
-    background: var(--SmartThemeBlurTintColor);
-}
-
-.cig_continuity_shelf {
-    margin: 8px 0 4px;
-    padding: 6px 8px;
-    border: 1px solid var(--SmartThemeBorderColor);
-    border-radius: 4px;
-    background: var(--SmartThemeBlurTintColor);
-}
-
-.cig_continuity_shelf_summary {
-    min-height: 44px;
-    display: flex;
-    align-items: center;
-    cursor: pointer;
-    font-weight: 600;
-}
-
-.cig_continuity_shelf_limit,
-.cig_continuity_refs {
-    display: block;
-    opacity: 0.75;
-}
-
-.cig_continuity_identity {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr);
-    gap: 6px;
-    padding: 8px 0;
-    border-top: 1px solid color-mix(in srgb, var(--SmartThemeBorderColor) 70%, transparent);
-}
-
-.cig_continuity_identity_heading {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    min-height: 44px;
-}
-
-.cig_continuity_thumbnail {
-    width: 44px;
-    height: 44px;
-    flex: 0 0 44px;
-    object-fit: cover;
-    border-radius: 4px;
-}
-
-.cig_continuity_source {
-    margin-left: auto;
-    opacity: 0.8;
-    font-size: 0.9em;
-}
-
-.cig_continuity_description p {
-    margin: 4px 0;
-    white-space: pre-wrap;
-    overflow-wrap: anywhere;
-}
-
-.cig_continuity_identity :is(button, select, input) {
-    min-width: 44px;
-    min-height: 44px;
-}
-
-.cig_continuity_identity :is(button, select, input):focus-visible {
-    outline: 2px solid var(--SmartThemeQuoteColor);
-    outline-offset: 2px;
-}
-
-.cig_continuity_outfit_label {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-}
-
-.cig_continuity_outfit_label select {
-    min-width: 0;
-    flex: 1 1 auto;
-}
-
-@media (max-width: 600px) {
-    .cig_continuity_source {
-        margin-left: 0;
-    }
-
-    .cig_continuity_identity :is(button, select, input),
-    .cig_continuity_outfit_label {
-        width: 100%;
-    }
-}
-
-.cig_visible_canon_status {
-    flex: 1 1 100%;
-    color: var(--SmartThemeBodyColor);
-    font-size: 0.9em;
-}
-
-.cig_visible_canon button,
-.cig_visible_canon select {
-    min-width: 44px;
-    min-height: 44px;
-}
-
-.cig_visible_canon_select_label {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    min-height: 44px;
-}
-
-.cig_visible_canon button:focus-visible,
-.cig_visible_canon select:focus-visible {
-    outline: 2px solid var(--SmartThemeQuoteColor);
-    outline-offset: 2px;
-}
-
-@media (max-width: 600px) {
-    .cig_visible_canon > button,
-    .cig_visible_canon_select_label,
-    .cig_visible_canon_select {
-        flex: 1 1 100%;
-        width: 100%;
-    }
 }
 
 @media (hover: none) {

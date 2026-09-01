@@ -3,8 +3,8 @@ import assert from 'node:assert/strict';
 
 test('appearance settings explain durable per-chat memory and lock controls', async () => {
     const html = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
-    assert.match(html, /separate appearance file/i);
-    assert.match(html, /current chat/i);
+    assert.match(html, /reusable character appearance/i);
+    assert.match(html, /Remember latest generated image/i);
     assert.match(html, /lock/i);
 });
 

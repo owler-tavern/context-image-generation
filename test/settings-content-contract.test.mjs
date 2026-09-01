@@ -75,8 +75,8 @@ test('Images and Cast leads with current chat characters and progressively discl
     assert.match(imagesCast, /id="cig_appearances"[\s\S]*?<h2>Appearance memory<\/h2>/);
     assert.equal((imagesCast.match(/<details\b/g) || []).length, 0, 'Images and Cast has no nested details');
     assert.match(imagesCast, /Use the wand on any RP message to generate an image\./);
-    assert.match(imagesCast, /After you generate an image, choose Remember this look to associate it with a character\./);
-    assert.match(imagesCast, /Remember this look saves a separate appearance file, then uses it in the current chat\./);
+    assert.match(imagesCast, /Generate an image, then use Remember latest generated image here\./);
+    assert.match(imagesCast, /Remember a generated image as a reusable character appearance\./);
 });
 
 test('Gallery keeps only semantic non-generative controls; the wand is the sole generation entry', () => {
@@ -120,6 +120,14 @@ test('story extras are opt-in, grouped once, and keep the ordinary view core-onl
     assert.match(imagesCast, /Turn off all extras/);
     assert.match(imagesCast, /Nothing is deleted/);
     assert.ok(imagesCast.indexOf('id="cig_chat_appearance_sources"') < imagesCast.indexOf('id="cig_extra_story_tools"'));
+});
+
+test('Appearance memory can create its first look without enabling the visible Gallery', () => {
+    assert.match(settings, /id="cig_appearance_remember_latest"/u);
+    assert.match(index, /!extraStoryToolEnabled\('gallery'\) && !extraStoryToolEnabled\('appearanceMemory'\)/u);
+    assert.match(index, /#cig_appearance_remember_latest/u);
+    assert.match(index, /findIndex\(\(item\) => currentChatId && String\(item\?\.chatId \|\| ''\) === currentChatId\)/u);
+    assert.match(index, /rememberGalleryAppearance\(index\)/u);
 });
 
 test('gallery preview and appearance actions are semantic and identify their outcome', () => {

@@ -114,3 +114,12 @@ test('does not save when the save gate reports a target change', async () => {
         { notify: 'Image kept in the gallery because the original message is no longer active.' },
     ]);
 });
+
+test('rolls back when the production save gate reports safe false', async () => {
+    const { calls, options } = dependencies({ safe: true, message });
+    options.saveChat = async () => ({ safe: false, reason: 'chat-changed' });
+    options.rollbackMedia = () => calls.push('rollback');
+    assert.equal(await attachGeneratedImageSafely(options), false);
+    assert.equal(calls.includes('rollback'), true);
+    assert.equal(calls.some((entry) => entry?.gallery && entry.metadata?.reason === 'chat-changed'), true);
+});

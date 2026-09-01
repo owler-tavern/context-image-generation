@@ -106,13 +106,13 @@ test('unlocked active look is explicit and unavailable saved files are not offer
     assert.ok(visibleCanonActionLabels(projection).includes('Lock look'));
 });
 
-test('visible canon controls keep the executable touch-target contract without provider dispatch', async () => {
-    const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
-
+test('visible canon domain remains provider-free after message controls move to Settings', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.equal(VISIBLE_CANON_MIN_TOUCH_TARGET, 44);
-    assert.match(style, /\.cig_visible_canon button,[\s\S]*?min-width:\s*44px/);
-    assert.match(style, /\.cig_visible_canon button,[\s\S]*?min-height:\s*44px/);
-    assert.match(style, /@media \(max-width: 600px\)/);
+    assert.doesNotMatch(index, /function renderVisibleCanonControls/u);
+    assert.match(index, /function renderChatAppearanceSources/u);
+    const settingsSurface = index.slice(index.indexOf('function renderChatAppearanceSources'), index.indexOf('function renderExtraStoryTools'));
+    assert.doesNotMatch(settingsSurface, /dispatchProviderRoute|attachGeneratedImage|generateImageFromPrompt/u);
 });
 
 test('remembered artifact identity wins over the message sender for persona or NPC selections', () => {

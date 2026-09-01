@@ -45,10 +45,10 @@ test('runtime snapshots resolve adapter IDs through the shared route contract', 
     assert.doesNotMatch(snapshot, /openAiImages:\s*'openai-images'/);
 });
 
-test('normal inline flow renders a continuity shelf and captures outfit/reference evidence in one immutable plan', async () => {
+test('normal inline flow captures outfit/reference evidence without adding a post-image chat shelf', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /projectContinuityShelf/);
-    assert.match(source, /renderContinuityShelf/);
+    assert.doesNotMatch(source, /renderContinuityShelf/);
     assert.match(source, /migrateOutfitCatalog/);
     assert.match(source, /migrateChatOutfitState/);
     assert.match(source, /buildOutfitPrompt/);
@@ -57,15 +57,14 @@ test('normal inline flow renders a continuity shelf and captures outfit/referenc
     assert.match(source, /verifyPersistedChatOutfitState/);
 });
 
-test('the visible shelf reuses the captured media surface and cannot drift from dispatch settings', async () => {
+test('captured continuity metadata remains available to Settings and Story Memory without a chat shelf', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const render = source.slice(source.indexOf('function renderContinuityShelf'), source.indexOf('function renderContinuityShelves'));
     assert.match(source, /cig_continuity_snapshot/);
     assert.match(source, /useAvatars: snapshot\.settingsSnapshot\.use_avatars === true/);
     assert.match(source, /useDescriptions: snapshot\.settingsSnapshot\.include_descriptions === true/);
-    assert.match(render, /cig_continuity_snapshot/);
-    assert.doesNotMatch(render, /resolveHostAvatarIdentityReferences/);
-    assert.doesNotMatch(render, /getReferenceImageCapability\(/);
+    assert.doesNotMatch(source, /function renderContinuityShelf/);
+    assert.doesNotMatch(source, /function renderVisibleCanonControls/);
+    assert.doesNotMatch(source, /function renderSceneInspection/);
 });
 
 test('captured avatar and description options gate both candidates and prompt content', async () => {
@@ -102,15 +101,21 @@ test('wand integration makes scene interpretation visible, persistent, and chat-
     assert.match(settings, /id="cig_custom_visual_instruction"/);
 });
 
+test('successful attachment passes the generated result into scene-state persistence', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const attachment = source.slice(source.indexOf('async function attachGeneratedImage('), source.indexOf('function isCigOwnedMedia'));
+    assert.match(attachment, /saveChat: async \(result\) =>/);
+    assert.match(attachment, /persistSceneStateForAttachment\(result, effectiveTarget, saveEpoch\)/);
+});
+
 test('scene state stays internal while the inline artifact keeps a public inspection wrapper', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     const snapshot = source.slice(source.indexOf('const sceneSnapshot = buildSceneGenerationSnapshot'), source.indexOf('const connectionId = routeModel.connectionId'));
     const dispatch = source.slice(source.indexOf('const generatedWithContinuity'), source.indexOf('if (typeof finalize !== \'function\')'));
-    const render = source.slice(source.indexOf('function renderSceneInspection'), source.indexOf('function renderVisibleCanonControls'));
     assert.match(snapshot, /const scenePlan = \{ \.\.\.sceneMetadata, state: cloneSnapshot\(sceneSnapshot\.state\),/);
     assert.match(source, /scene: scenePlan/);
     assert.match(dispatch, /__cigSceneMetadata: createSceneArtifactMetadata\(dispatchedPlan\.scene\)/);
     assert.match(dispatch, /__cigSceneState: cloneSnapshot\(dispatchedPlan\.scene\?\.state\)/);
-    assert.match(render, /cig_scene_inspection/);
-    assert.match(render, /inspection\.lines/);
+    assert.doesNotMatch(source, /function renderSceneInspection/);
+    assert.match(source, /removeRetiredMessageSurfaces[\s\S]*?\.cig_scene_inspection/u);
 });
