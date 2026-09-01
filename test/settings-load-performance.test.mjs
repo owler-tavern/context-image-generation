@@ -31,3 +31,24 @@ test('ordinary message rendering and chat startup do not schedule full image-nav
         'idle message and chat lifecycle must not add image-navigation timers or full DOM scans',
     );
 });
+
+test('startup defers recovery and hidden Characters and Library rendering until after first paint', () => {
+    const loadStart = indexSource.indexOf('async function loadSettings()');
+    const loadEnd = indexSource.indexOf('function toggleProviderSpecificSettings()', loadStart);
+    const loadSettings = loadStart >= 0 && loadEnd > loadStart ? indexSource.slice(loadStart, loadEnd) : '';
+
+    assert.ok(loadSettings, 'loadSettings source should be available');
+    assert.doesNotMatch(loadSettings, /await (?:enqueueLibraryMutation|resumePending)/u);
+    assert.doesNotMatch(loadSettings, /renderAppearanceList\(|renderChatAppearanceSources\(/u);
+    assert.match(loadSettings, /schedulePendingRecovery\(\)/u);
+});
+
+test('chat lifecycle marks hidden Characters and Library settings stale instead of rebuilding them twice', () => {
+    const bindStart = indexSource.indexOf('bindAppearanceLifecycle({');
+    const renderEnd = indexSource.indexOf('function onCigMessageRendered', bindStart);
+    const lifecycleBinding = bindStart >= 0 && renderEnd > bindStart ? indexSource.slice(bindStart, renderEnd) : '';
+
+    assert.ok(lifecycleBinding, 'appearance lifecycle binding should be available');
+    assert.doesNotMatch(lifecycleBinding, /renderChatAppearanceSources\(/u);
+    assert.match(lifecycleBinding, /markImagesCastSettingsStale/u);
+});

@@ -178,6 +178,8 @@ let cinematicUiController = null;
 let directorRuntime = null;
 let directorUiController = null;
 let directorFocusCapture = null;
+let imagesCastSettingsStale = true;
+let pendingRecoveryScheduled = false;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1338,6 +1340,47 @@ async function observeCinematicMessage(messageId) {
     if (result.status !== 'stale') refreshCinematicSurface();
 }
 
+function schedulePendingRecovery() {
+    if (pendingRecoveryScheduled) return false;
+    pendingRecoveryScheduled = true;
+    const run = async () => {
+        pendingRecoveryScheduled = false;
+        try {
+            await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
+            await resumePendingVisibleCanonLinks();
+            await resumePendingOutfitState();
+            await resumePendingSceneState();
+        } catch (error) {
+            console.warn(`[${extensionName}] Deferred recovery could not complete.`, error);
+        }
+    };
+    if (typeof window !== 'undefined' && typeof window.requestIdleCallback === 'function') {
+        window.requestIdleCallback(() => { void run(); }, { timeout: 2000 });
+    } else {
+        setTimeout(() => { void run(); }, 750);
+    }
+    return true;
+}
+
+function imagesCastSettingsAreVisible() {
+    return $('#cig_settings .inline-drawer-content').is(':visible')
+        && !$('#cig_settings_panel_images_cast').prop('hidden');
+}
+
+function renderImagesCastSettings({ force = false } = {}) {
+    if (!force && (!imagesCastSettingsStale || !imagesCastSettingsAreVisible())) return false;
+    renderGallery();
+    renderAppearanceList();
+    renderChatAppearanceSources();
+    imagesCastSettingsStale = false;
+    return true;
+}
+
+function markImagesCastSettingsStale() {
+    imagesCastSettingsStale = true;
+    renderImagesCastSettings();
+}
+
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     const hadExplicitPreviousImageOptIn = Number(extension_settings[extensionName].previous_image_opt_in_version) >= 1;
@@ -1439,10 +1482,7 @@ async function loadSettings() {
         saveSettingsDebounced();
     }
 
-    await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
-    await resumePendingVisibleCanonLinks();
-    await resumePendingOutfitState();
-    await resumePendingSceneState();
+    schedulePendingRecovery();
 
 
     $('#cig_provider').val(extension_settings[extensionName].provider);
@@ -1476,9 +1516,7 @@ async function loadSettings() {
     renderSetupReadiness(cigSettings);
     renderSetupRuntimeIssue();
     renderExtraStoryTools();
-    renderGallery();
-    renderAppearanceList();
-    renderChatAppearanceSources();
+    markImagesCastSettingsStale();
     if (extraStoryToolEnabled('storyMemory')) createStoryMemorySurface();
     if (extraStoryToolEnabled('cinematic')) createCinematicSurface();
     renderCustomConnectionEditor();
@@ -4297,7 +4335,8 @@ jQuery(async () => {
     await loadSettings();
 
     $('#cig_settings [data-cig-tab]').on('click', function () {
-        activateSettingsTab($(this).attr('data-cig-tab'));
+        const selectedTab = activateSettingsTab($(this).attr('data-cig-tab'));
+        if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
         this.focus();
     }).on('keydown', function (event) {
         const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -4309,8 +4348,13 @@ jQuery(async () => {
             : event.key === 'End' ? tabs.length - 1
                 : (currentIndex + (event.key === 'ArrowLeft' ? -1 : 1) + tabs.length) % tabs.length;
         const nextTab = tabs.eq(nextIndex);
-        activateSettingsTab(nextTab.attr('data-cig-tab'));
+        const selectedTab = activateSettingsTab(nextTab.attr('data-cig-tab'));
+        if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
         nextTab.trigger('focus');
+    });
+
+    $('#cig_settings > .inline-drawer > .inline-drawer-toggle').on('click', () => {
+        setTimeout(() => { renderImagesCastSettings(); }, 0);
     });
 
     $('#cig_provider').on('change', function () {
@@ -4728,7 +4772,7 @@ jQuery(async () => {
             chatId: getContext().chatId,
             chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
         }),
-        render: (view) => { renderAppearanceList(view); renderChatAppearanceSources(); },
+        render: () => { markImagesCastSettingsStale(); },
     });
 
     function onCigMessageRendered(messageId) {
@@ -4747,11 +4791,9 @@ jQuery(async () => {
         setTimeout(() => {
             injectAllMessageButtons();
             syncChatWandPreferenceControls();
-            renderChatAppearanceSources();
+            markImagesCastSettingsStale();
             if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
-            void resumePendingVisibleCanonLinks();
-            void resumePendingOutfitState();
-            void resumePendingSceneState();
+            schedulePendingRecovery();
         }, 100);
     });
 
@@ -4770,7 +4812,7 @@ jQuery(async () => {
         if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
         if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {
