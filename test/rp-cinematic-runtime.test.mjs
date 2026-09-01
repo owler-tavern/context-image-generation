@@ -87,6 +87,18 @@ test('dismiss refuses a card after the active chat changes without mutating the 
     assert.notEqual(runtime.getState().session.dismissedSuggestionIds.includes(first.suggestion.suggestionId), true);
 });
 
+test('dismiss refuses an old card after A to B to A even when the chat id returns', async () => {
+    const { runtime, switchChat } = setup();
+    await runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const first = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 1, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    const dismissal = runtime.dismiss(first.suggestion.suggestionId);
+    switchChat('chat-b');
+    switchChat('chat-a');
+    const result = await dismissal;
+    assert.equal(result.status, 'stale');
+    assert.equal(runtime.getState().session.pendingSuggestions[first.suggestion.suggestionId].suggestionId, first.suggestion.suggestionId);
+});
+
 test('duplicate accepted event is idempotent and stale approval cannot dispatch after chat switch', async () => {
     const { runtime, calls, switchChat } = setup();
     await runtime.load({ chatId: 'chat-a', epoch: 1 });
