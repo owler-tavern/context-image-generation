@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from '../lib/rp/canon-generation-capture.js';
 import { createGenerationPlan } from '../lib/generation-plan.js';
-import { buildReferenceMessageParts } from '../lib/rp/reference-message-parts.js';
+import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from '../lib/rp/reference-message-parts.js';
 
 const assetUrl = '/user/images/context-image-generation-appearances/cig-appearance-44444444-4444-4444-8444-444444444444.png';
 const identity = { id: 'character:ava.png', kind: 'character', label: 'Ava', aliases: ['ava'] };
@@ -135,4 +135,62 @@ test('broken character canon retains its stable matching avatar while valid pers
     let warnings = 0;
     notifyBrokenCanon(captured.canonSnapshot.omissions, () => { warnings++; });
     assert.equal(warnings, 1);
+});
+
+test('persona-only broken canon independently materializes the production user-avatar fallback with description and one warning', async () => {
+    const persona = { id: 'user:persona.png', kind: 'user', label: 'Sam', hostKey: 'persona.png', aliases: ['sam'] };
+    const personaLibrary = {
+        schema: 2,
+        identities: { [persona.id]: { ...persona, activeLookId: null, looks: [] } },
+        assets: {},
+    };
+    const personaChat = { schema: 1, bindings: {
+        [persona.id]: { activeLookId: 'look:gone', expectedAssetId: 'asset:gone', isLocked: true, selectedAt: 1 },
+    } };
+    const hostReferences = resolveHostAvatarIdentityReferences({ identities: [persona], personaAvatar: 'persona.png' });
+    const captured = captureCanonForGeneration({ library: personaLibrary, chatState: personaChat, identities: [persona], references: hostReferences });
+    let characterReads = 0;
+    let userReads = 0;
+    const assets = await materializeHostAvatarReferenceAssets({
+        references: [...captured.canonSnapshot.references, ...captured.references],
+        getCharacterAvatar: async () => { characterReads++; return { data: 'character-data', mimeType: 'image/png' }; },
+        getUserAvatar: async () => { userReads++; return { data: 'persona-data', mimeType: 'image/png' }; },
+    });
+    const plan = createGenerationPlan({
+        id: 'plan:persona-only-broken', invocation: 'wand',
+        provider: { ...provider, capabilities: { referenceImages: { maxCount: 4 } } },
+        prompt: { sourceMessage: 'Sam enters the group scene.', descriptionText: 'Sam has silver hair.' },
+        canonSnapshot: captured.canonSnapshot, references: captured.references,
+    });
+    const parts = buildReferenceMessageParts(plan, assets);
+    let warnings = 0;
+    notifyBrokenCanon(captured.canonSnapshot.omissions, () => { warnings++; });
+    assert.equal(characterReads, 0);
+    assert.equal(userReads, 1);
+    assert.deepEqual(plan.references.map((reference) => reference.id), ['host:user']);
+    assert.deepEqual(parts.filter((part) => part.type === 'image_url').map((part) => part.image_url.url), ['data:image/png;base64,persona-data']);
+    assert.match(plan.prompt.descriptionText, /silver hair/);
+    assert.equal(warnings, 1);
+});
+
+test('persona-only valid canon suppresses user-avatar materialization', async () => {
+    const persona = { id: 'user:persona.png', kind: 'user', label: 'Sam', hostKey: 'persona.png' };
+    const personaLibrary = {
+        schema: 2,
+        identities: { [persona.id]: { ...persona, activeLookId: null, looks: [{ id: 'look:persona', assetId: 'asset:persona' }] } },
+        assets: { 'asset:persona': { id: 'asset:persona', kind: 'appearance', url: '/user/images/context-image-generation-appearances/cig-appearance-77777777-7777-4777-8777-777777777777.png', mimeType: 'image/png' } },
+    };
+    const personaChat = { schema: 1, bindings: { [persona.id]: { activeLookId: 'look:persona', expectedAssetId: 'asset:persona', isLocked: true, selectedAt: 1 } } };
+    const captured = captureCanonForGeneration({
+        library: personaLibrary, chatState: personaChat, identities: [persona],
+        references: resolveHostAvatarIdentityReferences({ identities: [persona], personaAvatar: 'persona.png' }),
+    });
+    let userReads = 0;
+    const assets = await materializeHostAvatarReferenceAssets({
+        references: [...captured.canonSnapshot.references, ...captured.references],
+        getUserAvatar: async () => { userReads++; return { data: 'wrong-avatar', mimeType: 'image/png' }; },
+    });
+    assert.equal(userReads, 0);
+    assert.deepEqual(captured.references, []);
+    assert.deepEqual(assets, {});
 });

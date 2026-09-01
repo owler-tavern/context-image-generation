@@ -49,7 +49,7 @@ import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, pr
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
-import { buildReferenceMessageParts } from './lib/rp/reference-message-parts.js';
+import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -1298,16 +1298,17 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
 }
 
 async function materializeSnapshotAssets(snapshot) {
-    const assets = { ...(snapshot.referenceAssets || {}) };
+    const assets = {
+        ...(snapshot.referenceAssets || {}),
+        ...await materializeHostAvatarReferenceAssets({
+            references: snapshot.referenceCandidates,
+            getCharacterAvatar,
+            getUserAvatar,
+        }),
+    };
     if (snapshot.referenceCandidates.some((reference) => reference.id === 'legacy:previous')) {
         const dataUrl = await galleryItemToDataUrl(snapshot.gallerySnapshot[0]);
         if (dataUrl) assets['asset:legacy-previous'] = { url: dataUrl, mimeType: 'image/png' };
-    }
-    if (snapshot.referenceCandidates.some((reference) => reference.id === 'host:character')) {
-        const charAvatarData = await getCharacterAvatar();
-        if (charAvatarData) assets['asset:host-character'] = { data: charAvatarData.data, mimeType: charAvatarData.mimeType };
-        const userAvatarData = await getUserAvatar();
-        if (userAvatarData) assets['asset:host-user'] = { data: userAvatarData.data, mimeType: userAvatarData.mimeType };
     }
     return assets;
 }
