@@ -3,7 +3,9 @@ import assert from 'node:assert/strict';
 import {
     createIterationArtifact,
     createStableArtifactId,
-    planIterationAction,
+    createIterationInvocationId,
+    chooseTwoUpArtifact,
+    planIterationAction as rawPlanIterationAction,
     repairPromptDraft,
 } from '../lib/rp/iteration-domain.js';
 
@@ -25,6 +27,24 @@ const source = createIterationArtifact({
         durableIdentityFacts: { 'character:ava': ['left-handed'] },
     },
 });
+
+const verifiedRoute = {
+    status: 'verified',
+    resolved: true,
+    providerId: 'linkapi',
+    modelId: 'image-model',
+    capabilities: { imageGeneration: true },
+};
+const reserveInvocation = () => true;
+function planIterationAction(input) {
+    return rawPlanIterationAction({
+        ...input,
+        reserveInvocation,
+        resolvedRoute: verifiedRoute,
+        invocationId: input.invocationId || input.actionId || 'test-invocation',
+        paidConsent: input.paidConsent ? { costUnavailableAcknowledged: true, ...input.paidConsent } : input.paidConsent,
+    });
+}
 
 test('artifact recipes freeze nested provenance and copy caller input', () => {
     const input = { text: 'Ava waits in the station.', messageId: 'm-1' };
@@ -85,14 +105,18 @@ test('keep characters/change scene retains identity refs but drops obsolete scen
         action: 'keep-characters-change-scene',
         sourceArtifact: source,
         actionId: 'scene-1',
-        changes: { scene: { location: 'library', cast: ['character:ava'] } },
+        changes: {
+            sourcePassage: { text: 'Ava enters the library.', messageId: 'm-2' },
+            prompt: 'Ava enters the library.',
+            scene: { location: 'library', cast: ['character:ava'] },
+        },
         paidConsent: { approved: true, outputCount: 1 },
     });
     const artifact = plan.artifacts[0];
 
     assert.deepEqual(artifact.references, [source.references[0]]);
     assert.deepEqual(artifact.canonSnapshot.activeLook, source.canonSnapshot.activeLook);
-    assert.deepEqual(artifact.canonSnapshot.chatBackground, source.canonSnapshot.chatBackground);
+    assert.equal(artifact.canonSnapshot.chatBackground, null);
     assert.deepEqual(artifact.canonSnapshot.priorScene, { location: 'library', cast: ['character:ava'] });
     assert.equal(plan.stateRules.includes('drop-obsolete-scene-state'), true);
 });
@@ -114,7 +138,7 @@ test('edit and reuse actions have stable seams and edit only the requested recip
 });
 
 test('missing explicit paid consent blocks dispatch and two-up records count and unknown cost', () => {
-    const blocked = planIterationAction({ action: 'vary-shot', sourceArtifact: source, actionId: 'blocked' });
+    const blocked = planIterationAction({ action: 'vary-shot', sourceArtifact: source, actionId: 'blocked', changes: { composition: { framing: 'close' } } });
     assert.equal(blocked.status, 'consent-required');
     assert.equal(blocked.dispatch.allowed, false);
     assert.equal(blocked.consent.required, true);
@@ -124,6 +148,7 @@ test('missing explicit paid consent blocks dispatch and two-up records count and
         sourceArtifact: source,
         actionId: 'two-up',
         twoUp: true,
+        changes: { composition: { framing: 'wide' } },
         paidConsent: { approved: true, outputCount: 2 },
     });
     assert.equal(twoUp.artifacts.length, 2);
@@ -165,11 +190,11 @@ test('making canonical roles updates only selected active look, prior scene, or 
             },
         },
     });
-    assert.deepEqual(plan.artifacts[0].canonSnapshot, {
+    assert.equal(plan.artifacts[0].artifactId, source.artifactId);
+    assert.deepEqual(plan.mutation.roles, {
         activeLook: { identityId: 'character:ava', lookId: 'look:new' },
         priorScene: { location: 'library' },
         chatBackground: 'quiet gothic suspense',
-        durableIdentityFacts: source.canonSnapshot.durableIdentityFacts,
     });
     assert.equal(plan.dispatch.allowed, false);
     assert.equal(plan.dispatch.reason, 'canon-update-only');
@@ -182,6 +207,11 @@ test('stable artifact ids depend on action identity and output index', () => {
     assert.equal(first, second);
     assert.notEqual(first, other);
     assert.match(first, /^artifact:[a-f0-9]{16}$/u);
+});
+
+test('stable ID construction has no implicit invocation default and UUID helper accepts an injected generator', () => {
+    assert.throws(() => createStableArtifactId({ sourceArtifactId: 'artifact:a', action: 'reuse-recipe' }), /invocationId/u);
+    assert.equal(createIterationInvocationId({ randomUUID: () => 'uuid-123' }), 'uuid-123');
 });
 
 test('UI action labels normalize to one stable domain action without freezing caller state', () => {
@@ -211,7 +241,7 @@ test('canonical role planning accepts one role/value pair as well as a role map'
         changes: { role: 'chat-background', value: 'quiet suspense' },
     });
     assert.equal(plan.action, 'make-canonical-roles');
-    assert.equal(plan.artifacts[0].canonSnapshot.chatBackground, 'quiet suspense');
+    assert.equal(plan.mutation.roles.chatBackground, 'quiet suspense');
 });
 
 test('planning remains provider-independent even when network access would fail', () => {
@@ -224,4 +254,110 @@ test('planning remains provider-independent even when network access would fail'
     } finally {
         globalThis.fetch = originalFetch;
     }
+});
+
+test('two-up consent preserves caller claims and requires exact count plus cost acknowledgement', () => {
+    const mismatch = rawPlanIterationAction({
+        action: 'vary-shot', sourceArtifact: source, invocationId: 'two-up-mismatch', twoUp: true,
+        resolvedRoute: verifiedRoute, reserveInvocation,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: { approved: true, outputCount: 1, cost: 0.04 },
+    });
+    assert.equal(mismatch.status, 'consent-required');
+    assert.equal(mismatch.consent.outputCount, 1);
+    const noCost = rawPlanIterationAction({
+        action: 'vary-shot', sourceArtifact: source, invocationId: 'two-up-no-cost', twoUp: true,
+        resolvedRoute: verifiedRoute, reserveInvocation,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: { approved: true, outputCount: 2 },
+    });
+    assert.equal(noCost.status, 'consent-required');
+    const ready = rawPlanIterationAction({
+        action: 'vary-shot', sourceArtifact: source, invocationId: 'two-up-cost', twoUp: true,
+        resolvedRoute: verifiedRoute, reserveInvocation,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: { approved: true, outputCount: 2, cost: 0.08 },
+    });
+    assert.equal(ready.status, 'ready');
+});
+
+test('missing or reused invocation IDs are rejected by the injected reservation seam', () => {
+    assert.throws(() => rawPlanIterationAction({ action: 'reuse-recipe', sourceArtifact: source, reserveInvocation }), /invocationId/u);
+    assert.throws(() => rawPlanIterationAction({
+        action: 'reuse-recipe', sourceArtifact: source, invocationId: 'already-used', resolvedRoute: verifiedRoute,
+        reserveInvocation: () => false,
+    }), /already reserved/u);
+});
+
+test('generation dispatch remains unavailable without verified route and image capability evidence', () => {
+    const plan = rawPlanIterationAction({ action: 'reuse-recipe', sourceArtifact: source, invocationId: 'no-route', reserveInvocation, paidConsent: { approved: true, outputCount: 1, cost: 0.01 } });
+    assert.equal(plan.dispatch.allowed, false);
+    assert.equal(plan.dispatch.reason, 'verified-route-and-capability-required');
+});
+
+test('a separately injected verified capability tripwire can complete a resolved route', () => {
+    const plan = rawPlanIterationAction({
+        action: 'reuse-recipe', sourceArtifact: source, invocationId: 'separate-capability', reserveInvocation,
+        resolvedRoute: { status: 'verified', resolved: true, providerId: 'linkapi', modelId: 'image-model' },
+        capabilityTripwire: true,
+        paidConsent: { approved: true, outputCount: 1, cost: 0.01 },
+    });
+    assert.equal(plan.dispatch.allowed, true);
+});
+
+test('change-scene requires fresh source passage, prompt, and current state and removes old scene context', () => {
+    const plan = rawPlanIterationAction({
+        action: 'keep-characters-change-scene', sourceArtifact: source, invocationId: 'fresh-scene',
+        reserveInvocation, resolvedRoute: verifiedRoute,
+        changes: {
+            sourcePassage: { text: 'Ava enters the library.', messageId: 'm-2' },
+            prompt: 'Ava enters the library.',
+            scene: { location: 'library', cast: ['character:ava'] },
+        },
+        paidConsent: { approved: true, outputCount: 1, cost: 0.01 },
+    });
+    assert.deepEqual(plan.artifacts[0].sourcePassage, { text: 'Ava enters the library.', messageId: 'm-2' });
+    assert.equal(plan.artifacts[0].effectivePrompt, 'Ava enters the library.');
+    assert.equal(plan.artifacts[0].canonSnapshot.priorScene.location, 'library');
+    assert.equal(plan.artifacts[0].canonSnapshot.chatBackground, null);
+    assert.deepEqual(plan.artifacts[0].canonSnapshot.activeLook, source.canonSnapshot.activeLook);
+    assert.throws(() => rawPlanIterationAction({
+        action: 'keep-characters-change-scene', sourceArtifact: source, invocationId: 'stale-scene', reserveInvocation,
+        resolvedRoute: verifiedRoute, changes: { sourcePassage: { text: 'old' }, prompt: 'Ava waits at the station.', scene: { location: 'library' } },
+    }), /stale scene/u);
+});
+
+test('edit rejects an empty prompt and vary-shot merges controls into the effective prompt', () => {
+    assert.throws(() => rawPlanIterationAction({ action: 'edit-regenerate', sourceArtifact: source, invocationId: 'empty-edit', reserveInvocation, changes: { prompt: '   ' } }), /prompt/u);
+    const plan = rawPlanIterationAction({
+        action: 'vary-shot', sourceArtifact: source, invocationId: 'vary-controls', reserveInvocation,
+        resolvedRoute: verifiedRoute, changes: { composition: { camera: 'low-angle' } },
+        paidConsent: { approved: true, outputCount: 1, costUnavailableAcknowledged: true },
+    });
+    assert.match(plan.artifacts[0].effectivePrompt, /camera=low-angle/u);
+    assert.equal(plan.artifacts[0].options.composition.camera, 'low-angle');
+});
+
+test('make-canonical validates exact non-empty roles and plans persistence against the selected artifact', () => {
+    const plan = rawPlanIterationAction({
+        action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-mutation', reserveInvocation,
+        changes: { roles: { chatBackground: 'quiet suspense' } },
+    });
+    assert.equal(plan.artifacts[0].artifactId, source.artifactId);
+    assert.deepEqual(plan.mutation, { operation: 'update-canonical-roles', targetArtifactId: source.artifactId, roles: { chatBackground: 'quiet suspense' } });
+    assert.throws(() => rawPlanIterationAction({ action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-unknown', reserveInvocation, changes: { roles: { unknown: 'x' } } }), /unknown canonical role/u);
+    assert.throws(() => rawPlanIterationAction({ action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-empty', reserveInvocation, changes: { roles: { chatBackground: ' ' } } }), /empty/u);
+});
+
+test('two-up retention stays awaiting selection until one output is explicitly chosen', () => {
+    const plan = planIterationAction({
+        action: 'vary-shot', sourceArtifact: source, actionId: 'choose-two-up', twoUp: true,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: { approved: true, outputCount: 2, costUnavailableAcknowledged: true },
+    });
+    const selected = chooseTwoUpArtifact(plan, plan.artifacts[1].artifactId);
+    assert.equal(plan.retention.status, 'awaiting-selection');
+    assert.equal(selected.retention.status, 'selected');
+    assert.equal(selected.retention.chosenArtifactId, plan.artifacts[1].artifactId);
+    assert.deepEqual(selected.retention.discardArtifactIds, [plan.artifacts[0].artifactId]);
 });
