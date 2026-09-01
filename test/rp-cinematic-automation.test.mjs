@@ -221,3 +221,47 @@ test('any nested ambiguity in an accepted delta suppresses the entire automation
         updatedSceneFacts: { location: { from: 'station', to: 'library', status: 'confirmed' }, outfits: { ambiguous: true, added: [{ identityId: 'a' }] } },
     })), []);
 });
+
+test('new accepted events do not create an overlapping card while one suggestion is pending', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const first = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta({ revision: 'scene:first' }) });
+    const second = evaluateCinematicAutomation({ session: first.session, acceptedSceneDelta: delta({
+        revision: 'scene:second',
+        updatedSceneFacts: {},
+        emotionalBeat: { id: 'beat:tension', label: 'tension' },
+    }) });
+    assert.equal(second.status, 'pending-suppressed');
+    assert.equal(Object.keys(second.session.pendingSuggestions).length, 1);
+    assert.deepEqual(second.suggestion, first.suggestion);
+    assert.equal(second.session.pendingSuggestions[first.suggestion.suggestionId].eventIds.includes(second.events[0].eventId), false);
+});
+
+test('manual retriggers register pending provenance and can use every card action without replaying chat', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const retry = retriggerCinematicBeat({ session, beatId: 'beat:missed', retriggerId: 'retry:registered' });
+    assert.ok(retry.session.eventRegistry[retry.suggestion.eventId]);
+    assert.ok(retry.session.pendingSuggestions[retry.suggestion.suggestionId]);
+    const approved = approveCinematicSuggestion(retry.session, retry.suggestion, { estimatedCost: 0.1 });
+    assert.equal(approved.status, 'approved');
+    assert.equal(approved.plan.triggerSource, 'manual-retrigger');
+    assert.equal(approved.plan.dispatch.network, false);
+});
+
+test('settlement verifies the complete stored plan identity before changing budget state', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const suggested = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
+    const approved = approveCinematicSuggestion(suggested.session, suggested.suggestion, { estimatedCost: 0.2 });
+    const forged = { ...approved.plan, eventId: 'event:forged' };
+    const result = settleCinematicPlan(approved.session, forged, 'completed', { actualCost: 0.2 });
+    assert.equal(result.status, 'invalid-plan');
+    assert.equal(result.session.reservedCost, 0.2);
+});
+
+test('manual retrigger respects the single pending-card invariant', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const first = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
+    const retry = retriggerCinematicBeat({ session: first.session, beatId: 'beat:missed', retriggerId: 'retry:while-pending' });
+    assert.equal(retry.status, 'pending-suppressed');
+    assert.deepEqual(retry.suggestion, first.suggestion);
+    assert.equal(Object.keys(retry.session.pendingSuggestions).length, 1);
+});
