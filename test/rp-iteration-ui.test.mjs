@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import {
     ACTION_LABELS,
     createIterationSurfaceController,
+    installIterationSurfaceStyles,
     mountIterationSurface,
     renderIterationSurface,
+    uninstallIterationSurfaceStyles,
 } from '../lib/rp/iteration-ui.js';
 
 const sourceArtifact = Object.freeze({
@@ -19,7 +21,7 @@ const sourceArtifact = Object.freeze({
 });
 
 function dependencies(overrides = {}) {
-    const calls = { dispatch: [], persist: [], readback: [], canonical: [], canonicalReadback: [] };
+    const calls = { dispatch: [], persist: [], readback: [], canonical: [], canonicalReadback: [], discard: [], quote: [] };
     const deps = {
         sourceArtifact,
         generationPlan: { planId: 'registry:plan', revision: 'revision:1', capabilities: { imageGeneration: true } },
@@ -29,15 +31,19 @@ function dependencies(overrides = {}) {
         }),
         verifyCanonicalEligibility: ({ artifactId }) => ({ status: 'eligible', artifactId, authorityToken: 'canon' }),
         reserveInvocation: () => true,
-        estimateCost: ({ outputCount }) => outputCount * 0.04,
+        estimateCost: ({ outputCount, action }) => {
+            calls.quote.push({ outputCount, action });
+            return { quoteId: `quote:${action}:${outputCount}:${calls.quote.length}`, amount: outputCount * 0.04, currency: 'USD', expiresAt: '2999-01-01T00:00:00.000Z' };
+        },
         dispatchCoordinator: async (plan) => {
             calls.dispatch.push(plan);
-            return { artifacts: plan.artifacts };
+            return { status: 'completed', planId: plan.planId, invocationId: plan.invocationId, outputCount: plan.artifacts.length, artifacts: plan.artifacts };
         },
         persistArtifact: async (input) => { calls.persist.push(input); return { status: 'saved' }; },
-        readbackArtifact: async (input) => { calls.readback.push(input); return { status: 'confirmed' }; },
+        readbackArtifact: async (input) => { calls.readback.push(input); return { status: 'confirmed', artifactId: input.artifact.artifactId, planId: input.plan.planId, invocationId: input.plan.invocationId }; },
         mutateCanonical: async (input) => { calls.canonical.push(input); return { status: 'mutated' }; },
-        readbackCanonical: async (input) => { calls.canonicalReadback.push(input); return { status: 'confirmed' }; },
+        readbackCanonical: async (input) => { calls.canonicalReadback.push(input); return { status: 'confirmed', planId: input.plan.planId, invocationId: input.plan.invocationId, mutation: input.mutation }; },
+        discardArtifact: async ({ artifactId, plan }) => { calls.discard.push(artifactId); return { status: 'confirmed', artifactId, planId: plan.planId, invocationId: plan.invocationId }; },
         invocationId: 'ui-test-invocation',
         ...overrides,
     };
@@ -53,9 +59,17 @@ test('surface projects the five visible actions, compact editors, status, and ke
         twoUp: true,
         originalArtifact: sourceArtifact,
     });
+    const promptHtml = renderIterationSurface({
+        status: 'idle',
+        action: 'edit-regenerate',
+        prompt: 'Ava waits',
+        composition: { framing: 'wide', camera: 'eye level' },
+        twoUp: true,
+        originalArtifact: sourceArtifact,
+    });
 
-    for (const label of Object.values(ACTION_LABELS)) assert.match(html, new RegExp(label.replace(/[&]/gu, '&amp;')));
-    assert.match(html, /textarea[^>]+aria-label="Prompt"/u);
+    for (const label of Object.values(ACTION_LABELS).filter((label) => label !== 'Retry repaired prompt')) assert.match(html, new RegExp(label.replace(/[&]/gu, '&amp;')));
+    assert.match(promptHtml, /textarea[^>]+aria-label="Prompt"/u);
     assert.match(html, /name="framing"/u);
     assert.match(html, /name="camera"/u);
     assert.match(html, /type="checkbox"[^>]+name="twoUp"/u);
@@ -65,11 +79,32 @@ test('surface projects the five visible actions, compact editors, status, and ke
     assert.match(html, /Original retained/u);
 });
 
+test('surface projects action-specific editors, repaired retry, and exact canonical roles', () => {
+    const vary = renderIterationSurface({ action: 'vary-shot', originalArtifact: sourceArtifact });
+    assert.match(vary, /data-editor-kind="composition"/u);
+    assert.doesNotMatch(vary, /name="sourcePassage"/u);
+    const scene = renderIterationSurface({ action: 'keep-characters-change-scene', originalArtifact: sourceArtifact });
+    assert.match(scene, /data-editor-kind="scene"/u);
+    assert.match(scene, /name="sourcePassage"/u);
+    assert.match(scene, /name="scene.location"/u);
+    const canonical = renderIterationSurface({ action: 'make-canonical', originalArtifact: sourceArtifact });
+    assert.match(canonical, /data-editor-kind="canonical"/u);
+    assert.match(canonical, /name="activeLook.identityId"/u);
+    assert.match(canonical, /name="activeLook.lookId"/u);
+    assert.match(canonical, /name="priorScene"/u);
+    assert.match(canonical, /name="chatBackground"/u);
+    const repair = renderIterationSurface({ action: 'retry-repaired-prompt', originalArtifact: sourceArtifact, repairedPrompt: { status: 'repaired', repairedPrompt: 'Ava waits.' }, repairedPromptConfirmed: true });
+    assert.match(repair, /Retry repaired prompt/u);
+});
+
 test('controller quotes finite two-up cost and requires matching explicit consent before dispatch', async () => {
     const { deps, calls } = dependencies();
     const controller = createIterationSurfaceController(deps);
     const quote = await controller.quote({ action: 'vary-shot', twoUp: true, changes: { composition: { framing: 'wide' } } });
-    assert.deepEqual(quote, { outputCount: 2, cost: 0.08, finite: true });
+    assert.equal(quote.outputCount, 2);
+    assert.equal(quote.amount, 0.08);
+    assert.equal(quote.currency, 'USD');
+    assert.equal(Object.isFrozen(quote), true);
 
     const blocked = await controller.submit({ action: 'vary-shot', twoUp: true, changes: { composition: { framing: 'wide' } } });
     assert.equal(blocked.status, 'consent-required');
@@ -78,7 +113,7 @@ test('controller quotes finite two-up cost and requires matching explicit consen
     const ready = await controller.submit({
         action: 'vary-shot', twoUp: true,
         changes: { composition: { framing: 'wide' } },
-        consent: { approved: true, outputCount: 2 },
+        consent: { approved: true, outputCount: 2, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt },
     });
     assert.equal(ready.status, 'awaiting-selection');
     assert.equal(ready.artifacts.length, 2);
@@ -86,12 +121,26 @@ test('controller quotes finite two-up cost and requires matching explicit consen
     assert.equal(calls.dispatch.length, 1);
 });
 
+test('consent binds the exact displayed quote and dispatch does not re-quote', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe' });
+    const quoteCount = calls.quote.length;
+    const mismatch = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1, quoteId: 'quote:forged', amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    assert.equal(mismatch.status, 'consent-required');
+    assert.equal(calls.dispatch.length, 0);
+    const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    assert.equal(result.status, 'completed');
+    assert.equal(calls.quote.length, quoteCount);
+});
+
 test('two-up chooser persists only the chosen output and keeps the original artifact', async () => {
     const { deps, calls } = dependencies();
     const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe', twoUp: true });
     await controller.submit({
         action: 'reuse-recipe', twoUp: true,
-        consent: { approved: true, outputCount: 2 },
+        consent: { approved: true, outputCount: 2, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt },
     });
     const chosenId = controller.getState().artifacts[1].artifactId;
     const result = await controller.chooseArtifact(chosenId);
@@ -99,7 +148,17 @@ test('two-up chooser persists only the chosen output and keeps the original arti
     assert.equal(calls.persist.length, 1);
     assert.equal(calls.persist[0].artifact.artifactId, chosenId);
     assert.equal(calls.readback.length, 1);
+    assert.equal(calls.discard.length, 1);
     assert.equal(result.originalArtifact.artifactId, sourceArtifact.artifactId);
+});
+
+test('incomplete dispatcher receipts fail closed without phantom artifacts or persistence', async () => {
+    const { deps, calls } = dependencies({ dispatchCoordinator: async () => ({ status: 'completed', planId: 'wrong', invocationId: 'wrong', outputCount: 2, artifacts: [] }) });
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe' });
+    const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    assert.equal(result.status, 'error');
+    assert.equal(calls.persist.length, 0);
 });
 
 test('repaired prompt is shown for confirmation and cannot dispatch before confirmation', async () => {
@@ -112,8 +171,28 @@ test('repaired prompt is shown for confirmation and cannot dispatch before confi
     assert.equal(blocked.status, 'draft-review');
     assert.equal(calls.dispatch.length, 0);
     controller.confirmRepairedPrompt();
-    const completed = await controller.submit({ action: 'retry-repaired-prompt', consent: { approved: true, outputCount: 1 } });
+    const quote = await controller.quote({ action: 'edit-regenerate' });
+    const completed = await controller.submit({ action: 'retry-repaired-prompt', consent: { approved: true, outputCount: 1, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
     assert.equal(completed.status, 'completed');
+});
+
+test('input and change events feed prompt repair through the mount seam', () => {
+    const { deps } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const listeners = new Map();
+    const fields = new Map();
+    const host = {
+        innerHTML: '',
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
+        querySelector(selector) { return fields.get(selector); },
+    };
+    const mounted = mountIterationSurface(host, controller);
+    const promptField = { name: 'prompt', value: 'Ava (waits' };
+    fields.set('[name="prompt"]', promptField);
+    for (const eventName of ['input', 'change']) listeners.get(eventName)({ target: { name: 'prompt', value: promptField.value } });
+    assert.equal(controller.getState().status, 'draft-review');
+    mounted.destroy();
 });
 
 test('missing authoritative dependencies fail closed without dispatch', async () => {
@@ -135,6 +214,28 @@ test('canonical action uses injected mutation and readback, never generation dis
     assert.equal(calls.dispatch.length, 0);
     assert.equal(calls.canonical.length, 1);
     assert.equal(calls.canonicalReadback.length, 1);
+});
+
+test('persistence readback must match exact artifact, plan, and invocation identities', async () => {
+    const { deps, calls } = dependencies({ readbackArtifact: async (input) => { calls.readback.push(input); return { status: 'confirmed', artifactId: 'artifact:other', planId: input.plan.planId, invocationId: input.plan.invocationId }; } });
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe' });
+    const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    assert.equal(result.status, 'error');
+    assert.match(result.error, /read-back/u);
+});
+
+test('stylesheet install and uninstall are explicit and idempotent', () => {
+    const nodes = new Map();
+    const documentLike = {
+        head: { appendChild(node) { nodes.set(node.id, node); }, removeChild(node) { nodes.delete(node.id); } },
+        createElement() { return { id: '', textContent: '' }; },
+        getElementById(id) { return nodes.get(id) || null; },
+    };
+    assert.equal(installIterationSurfaceStyles(documentLike), true);
+    assert.equal(installIterationSurfaceStyles(documentLike), true);
+    assert.equal(uninstallIterationSurfaceStyles(documentLike), true);
+    assert.equal(uninstallIterationSurfaceStyles(documentLike), false);
 });
 
 test('mount exposes a stable render seam and cleans up event listeners', () => {
