@@ -14,6 +14,7 @@ import {
     migrateStoryMemory,
     planContinueFromScene,
     searchStoryArtifacts,
+    STORY_MEMORY_SCHEMA,
     toggleStoryFavorite,
 } from '../lib/rp/story-memory.js';
 
@@ -63,6 +64,31 @@ test('migrates Gallery entries to stable, reference-only artifacts and preserves
     assert.deepEqual(first[0].legacyMetadata.omittedFields, ['imageData']);
 });
 
+test('upgrades legacy story IDs, merges the matching Gallery physical artifact, and remaps collection membership idempotently', () => {
+    const gallery = [{ id: 'gallery-legacy', url: '/legacy.png', chatId: 'chat-a', messageId: 8, prompt: 'legacy scene' }];
+    const legacyId = 'story:chat-a:gallery-legacy';
+    const legacy = {
+        schema: 1,
+        artifacts: {
+            [legacyId]: {
+                id: legacyId, url: '/legacy.png', chatId: 'chat-a', messageId: 8,
+                favorite: true, customNote: 'retain',
+                provenance: { schema: 1, source: 'story-memory', chatId: 'chat-a', galleryArtifactId: 'gallery-legacy' },
+            },
+        },
+        collections: { canon: { id: 'canon', kind: 'canon-look', label: 'Canon', memberIds: [legacyId] } },
+    };
+    const migrated = migrateStoryMemory(legacy, { gallery, chatId: 'chat-a' });
+    const canonicalId = 'story:v1:6:chat-a:14:gallery-legacy';
+    assert.equal(migrated.schema, STORY_MEMORY_SCHEMA);
+    assert.deepEqual(Object.keys(migrated.artifacts), [canonicalId]);
+    assert.equal(migrated.artifacts[canonicalId].favorite, true);
+    assert.equal(migrated.artifacts[canonicalId].customNote, 'retain');
+    assert.ok(migrated.artifacts[canonicalId].aliases.includes(legacyId));
+    assert.deepEqual(migrated.collections.canon.memberIds, [canonicalId]);
+    assert.deepEqual(migrated, migrateStoryMemory(migrated, { gallery, chatId: 'chat-a' }));
+});
+
 test('artifact IDs are unambiguous for delimiter-heavy chat/source values', () => {
     const first = buildStoryArtifactId({ chatId: 'a:b', item: { id: 'c', url: '/one.png' } });
     const second = buildStoryArtifactId({ chatId: 'a', item: { id: 'b:c', url: '/one.png' } });
@@ -101,7 +127,7 @@ test('timeline remains chat-scoped, ordered for long histories, and does not mut
     entries.push(generated({ chatId: 'chat-b', messageId: 1, id: 'other-chat-image' }));
     const before = structuredClone(memory);
     for (const entry of entries) memory = addStoryArtifact(memory, entry);
-    assert.deepEqual(memory.schema, 1);
+    assert.deepEqual(memory.schema, 2);
     assert.deepEqual(memory.artifacts['gallery-chat-a-120'].messageId, 120);
     assert.deepEqual(getStoryTimeline(memory, { chatId: 'chat-a' }).map((item) => item.messageId), Array.from({ length: 120 }, (_, index) => index + 1));
     assert.deepEqual(getStoryTimeline(memory, { chatId: 'chat-b' }).map((item) => item.id), ['other-chat-image']);
