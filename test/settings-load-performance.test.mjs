@@ -43,12 +43,23 @@ test('startup defers recovery and hidden Characters and Library rendering until 
     assert.match(loadSettings, /schedulePendingRecovery\(\)/u);
 });
 
-test('chat lifecycle marks hidden Characters and Library settings stale instead of rebuilding them twice', () => {
-    const bindStart = indexSource.indexOf('bindAppearanceLifecycle({');
-    const renderEnd = indexSource.indexOf('function onCigMessageRendered', bindStart);
-    const lifecycleBinding = bindStart >= 0 && renderEnd > bindStart ? indexSource.slice(bindStart, renderEnd) : '';
+test('chat lifecycle marks hidden Characters and Library settings stale instead of rebuilding them', () => {
+    const eventsStart = indexSource.indexOf('eventSource.on(event_types.CHAT_CHANGED');
+    const eventsEnd = indexSource.indexOf('setTimeout(() => {\n        injectAllMessageButtons();', eventsStart);
+    const chatEvents = eventsStart >= 0 && eventsEnd > eventsStart ? indexSource.slice(eventsStart, eventsEnd) : '';
 
-    assert.ok(lifecycleBinding, 'appearance lifecycle binding should be available');
-    assert.doesNotMatch(lifecycleBinding, /renderChatAppearanceSources\(/u);
-    assert.match(lifecycleBinding, /markImagesCastSettingsStale/u);
+    assert.ok(chatEvents, 'chat lifecycle event source should be available');
+    assert.doesNotMatch(chatEvents, /renderChatAppearanceSources\(/u);
+    assert.match(chatEvents, /markImagesCastSettingsStale/u);
+});
+
+test('chat switching advances stale-work protection without cloning metadata or updating hidden settings', () => {
+    const eventsStart = indexSource.indexOf('eventSource.on(event_types.CHAT_CHANGED');
+    const eventsEnd = indexSource.indexOf('setTimeout(() => {\n        injectAllMessageButtons();', eventsStart);
+    const chatEvents = eventsStart >= 0 && eventsEnd > eventsStart ? indexSource.slice(eventsStart, eventsEnd) : '';
+
+    assert.ok(chatEvents, 'chat lifecycle event source should be available');
+    assert.doesNotMatch(indexSource, /bindAppearanceLifecycle\(/u);
+    assert.match(chatEvents, /chatLifecycleEpoch\.advance\(\)/u);
+    assert.doesNotMatch(chatEvents, /removeRetiredMessageSurfaces|syncChatWandPreferenceControls/u);
 });

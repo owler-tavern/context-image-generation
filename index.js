@@ -40,7 +40,7 @@ import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
-import { bindAppearanceLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
+import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
@@ -4337,6 +4337,7 @@ jQuery(async () => {
     $('#cig_settings [data-cig-tab]').on('click', function () {
         const selectedTab = activateSettingsTab($(this).attr('data-cig-tab'));
         if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
+        if (selectedTab === 'preferences') syncChatWandPreferenceControls();
         this.focus();
     }).on('keydown', function (event) {
         const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -4350,11 +4351,16 @@ jQuery(async () => {
         const nextTab = tabs.eq(nextIndex);
         const selectedTab = activateSettingsTab(nextTab.attr('data-cig-tab'));
         if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
+        if (selectedTab === 'preferences') syncChatWandPreferenceControls();
         nextTab.trigger('focus');
     });
 
     $('#cig_settings > .inline-drawer > .inline-drawer-toggle').on('click', () => {
-        setTimeout(() => { renderImagesCastSettings(); }, 0);
+        setTimeout(() => {
+            const selectedTab = $('#cig_settings [data-cig-tab][aria-selected="true"]').attr('data-cig-tab');
+            if (selectedTab === 'images-cast') renderImagesCastSettings();
+            if (selectedTab === 'preferences') syncChatWandPreferenceControls();
+        }, 0);
     });
 
     $('#cig_provider').on('change', function () {
@@ -4764,17 +4770,6 @@ jQuery(async () => {
     document.addEventListener('click', onCigImageArrowClick, true);
     document.addEventListener('keydown', onCigImageArrowKeydown, true);
 
-    bindAppearanceLifecycle({
-        eventSource,
-        eventTypes: event_types,
-        lifecycle: chatLifecycleEpoch,
-        readActiveContext: async () => ({
-            chatId: getContext().chatId,
-            chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
-        }),
-        render: () => { markImagesCastSettingsStale(); },
-    });
-
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
@@ -4783,14 +4778,13 @@ jQuery(async () => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        removeRetiredMessageSurfaces();
+        chatLifecycleEpoch.advance();
         if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
         if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
         setTimeout(() => {
             injectAllMessageButtons();
-            syncChatWandPreferenceControls();
             markImagesCastSettingsStale();
             if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
             schedulePendingRecovery();
@@ -4808,11 +4802,12 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
+        chatLifecycleEpoch.advance();
         if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
         if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {
