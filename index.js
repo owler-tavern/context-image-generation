@@ -39,7 +39,7 @@ import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
-import { bindAppearanceRerenderOnChatLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
+import { createAppearanceLifecycleController, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
@@ -119,6 +119,16 @@ const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 let customConnectionDraftId = '';
 const chatLifecycleEpoch = createChatLifecycleEpoch();
+const appearanceLifecycleController = createAppearanceLifecycleController({
+    eventSource,
+    eventTypes: event_types,
+    lifecycle: chatLifecycleEpoch,
+    readActiveContext: async () => ({
+        chatId: getContext().chatId,
+        chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
+    }),
+    render: (view) => renderAppearanceList(view),
+});
 
 function renderAdvancedPlanInspector() {
     const output = $('#cig_preflight_summary');
@@ -1849,15 +1859,19 @@ async function rememberGalleryAppearance(index) {
     else toastr.info(activation.message, 'Context Image Generation');
 }
 
-function renderAppearanceList() {
+function renderAppearanceList(lifecycleView = null) {
     const settings = extension_settings[extensionName] || {};
     const list = $('#cig_appearance_list').empty();
     const empty = $('#cig_appearance_empty');
     const library = migrateAppearanceLibrary(settings.rp_library);
     const materialized = materializeAppearanceAssets(library, settings.gallery || []);
     const available = new Set(Object.keys(materialized.assets));
-    const entries = listVisibleAppearanceEntries(library, { currentChatId: getContext().chatId });
-    const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+    const currentChatId = lifecycleView?.chatId ?? getContext().chatId;
+    const chatState = lifecycleView && Object.hasOwn(lifecycleView, 'chatState')
+        ? lifecycleView.chatState
+        : chat_metadata[CHAT_CANON_KEY];
+    const entries = listVisibleAppearanceEntries(library, { currentChatId });
+    const canon = migrateChatCanon(chatState);
     empty.toggle(entries.length === 0);
     for (const { identity, look } of entries) {
         const binding = getChatBinding(canon, identity.id);
@@ -2771,7 +2785,8 @@ jQuery(async () => {
     document.addEventListener('click', onCigImageArrowClick, true);
     document.addEventListener('keydown', onCigImageArrowKeydown, true);
 
-    bindAppearanceRerenderOnChatLifecycle(eventSource, event_types, renderAppearanceList);
+    appearanceLifecycleController.bind();
+    void appearanceLifecycleController.refresh('reload');
 
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
@@ -2783,7 +2798,6 @@ jQuery(async () => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        chatLifecycleEpoch.advance();
         setTimeout(() => {
             injectAllMessageButtons();
             configureAllCigImageArrows();
@@ -2801,7 +2815,6 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        chatLifecycleEpoch.advance();
         setTimeout(injectAllMessageButtons, 100);
     });
 
