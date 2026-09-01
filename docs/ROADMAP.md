@@ -1,8 +1,8 @@
 # Context Image Generation Product Roadmap
 
-**Status:** Private working roadmap; proposed direction, not a release claim
+**Status:** Private working roadmap and evidence ledger. Implemented items are not release claims until their listed acceptance evidence is complete.
 
-**Updated:** 2026-08-31
+**Updated:** 2026-09-01
 
 **Research basis:** `LEARNINGS.md`
 
@@ -24,9 +24,21 @@ The extension should win on five things:
 
 Provider breadth is necessary infrastructure, but it is not the differentiator. Quick Image Gen and SD Proxy already serve users who want a broad image studio. This extension should remain roleplay-native and progressively disclose control.
 
-## Current baseline — v1.7.1
+## Current implementation — v2 / extension v1.8.0
 
-Existing capabilities include message, slash, automatic, and swipe generation; character/persona context; avatar and previous-image references; a file-backed Gallery; and LinkAPI routes. These make generation possible, but they do not yet provide dependable continuity, reliable scene interpretation, or a strong iteration loop.
+The `v2` branch now contains the provider foundation and the player-facing P1-P6 flows. Deterministic acceptance is green at 700/700 tests. Real-host desktop UAT has confirmed that the extension mounts in SillyTavern, the ordinary wand remains available, the inline **Direct this scene** action is visible in an RP chat, its Director panel opens on the exact message, and opening it makes no generation request.
+
+This is not yet a complete release claim. The LinkAPI character-consistency benchmark is unrun because the public pricing page does not expose a verified price for the configured image route, so the approved USD $5 ceiling cannot yet be enforced. Full 320/360/480px host UAT also remains open: the Director mounted at 360px, but the surrounding SillyTavern page showed horizontal overflow and needs a targeted panel-versus-host check.
+
+| Priority | Customer feature | Current evidence | Remaining acceptance |
+| --- | --- | --- | --- |
+| P0 | Trustworthy provider/model selection and custom connections | Implemented; route, discovery, no-spend, and failure contracts covered deterministically | Live LinkAPI refresh/selection observation in the user's loaded profile; TokenReply image route deferred while unavailable |
+| P1 | Appearance truth, remembered looks, locks, outfits, and visible continuity | Implemented; focused continuity contracts accepted | Six-image LinkAPI single/two-character quality benchmark under a verified price cap |
+| P2 | Selected-passage/current-message scene interpretation | Implemented; production plan and artifact inspection accepted | Included in the quality benchmark |
+| P3 | Improve, Vary, change scene, edit, reuse, and make canonical | Implemented; production runtime accepted | Live interaction UAT on retained generated media |
+| P4 | Visual story memory, search, favorites, collections, details, and Continue | Implemented; production runtime accepted | Live interaction UAT on a populated chat |
+| P5 | Story-aware cinematic suggestions and session limits | Implemented; production runtime accepted | Live suggestion/adjust/dismiss UAT; provider remains blocked until approval |
+| P6 | Player-directed scene intent in the chat | Implemented; independent review READY; real-host desktop open/edit UAT passed with generation routes blocked | Targeted 320/360/480px overflow/focus UAT and one approved live attachment |
 
 ## Priority 0 — Trustworthy provider and model selection
 
@@ -115,9 +127,9 @@ The wand contract is strict: **click means generate immediately**. Settings hold
 - Persistent defaults apply consistently without repeated interaction.
 - The generated subject matches the selected passage more reliably than full-message-only generation.
 
-### Optional interaction exploration — not committed
+### Secondary directed path — committed as P6
 
-A secondary **Generate with options** path could later support Portrait, Cast, Background, framing, mood, or prompt review. It would require a deliberate frontend and North Star decision—such as a split action or separate menu—and must never change the primary wand into a blocking form by accident.
+The primary wand still generates immediately. A separate chat-visible **Direct this scene** action now opens optional per-chat framing, continuity, and visual-direction controls without making a provider request. This preserves the North Star while giving players deliberate control when the current moment needs it.
 
 ## Priority 3 — Improve an almost-right image
 
@@ -200,6 +212,33 @@ Automation creates images at meaningful moments and remains understandable, opti
 
 Focused evidence: `test/rp-cinematic-automation.test.mjs`, `test/rp-cinematic-runtime.test.mjs`, `test/rp-cinematic-ui.test.mjs`, and `test/rp-cinematic-integration.contract.test.mjs` cover interpretation deltas, duplicate/ambiguous suppression, queue recovery, manual retriggers, stale chat protection, card actions, no-hidden-network behavior, coordinator dispatch, settlement, budget stop, settings persistence, and narrow-safe controls.
 
+## Priority 6 — Direct this scene ✅
+
+### User outcome
+
+The player can deliberately shape the image for one exact story moment without turning the ordinary wand into a form or leaving the chat.
+
+### Product features
+
+| Feature | User experience |
+| --- | --- |
+| **Visible chat entry** | One always-visible, labelled **Direct this scene** button appears immediately after each eligible RP message; it is not hidden in SillyTavern's hover-only message toolbar |
+| **Exact story target** | The panel names the anchored message and preserves selected-text precedence for the current invocation |
+| **Player direction** | Choose framing and continuity strength and add a bounded optional visual direction |
+| **Reference readiness** | See which character avatar/remembered look/description is ready before generating |
+| **Honest route and cost state** | See whether the selected provider/model route is executable and whether exact cost is unavailable |
+| **Explicit spend boundary** | Opening, editing, closing, switching chats, and recovering drafts are local; only **Generate directed image** may enter the generation coordinator |
+| **Per-chat recovery** | Draft choices survive chat switches/reload without persisting raw story passages, prompts, secrets, or image payloads |
+
+### Acceptance evidence
+
+- `director` is a first-class shared generation invocation.
+- Framing, continuity, and visual direction are immutable per-invocation P2 overrides; highlighted text remains the story focus.
+- Exact target, chat lifecycle, route readiness, draft revision, and single-flight state are revalidated before dispatch.
+- Stale, failed, cancelled, and gallery-only outcomes retain a recoverable draft and cannot falsely settle success.
+- Independent deterministic review found no remaining P0/P1 issue after `96cebdd`; full suite is 700/700.
+- Real-host desktop UAT opened the inline panel on message 6 with LinkAPI route readiness and avatar-ready references; the network recorder captured no generation request before Generate.
+
 ## Later creator and ecosystem opportunities
 
 These remain secondary to the five product priorities:
@@ -247,16 +286,12 @@ Primary measures:
 
 Operational measures such as cancellation success, duplicate requests, and provider errors remain quality gates, not product success metrics.
 
-## Recommended next steps
+## Next acceptance steps
 
-1. **Make provider/model selection trustworthy.** Fix LinkAPI discovery, give TokenReply model families explicit routes, and verify selection without paid generation.
-2. **Design the continuity workflow.** Specify Continuity shelf, Remember this look, active-look preview, look lock, and two-character reference planning as one user journey.
-3. **Implement only the storage work that workflow requires.** Decouple Gallery and Appearance assets, migrate existing looks, and support safe cleanup.
-4. **Ship the smallest valuable continuity increment.** One active look per character, visible reference preview, and look locking before alternate wardrobes or complex NPC management.
-5. **Run the agreed character-consistency benchmark.** Use one single-character and one two-character three-scene sequence through LinkAPI Nano Banana 2, 16:9, within the USD $5 ceiling.
-6. **Improve automatic scene interpretation.** Specify selected-text precedence, whole-message fallback, automatic cast resolution, story-state changes, and persistent visual defaults without adding a pre-generation screen.
-7. **Add the iteration loop.** Vary, Edit and regenerate, Reuse recipe, and Make canonical should ship together around the generated artifact.
-8. **Build visual story memory from proven metadata.** Add timeline, favorites, and search before collections or bulk management.
-9. **Prototype story-aware automation last.** Test suggested shots and story-change triggers before enabling automatic paid generation.
+1. **Verify the LinkAPI price before spending.** Obtain the exact per-image or maximum request price for the configured Nano Banana image route from the authenticated LinkAPI pricing view. Do not infer it from model naming.
+2. **Run the agreed quality benchmark once the cap is enforceable.** Use Nano Banana 2-equivalent route, 16:9, the same model throughout, one single-character three-scene sequence and one two-character three-scene sequence. Score character consistency first and scene continuity second. Stop before USD $5.
+3. **Complete targeted live UAT.** At 320/360/480px distinguish extension-panel overflow from SillyTavern host overflow; verify focus order, Enter/Space, close/focus return, chat switching, and draft recovery. Exercise Improve, Story Memory, and cinematic adjust/dismiss without provider calls.
+4. **Run one approved live Director attachment.** After the price gate, generate from an exact message and prove the image attaches to that message, records the Director overrides, retains Improve/continuity/story-memory actions, and settles only after persistence.
+5. **Prepare release-facing documentation only after those gates.** Keep this roadmap as the internal evidence ledger; make README changes separately and deliberately so public setup and feature copy stay concise.
 
-The first roadmap bet is therefore not “make storage safer.” It is **make the same character remain recognizably the same across the story**. The second is not “add a Shot composer”; it is **make the immediate wand result depict the intended current moment**. Storage and planning mechanics are merely part of delivering those outcomes.
+The roadmap's first bet remains **make the same character remain recognizably the same across the story**. The visible product layer now also lets the player direct a specific moment without giving up immediate one-click generation.
