@@ -21,7 +21,7 @@ const sourceArtifact = Object.freeze({
 });
 
 function dependencies(overrides = {}) {
-    const calls = { dispatch: [], persist: [], readback: [], canonical: [], canonicalReadback: [], discard: [], quote: [] };
+    const calls = { dispatch: [], persist: [], readback: [], canonical: [], canonicalReadback: [], discard: [], quote: [], originalReadback: [] };
     const deps = {
         sourceArtifact,
         generationPlan: { planId: 'registry:plan', revision: 'revision:1', capabilities: { imageGeneration: true } },
@@ -41,6 +41,7 @@ function dependencies(overrides = {}) {
         },
         persistArtifact: async (input) => { calls.persist.push(input); return { status: 'saved' }; },
         readbackArtifact: async (input) => { calls.readback.push(input); return { status: 'confirmed', artifactId: input.artifact.artifactId, planId: input.plan.planId, invocationId: input.plan.invocationId }; },
+        readbackOriginalArtifact: async (input) => { calls.originalReadback.push(input); return { status: 'confirmed', artifactId: input.originalArtifact.artifactId, planId: input.plan.planId, invocationId: input.plan.invocationId }; },
         mutateCanonical: async (input) => { calls.canonical.push(input); return { status: 'mutated' }; },
         readbackCanonical: async (input) => { calls.canonicalReadback.push(input); return { status: 'confirmed', planId: input.plan.planId, invocationId: input.plan.invocationId, mutation: input.mutation }; },
         discardArtifact: async ({ artifactId, plan }) => { calls.discard.push(artifactId); return { status: 'confirmed', artifactId, planId: plan.planId, invocationId: plan.invocationId }; },
@@ -76,7 +77,7 @@ test('surface projects the five visible actions, compact editors, status, and ke
     assert.match(html, /role="status"/u);
     assert.match(html, /min-height:44px/u);
     assert.match(html, /data-iteration-action="vary-shot"/u);
-    assert.match(html, /Original retained/u);
+    assert.match(html, /Original retention pending/u);
 });
 
 test('surface projects action-specific editors, repaired retry, and exact canonical roles', () => {
@@ -95,6 +96,27 @@ test('surface projects action-specific editors, repaired retry, and exact canoni
     assert.match(canonical, /name="chatBackground"/u);
     const repair = renderIterationSurface({ action: 'retry-repaired-prompt', originalArtifact: sourceArtifact, repairedPrompt: { status: 'repaired', repairedPrompt: 'Ava waits.' }, repairedPromptConfirmed: true });
     assert.match(repair, /Retry repaired prompt/u);
+});
+
+test('action controls select an editor and expose a separate explicit submit control', () => {
+    const html = renderIterationSurface({ action: 'keep-characters-change-scene', originalArtifact: sourceArtifact });
+    assert.match(html, /data-iteration-action="keep-characters-change-scene"/u);
+    assert.match(html, /data-iteration-submit="true"/u);
+    assert.match(html, /Keep characters\/change scene/u);
+    assert.match(html, /Generate/u);
+});
+
+test('mounted action click selects without dispatching and renders the selected editor', () => {
+    const { deps, calls } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const listeners = new Map();
+    const host = { innerHTML: '', addEventListener(type, listener) { listeners.set(type, listener); }, removeEventListener() {} };
+    mountIterationSurface(host, controller);
+    const target = { getAttribute(name) { return name === 'data-iteration-action' ? 'keep-characters-change-scene' : name === 'data-iteration-select' ? 'true' : null; }, closest() { return target; } };
+    listeners.get('click')({ target, preventDefault() {} });
+    assert.equal(controller.getState().action, 'keep-characters-change-scene');
+    assert.match(host.innerHTML, /data-editor-kind="scene"/u);
+    assert.equal(calls.dispatch.length, 0);
 });
 
 test('controller quotes finite two-up cost and requires matching explicit consent before dispatch', async () => {
@@ -150,6 +172,19 @@ test('two-up chooser persists only the chosen output and keeps the original arti
     assert.equal(calls.readback.length, 1);
     assert.equal(calls.discard.length, 1);
     assert.equal(result.originalArtifact.artifactId, sourceArtifact.artifactId);
+    assert.equal(result.originalRetention.status, 'confirmed');
+});
+
+test('two-up cleanup indeterminate leaves chosen output and cleanup-pending state', async () => {
+    const { deps } = dependencies({ discardArtifact: async ({ artifactId, plan }) => ({ status: 'indeterminate', artifactId, planId: plan.planId, invocationId: plan.invocationId }) });
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe', twoUp: true });
+    await controller.submit({ action: 'reuse-recipe', twoUp: true, consent: { approved: true, outputCount: 2, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    const chosenId = controller.getState().artifacts[0].artifactId;
+    const result = await controller.chooseArtifact(chosenId);
+    assert.equal(result.status, 'cleanup-pending');
+    assert.equal(result.chosenArtifactId, chosenId);
+    assert.equal(result.originalArtifact.artifactId, sourceArtifact.artifactId);
 });
 
 test('incomplete dispatcher receipts fail closed without phantom artifacts or persistence', async () => {
@@ -190,13 +225,15 @@ test('input and change events feed prompt repair through the mount seam', () => 
     const mounted = mountIterationSurface(host, controller);
     const promptField = { name: 'prompt', value: 'Ava (waits' };
     fields.set('[name="prompt"]', promptField);
+    const initialMarkup = host.innerHTML;
     for (const eventName of ['input', 'change']) listeners.get(eventName)({ target: { name: 'prompt', value: promptField.value } });
     assert.equal(controller.getState().status, 'draft-review');
+    assert.equal(host.innerHTML, initialMarkup, 'draft updates must not replace the host markup');
     mounted.destroy();
 });
 
 test('missing authoritative dependencies fail closed without dispatch', async () => {
-    for (const missing of ['verifyGenerationPlan', 'estimateCost', 'reserveInvocation', 'dispatchCoordinator', 'persistArtifact', 'readbackArtifact']) {
+    for (const missing of ['verifyGenerationPlan', 'estimateCost', 'reserveInvocation', 'dispatchCoordinator', 'persistArtifact', 'readbackArtifact', 'readbackOriginalArtifact']) {
         const { deps, calls } = dependencies({ [missing]: undefined });
         const controller = createIterationSurfaceController(deps);
         const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1 } });
@@ -251,6 +288,8 @@ test('mount exposes a stable render seam and cleans up event listeners', () => {
     assert.match(host.innerHTML, /data-cig-rp-iteration-surface/u);
     assert.equal(typeof mounted.render, 'function');
     assert.equal(listeners.has('click'), true);
+    assert.equal(listeners.has('input'), true);
+    assert.equal(listeners.has('change'), true);
     mounted.destroy();
     assert.equal(listeners.size, 0);
 });
