@@ -92,10 +92,10 @@ test('Setup keeps technical provider diagnostics inside Advanced and wires updat
     assert.match(index, /#cig_experimental_preflight_checkbox[\s\S]{0,700}setExperimentalPreflight[\s\S]{0,300}clearSetupRuntimeIssue\(\)/);
 });
 
-test('Advanced provider diagnostics do not expose LinkAPI recovery for other providers', () => {
+test('Advanced provider diagnostics do not expose LinkAPI recovery', () => {
     const advanced = advancedMarkup();
-    assert.match(advanced, /id="cig_linkapi_legacy_routing_container"/);
-    assert.match(index, /#cig_linkapi_legacy_routing_container'\)\.toggle\(ui\.showsLegacyRecovery\)/);
+    assert.doesNotMatch(advanced, /legacy LinkAPI routing|cig_linkapi_legacy_routing/i);
+    assert.doesNotMatch(index, /linkapi_use_legacy_routing|linkapi-legacy-recovery/);
 });
 
 test('configuration changes clear runtime issues while failures capture their latest safe message', () => {

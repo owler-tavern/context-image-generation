@@ -4,6 +4,10 @@ import { createGenerationPlan } from '../lib/generation-plan.js';
 import { dispatchProviderRoute } from '../lib/providers/dispatch.js';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
+const VERIFIED_NANOGPT_ROUTE = {
+    state: 'verified', source: 'official-docs', observedAt: '2026-08-31T00:00:00.000Z',
+    protocol: 'openai-images', requestShapeRevision: 'openai-images-v1',
+};
 
 function nanoPlan(overrides = {}) {
     return createGenerationPlan({
@@ -30,21 +34,20 @@ function nanoPlan(overrides = {}) {
     });
 }
 
-test('dispatch accepts a captured fetched NanoGPT model definition without requiring a built-in model', async () => {
-    let request;
-    const result = await dispatchProviderRoute({
+test('dispatch rejects a fetched NanoGPT model without explicit route evidence', async () => {
+    let called = false;
+    await assert.rejects(dispatchProviderRoute({
         plan: nanoPlan(),
         connection: { id: 'nanogpt:default', providerId: 'nanogpt', kind: 'browser-api-key', enabled: true },
         signal: new AbortController().signal,
         transportContext: {
-            requestOpenAiImages: async (value) => { request = value; return { imageData: PNG, mimeType: 'image/png' }; },
+            requestOpenAiImages: async () => { called = true; return { imageData: PNG, mimeType: 'image/png' }; },
         },
-    });
-    assert.equal(result.imageData, PNG);
-    assert.equal(request.model, 'discovered-nano-image');
+    }), /route evidence|unverified/i);
+    assert.equal(called, false);
 });
 
-test('dispatch accepts a captured manual NanoGPT model definition with conservative evidence', async () => {
+test('dispatch rejects a manual NanoGPT model without explicit route evidence', async () => {
     const plan = nanoPlan({ modelDefinition: {
         id: 'manual-nano-image',
         providerId: 'nanogpt',
@@ -52,13 +55,14 @@ test('dispatch accepts a captured manual NanoGPT model definition with conservat
         source: { kind: 'manual' },
         capabilities: {},
     }, modelId: 'manual-nano-image' });
-    const result = await dispatchProviderRoute({
+    let called = false;
+    await assert.rejects(dispatchProviderRoute({
         plan,
         connection: { id: 'nanogpt:default', providerId: 'nanogpt', kind: 'browser-api-key', enabled: true },
         signal: new AbortController().signal,
-        transportContext: { requestOpenAiImages: async () => ({ imageData: PNG, mimeType: 'image/png' }) },
-    });
-    assert.equal(result.imageData, PNG);
+        transportContext: { requestOpenAiImages: async () => { called = true; return { imageData: PNG, mimeType: 'image/png' }; } },
+    }), /route evidence|unverified/i);
+    assert.equal(called, false);
     assert.equal(plan.resolved.modelDefinition.source.kind, 'manual');
     assert.equal(plan.resolved.modelDefinition.capabilities.imageGeneration.state, 'unknown');
 });
@@ -66,7 +70,7 @@ test('dispatch accepts a captured manual NanoGPT model definition with conservat
 test('dispatch rejects a forged NanoGPT endpoint before any provider request', async () => {
     let called = false;
     await assert.rejects(dispatchProviderRoute({
-        plan: nanoPlan({ endpoint: 'https://attacker.example/v1' }),
+        plan: nanoPlan({ endpoint: 'https://attacker.example/v1', routeEvidence: VERIFIED_NANOGPT_ROUTE }),
         connection: { id: 'nanogpt:default', providerId: 'nanogpt', kind: 'browser-api-key', enabled: true },
         signal: new AbortController().signal,
         transportContext: { requestOpenAiImages: async () => { called = true; return { imageData: PNG, mimeType: 'image/png' }; } },
@@ -77,7 +81,7 @@ test('dispatch rejects a forged NanoGPT endpoint before any provider request', a
 test('dispatch rejects a missing NanoGPT endpoint snapshot instead of trusting connection endpoint state', async () => {
     let called = false;
     await assert.rejects(dispatchProviderRoute({
-        plan: nanoPlan({ endpoint: undefined }),
+        plan: nanoPlan({ endpoint: undefined, routeEvidence: VERIFIED_NANOGPT_ROUTE }),
         connection: { id: 'nanogpt:default', providerId: 'nanogpt', kind: 'browser-api-key', endpoint: 'https://attacker.example/v1', enabled: true },
         signal: new AbortController().signal,
         transportContext: { requestOpenAiImages: async () => { called = true; return { imageData: PNG, mimeType: 'image/png' }; } },
@@ -88,7 +92,7 @@ test('dispatch rejects a missing NanoGPT endpoint snapshot instead of trusting c
 test('dispatch rejects a forged NanoGPT transport before any provider request', async () => {
     let called = false;
     await assert.rejects(dispatchProviderRoute({
-        plan: nanoPlan({ transportId: 'host-chat-image' }),
+        plan: nanoPlan({ transportId: 'host-chat-image', routeEvidence: VERIFIED_NANOGPT_ROUTE }),
         connection: { id: 'nanogpt:default', providerId: 'nanogpt', kind: 'browser-api-key', enabled: true },
         signal: new AbortController().signal,
         transportContext: { requestOpenAiImages: async () => { called = true; return { imageData: PNG, mimeType: 'image/png' }; } },
@@ -98,7 +102,7 @@ test('dispatch rejects a forged NanoGPT transport before any provider request', 
 
 test('dispatch rejects a model definition forged for a different provider', async () => {
     await assert.rejects(dispatchProviderRoute({
-        plan: nanoPlan({ modelId: 'flux', modelDefinition: {
+        plan: nanoPlan({ routeEvidence: VERIFIED_NANOGPT_ROUTE, modelId: 'flux', modelDefinition: {
             id: 'flux',
             providerId: 'openai',
             transportId: 'openAiImages',

@@ -5,9 +5,10 @@ This catalog is the user-facing status record for image-generation providers in 
 | Provider / capability | Status | What is included | Evidence and limits |
 | --- | --- | --- | --- |
 | LinkAPI Gemini image models | Existing | Gemini-compatible requests go through SillyTavern's chat-completions backend with a request-scoped LinkAPI proxy. | Retains the existing one-click scene-image workflow and supports the normal multimodal message path. Manual browser acceptance remains required for a particular key/model combination. |
-| LinkAPI `gpt-image*` / `dall-e*` models | Existing | OpenAI Images requests use LinkAPI's Images endpoint and a text-only prompt. Fetched matching model IDs use the same transport. | Reference images are not sent. A browser acceptance run is required for a particular key/model combination. |
-| LinkAPI legacy routing | Existing recovery option | The Advanced **Use legacy LinkAPI routing** switch invokes the retained pre-adapter route. | It is a deliberate, manual retry only; a failed normal request never automatically falls back, preventing accidental duplicate paid generations. |
+| LinkAPI `gpt-image-2-c` | Existing | The curated model uses LinkAPI's OpenAI Images endpoint with a text-only prompt. | Reference images are not sent. Unknown fetched model IDs remain unverified and unavailable; a browser acceptance run is still required for a particular key/model combination. |
 | TokenReply `grok-imagine-image` / `grok-imagine-image-quality` | Experimental | A minimal, text-only OpenAI Images request targets `https://api.tokenreply.com/v1/images/generations`. | No live test-key generation has been recorded. Model discovery is an Experimental user-triggered `/v1/models` attempt; the adapter omits image size and references until TokenReply's accepted size/resolution field and response shape are live-verified. |
+| Custom OpenAI Images-compatible | Existing | A saved connection uses its validated origin, models path, and Images generation path. Catalog refresh is GET-only and does not generate an image. | A successful catalog check configures the route but does not prove image support. The first generation must be manually confirmed; automatic generation remains blocked until a supported image response verifies that exact route revision. |
+| Custom Gemini-compatible | Existing | A saved connection uses its validated proxy root and models path with SillyTavern's Gemini proxy transport. It never falls back to an OpenAI Images path. | A successful catalog check configures the route but does not prove image support. The first generation must be manually confirmed; automatic generation remains blocked until a supported image response verifies that exact route revision. |
 | OpenAI GPT Image | Experimental | Registry-driven OpenAI Images transport targets `https://api.openai.com/v1/images/generations` with curated GPT Image model IDs. | Static protocol evidence only; direct browser key exposure/CORS and live generation remain unverified. Strict Images reference support is disabled. |
 | Pollinations paid JSON | Experimental | Bearer-authenticated `https://gen.pollinations.ai/v1/images/generations` plus native `/image/models` discovery. | Query-string keys are not used. Model IDs do not imply generation or optional capability support; live generation remains unverified. |
 | NanoGPT | Experimental | Verified `https://nano-gpt.com/v1/images/generations` transport plus a detailed `/api/v1/image-models?detailed=true` parser seam. | Architecture output metadata may establish image generation; input/reference, multiple-output, and supported-parameter fields remain unknown/disabled until a dedicated adapter is tested. |
@@ -25,8 +26,11 @@ This catalog is the user-facing status record for image-generation providers in 
 ## Status rules
 
 - **Existing** means the capability is shipped in this extension. It is not a claim that every provider account is configured or currently healthy.
+- **Discovered** means a model ID appeared in a catalog. It does not prove that the model can generate images.
+- **Configured** means a structurally safe custom route passed its catalog check. It permits only an explicitly confirmed first manual generation.
+- **Verified** means the exact connection, protocol, and route revision returned a supported image response. Editing the route removes that evidence.
 - **Experimental** means the UI and deterministic contracts are present, but live browser compatibility has not been recorded for the provider/model combination.
-- **Verified** may be assigned only after the documented non-production-key browser checks succeed and release evidence records the request route, accepted request fields, image response shape, invalid-key behavior, and reload persistence. No TokenReply profile is currently Verified.
+- A provider row may claim **Verified** release status only after the documented non-production-key browser checks succeed and release evidence records the request route, accepted request fields, image response shape, invalid-key behavior, and reload persistence. No TokenReply profile has this status.
 - **Planned** is an architectural direction, not a commitment or a provider availability claim.
 - **Out of scope** explicitly excludes a capability from this provider branch.
 
@@ -35,10 +39,15 @@ This catalog is the user-facing status record for image-generation providers in 
 Before changing a status to **Verified**, record a dated result (without keys, prompts containing private data, or image payloads) for:
 
 1. LinkAPI Gemini through the normal adapter route.
-2. LinkAPI `gpt-image*` through the normal OpenAI Images route.
-3. The manual LinkAPI legacy-recovery route.
-4. TokenReply `grok-imagine-image` and `grok-imagine-image-quality`, including whether `size`, `resolution`, or neither is accepted and whether the response contains base64, a URL, or another supported shape.
-5. Invalid-key errors for both providers, confirming no key appears in UI, logs, or recorded evidence.
-6. A reload confirming provider, model, and the correct provider credential remain associated.
+2. LinkAPI `gpt-image-2-c` through the normal OpenAI Images route.
+3. TokenReply `grok-imagine-image` and `grok-imagine-image-quality`, including whether `size`, `resolution`, or neither is accepted and whether the response contains base64, a URL, or another supported shape.
+4. Invalid-key errors for both providers, confirming no key appears in UI, logs, or recorded evidence.
+5. A reload confirming provider, model, and the correct provider credential remain associated.
 
 Use non-production test keys. A successful test for one provider is evidence for that provider only; it does not verify other adapters.
+
+## Custom connection safety
+
+Each saved connection uses one protocol. Configure a gateway that supports both protocols as two connections. Origins must use HTTPS; plain HTTP is accepted only for loopback services on the same device. Model and generation paths must be absolute paths on that origin and cannot contain credentials, queries, fragments, traversal, or redirects.
+
+Custom provider keys are masked and excluded from route previews and diagnostics, but they are currently stored in SillyTavern's browser-side extension settings. Use a limited, non-production key. Moving these credentials behind an optional server adapter is future work. TokenReply Gemini/Nano Banana routing and TokenReply live image generation remain unavailable until provider evidence exists.

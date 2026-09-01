@@ -25,11 +25,11 @@ import { MEDIA_DISPLAY, MEDIA_SOURCE, MEDIA_TYPE, SCROLL_BEHAVIOR } from '../../
 import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.js';
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
-import { getModelDefinition, getProviderDefinition, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
-import { getModelFallback, projectProviderControls, projectProviderOptions, projectProviderUi } from './lib/providers/ui-projection.js';
-import { mergeFetchedModelEntries, updateLocalModelEntries, mergeFetchedModelRecords, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
-import { discoverProviderModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
-import { dispatchProviderRoute } from './lib/providers/dispatch.js';
+import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
+import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
+import { mergeFetchedModelEntries, updateLocalModelEntries, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
+import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
+import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
@@ -39,9 +39,10 @@ import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalize
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { bindAppearanceRerenderOnChatLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
-import { inspectGenerationPlan } from './lib/providers/preflight.js';
+import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
+import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
@@ -75,7 +76,9 @@ const defaultSettings = {
     ui_last_settings_tab: 'setup',
     model_discovery: {},
     experimental_model_preflight: {},
-    linkapi_use_legacy_routing: false,
+    custom_connections: { schema: 1, connections: {}, models: {}, evidence: {}, modelEvidence: {}, confirmations: {} },
+    custom_connection_keys: {},
+    custom_connection_editor_id: '',
     aspect_ratio: '1:1',
     image_size: '',
     thinking_level: 'auto',
@@ -105,6 +108,7 @@ generationCoordinator.subscribe((event) => {
 });
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
+let customConnectionDraftId = '';
 const chatLifecycleEpoch = createChatLifecycleEpoch();
 
 function renderAdvancedPlanInspector() {
@@ -161,7 +165,7 @@ function showGenerationError(error, operation = 'Image generation') {
 function renderSetupReadiness(settings) {
     const providerId = settings.provider || 'makersuite';
     const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const providerUi = projectProviderUi(providerId, settings.model, {
+    const providerUi = projectSelectedProviderUi(settings, providerId, settings.model, {
         localEntries: getProviderModelEntries(settings, providerId),
         discoveryEvidence: discoveryState.evidence,
         discoveryWarning: discoveryState.warning,
@@ -213,6 +217,8 @@ function clearSetupRuntimeIssue() {
 }
 
 function getProviderApiKey(settings, providerId) {
+    const customConnection = getCustomConnection(settings, providerId);
+    if (customConnection) return getCustomConnectionKey(settings, customConnection);
     const providerKeys = settings.provider_keys;
     if (providerKeys && typeof providerKeys === 'object' && typeof providerKeys[providerId] === 'string') return providerKeys[providerId];
     return providerId === 'linkapi' ? settings.linkapi_key || '' : '';
@@ -224,16 +230,36 @@ function setProviderApiKey(settings, providerId, value) {
     if (providerId === 'linkapi') { settings.linkapi_key = value; settings.provider_keys.linkapi = value; }
 }
 
+function getCustomConnectionStore(settings) {
+    return migrateCustomConnections(settings?.custom_connections);
+}
+
+function getCustomConnection(settings, connectionId = settings?.provider) {
+    return getCustomConnectionStore(settings).connections?.[connectionId];
+}
+
+function getCustomConnectionKey(settings, connection) {
+    if (!connection?.credentialRef) return '';
+    const keys = settings?.custom_connection_keys;
+    return keys && typeof keys === 'object' && typeof keys[connection.credentialRef] === 'string' ? keys[connection.credentialRef] : '';
+}
+
+function projectSelectedProviderUi(settings, providerId = settings?.provider || 'makersuite', modelId = settings?.model, options = {}) {
+    const connection = getCustomConnection(settings, providerId);
+    if (connection) return projectCustomConnectionProviderUi(connection, modelId, {
+        ...options,
+        credentialConfigured: Boolean(getCustomConnectionKey(settings, connection)),
+    });
+    return projectProviderUi(providerId, modelId, options);
+}
+
 function getProviderModelEntries(settings, providerId) {
+    const custom = getCustomConnectionStore(settings);
+    if (custom.connections[providerId]) return custom.models[providerId] || [];
     const records = settings.model_records?.[providerId];
     if (Array.isArray(records)) return records;
     const entries = settings.provider_models?.[providerId];
     return Array.isArray(entries) ? entries : [];
-}
-
-function experimentalPreflightKey({ providerId, modelId, transportId } = {}) {
-    if (![providerId, modelId, transportId].every((value) => typeof value === 'string' && value.trim())) return '';
-    return JSON.stringify([providerId, modelId, transportId]);
 }
 
 function getSelectedModelRoute(settings, modelId = settings.model) {
@@ -258,12 +284,11 @@ function modelNeedsExperimentalPreflight(model) {
 }
 
 function isExperimentalPreflightAccepted(settings, route) {
-    const key = experimentalPreflightKey(route);
-    return Boolean(key && settings.experimental_model_preflight?.[key] === true);
+    return hasExperimentalModelPreflightConsent(settings.experimental_model_preflight, route);
 }
 
 function setExperimentalPreflight(settings, route, accepted) {
-    const key = experimentalPreflightKey(route);
+    const key = experimentalModelPreflightKey(route);
     if (!key) return;
     if (!settings.experimental_model_preflight || typeof settings.experimental_model_preflight !== 'object' || Array.isArray(settings.experimental_model_preflight)) settings.experimental_model_preflight = {};
     if (accepted === true) settings.experimental_model_preflight[key] = true;
@@ -297,14 +322,12 @@ function renderExperimentalPreflight(settings, modelId = settings.model) {
         .toggle(showExperimentalPreflight);
 }
 
-// The legacy recovery route remains an explicit manual capability. It is not
-// consulted by the ordinary wand/automation pipeline, which always dispatches
-// through the resolved schema-2 plan.
-function isManualLegacyLinkApiRecovery(selectedProvider, settings) {
-    return selectedProvider === 'linkapi' && settings.linkapi_use_legacy_routing === true;
-}
-
 function setProviderModelRecords(settings, providerId, records) {
+    const custom = getCustomConnectionStore(settings);
+    if (custom.connections[providerId]) {
+        settings.custom_connections = migrateCustomConnections({ ...custom, models: { ...custom.models, [providerId]: records } });
+        return;
+    }
     if (!settings.model_records || typeof settings.model_records !== 'object' || Array.isArray(settings.model_records)) settings.model_records = {};
     if (!settings.provider_models || typeof settings.provider_models !== 'object' || Array.isArray(settings.provider_models)) settings.provider_models = {};
     settings.model_records[providerId] = records;
@@ -312,6 +335,21 @@ function setProviderModelRecords(settings, providerId, records) {
 }
 
 function getProviderDiscoveryState(settings, providerId) {
+    const custom = getCustomConnectionStore(settings);
+    if (custom.connections[providerId]) {
+        const evidence = custom.evidence[providerId];
+        const states = settings.model_discovery;
+        const customStoredState = states && typeof states === 'object' && !Array.isArray(states) ? states[providerId] : undefined;
+        const currentDiscovery = projectCurrentCustomDiscoveryState(custom.connections[providerId], customStoredState);
+        return evidence ? { evidence: {
+            kind: 'openai-list', source: 'custom connection /models endpoint', observedAt: evidence.observedAt,
+            retryCount: 0, connectionId: providerId, revision: evidence.revision,
+            returnedCount: currentDiscovery.evidence?.returnedCount || 0,
+            acceptedCount: currentDiscovery.evidence?.acceptedCount || 0,
+            unresolvedCount: currentDiscovery.evidence?.unresolvedCount || 0,
+            rejectedCount: currentDiscovery.evidence?.rejectedCount || 0,
+        }, ...(currentDiscovery.warning ? { warning: currentDiscovery.warning } : {}) } : currentDiscovery;
+    }
     const states = settings.model_discovery;
     return states && typeof states === 'object' && !Array.isArray(states) && states[providerId] && typeof states[providerId] === 'object'
         ? states[providerId]
@@ -326,9 +364,29 @@ function setProviderDiscoveryState(settings, providerId, result) {
             source: result.evidence.source,
             observedAt: result.evidence.observedAt,
             retryCount: result.evidence.retryCount,
+            returnedCount: result.evidence.returnedCount,
+            acceptedCount: result.evidence.acceptedCount,
+            unresolvedCount: result.evidence.unresolvedCount,
+            rejectedCount: result.evidence.rejectedCount,
+            connectionId: result.evidence.connectionId,
+            revision: result.evidence.revision,
         },
         ...(result?.warning ? { warning: { code: result.warning.code } } : {}),
     };
+    const custom = getCustomConnectionStore(settings);
+    if (custom.connections[providerId]) {
+        const catalogSucceeded = !result?.warning || result.warning.code === 'DISCOVERY_EMPTY';
+        const nextEvidence = catalogSucceeded ? nextCustomDiscoveryEvidence({
+            connection: custom.connections[providerId],
+            currentEvidence: custom.evidence[providerId],
+            observedAt: result?.evidence?.observedAt || new Date().toISOString(),
+        }) : undefined;
+        settings.custom_connections = migrateCustomConnections({
+            ...custom,
+            evidence: nextEvidence ? { ...custom.evidence, [providerId]: nextEvidence } : custom.evidence,
+        });
+        return;
+    }
 }
 
 function cancelModelDiscovery(providerId) {
@@ -418,7 +476,7 @@ async function fetchManagedProviderModels() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const ui = projectProviderUi(providerId, settings.model, {
+    const ui = projectSelectedProviderUi(settings, providerId, settings.model, {
         localEntries: getProviderModelEntries(settings, providerId),
         discoveryEvidence: discoveryState.evidence,
         discoveryWarning: discoveryState.warning,
@@ -438,13 +496,23 @@ async function fetchManagedProviderModels() {
     const fetchButtons = $('#cig_model_refresh');
     setBusyState(fetchButtons, true, { busyTitle: 'Refreshing models…' });
     try {
-        const result = await modelDiscoveryCoordinator.refresh(providerId, { apiKey: key });
+        const customConnection = getCustomConnection(settings, providerId);
+        const result = customConnection
+            ? await discoverCustomConnectionModels({
+                connection: customConnection,
+                authPreset: customConnection.credentialRef ? 'bearer' : 'none',
+                credential: key,
+                existingEvidence: getCustomConnectionStore(settings).evidence[providerId],
+                savedModels: getProviderModelEntries(settings, providerId),
+                fetchImpl: fetch,
+            })
+            : await modelDiscoveryCoordinator.refresh(providerId, { apiKey: key });
         const currentSettings = extension_settings[extensionName];
         if (result?.stale || (currentSettings.provider || 'makersuite') !== providerId) return;
         setProviderDiscoveryState(currentSettings, providerId, result);
-        if (!result.warning) {
-            setProviderModelRecords(currentSettings, providerId, mergeFetchedModelRecords(getProviderModelEntries(currentSettings, providerId), result.models, providerId));
-        }
+        setProviderModelRecords(currentSettings, providerId, customConnection
+            ? result.models
+            : mergeDiscoveryModelRecords(getProviderModelEntries(currentSettings, providerId), result, providerId));
         updateModelDropdown();
         renderModelManager();
         saveSettingsDebounced();
@@ -452,10 +520,14 @@ async function fetchManagedProviderModels() {
             setSetupRuntimeIssue(result.warning, 'Provider model discovery');
             toastr.warning(`${result.warning.userMessage} Your current model list was kept.`, 'Context Image Generation');
         }
-        else toastr.success(`Loaded ${result.models.length} model(s).`, 'Context Image Generation');
+        else {
+            const outcome = getDiscoveryRefreshMessage(result);
+            toastr[outcome.level](outcome.message, 'Context Image Generation');
+        }
     } catch (error) {
         setSetupRuntimeIssue(error, 'Provider model discovery');
-        showGenerationError(error, 'Provider model discovery');
+        const safeError = normalizeProviderError(error, { providerId, modelId: settings.model });
+        toastr.error(`${safeError.userMessage} Your current model list was kept.`, 'Context Image Generation');
     } finally {
         if (refreshToken === modelDiscoveryUiSequence) {
             setBusyState(fetchButtons, false);
@@ -473,9 +545,196 @@ window.cigDebug = Object.assign(window.cigDebug || {}, {
     buildAppearanceReferenceCandidates,
 });
 
+function emptyCustomConnectionDraft() {
+    const id = createCustomConnectionId();
+    return {
+        schema: 1,
+        id,
+        label: '',
+        protocol: 'openai-images',
+        baseUrl: '',
+        modelsPath: '/v1/models',
+        generationPath: '/v1/images/generations',
+        credentialRef: customCredentialRef(id),
+        enabled: true,
+    };
+}
+
+function selectedCustomConnection(settings) {
+    const store = getCustomConnectionStore(settings);
+    const selectedId = settings.custom_connection_editor_id || customConnectionDraftId;
+    return selectCustomConnection(store, selectedId);
+}
+
+function renderCustomConnectionEditor() {
+    const settings = extension_settings[extensionName] || {};
+    const store = getCustomConnectionStore(settings);
+    let connection = selectedCustomConnection(settings);
+    if (!connection) {
+        if (!customConnectionDraftId) customConnectionDraftId = createCustomConnectionId();
+        connection = { ...emptyCustomConnectionDraft(), id: customConnectionDraftId, credentialRef: customCredentialRef(customConnectionDraftId) };
+    } else {
+        customConnectionDraftId = connection.id;
+        settings.custom_connection_editor_id = connection.id;
+    }
+    const $list = $('#cig_custom_connection_list').empty();
+    for (const saved of Object.values(store.connections)) $list.append($('<option>').val(saved.id).text(saved.label));
+    $list.val(store.connections[connection.id] ? connection.id : '');
+    const key = getCustomConnectionKey(settings, connection);
+    const editor = validateCustomConnection(connection).valid
+        ? projectCustomConnectionEditor(connection, { credentialConfigured: Boolean(key), evidence: store.evidence[connection.id] })
+        : null;
+    $('#cig_custom_connection_label').val(connection.label || '');
+    const protocol = connection.protocol === 'gemini-compatible' ? 'gemini-compatible' : 'openai-images';
+    $('#cig_custom_connection_protocol').val(protocol);
+    $('#cig_custom_connection_base_url').val(connection.baseUrl || '');
+    $('#cig_custom_connection_models_path').val(connection.modelsPath || '/v1/models');
+    $('#cig_custom_connection_generation_path').val(connection.generationPath || '/v1/images/generations').toggle(protocol === 'openai-images');
+    $('#cig_custom_connection_generation_path_label').toggle(protocol === 'openai-images');
+    $('#cig_custom_connection_auth').val(connection.credentialRef ? (protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none');
+    $('#cig_custom_connection_key').val('').prop('disabled', !connection.credentialRef)
+        .attr('placeholder', key ? 'Saved key (enter to replace)' : 'Enter API key');
+    $('#cig_custom_connection_enabled').prop('checked', connection.enabled !== false);
+    $('#cig_custom_connection_status').text(editor ? editor.status.label : 'Not saved');
+    $('#cig_custom_connection_delete').prop('disabled', !store.connections[connection.id]);
+    const localWarning = editor?.localInsecure ? 'Local HTTP connections are not encrypted. Use this only for a trusted service on this device.' : '';
+    $('#cig_custom_connection_local_warning').text(localWarning).prop('hidden', !editor?.localInsecure).toggle(Boolean(editor?.localInsecure));
+    const firstRequestWarning = editor?.status?.firstRequestWarning || '';
+    $('#cig_custom_connection_first_request_warning').text(firstRequestWarning).prop('hidden', !firstRequestWarning).toggle(Boolean(firstRequestWarning));
+    const selectedModel = store.models[connection.id]?.find((model) => model.id === settings.model) || store.models[connection.id]?.[0];
+    const routeEvidence = selectedModel?.routeEvidence || (store.evidence[connection.id] ? {
+        ...store.evidence[connection.id],
+        source: store.evidence[connection.id].state === 'verified' ? 'sanitized-probe' : 'user-configured-protocol',
+    } : undefined);
+    const discoveryEvidence = getProviderDiscoveryState(settings, connection.id).evidence;
+    const diagnostics = editor ? projectRouteDiagnostics({
+        label: editor.label,
+        protocol: editor.protocol.value,
+        transportId: selectedModel?.transportId || (editor.protocol.value === 'gemini-compatible' ? 'sillytavern-gemini-proxy' : 'openai-images'),
+        endpointClass: selectedModel?.endpointClass || (editor.protocol.value === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images'),
+        originClass: editor.localInsecure ? 'local-loopback' : 'secure-remote',
+        modelId: selectedModel?.id,
+        imageCapability: selectedModel?.capabilities?.imageGeneration,
+        routeEvidence,
+        discoveryEvidence,
+    }) : null;
+    $('#cig_custom_connection_route_summary').text(diagnostics
+        ? `${diagnostics.label} · ${diagnostics.evidence.state} route · ${diagnostics.catalog.returned} returned / ${diagnostics.catalog.accepted} accepted / ${diagnostics.catalog.unresolved} unresolved / ${diagnostics.catalog.rejected} rejected`
+        : 'Save a valid connection to inspect its route.');
+    const previewLines = editor && diagnostics ? [
+        `Connection: ${diagnostics.label}`,
+        `Protocol: ${diagnostics.protocol}`,
+        `Transport: ${diagnostics.transport}`,
+        `Endpoint class: ${diagnostics.endpointClass}`,
+        `Origin class: ${diagnostics.originClass}`,
+        'Catalog request: GET expected catalog path',
+        'Generation request: POST configured endpoint class',
+        `Model: ${diagnostics.model.id}`,
+        `Image capability: ${diagnostics.model.imageCapability}`,
+        `Route evidence: ${diagnostics.evidence.state} (${diagnostics.evidence.source})`,
+        ...(diagnostics.evidence.observedAt ? [`Observed: ${diagnostics.evidence.observedAt}`] : []),
+        `Catalog counts: ${diagnostics.catalog.returned} returned, ${diagnostics.catalog.accepted} accepted, ${diagnostics.catalog.unresolved} unresolved, ${diagnostics.catalog.rejected} rejected`,
+    ] : ['Save a valid origin and paths to preview the route.'];
+    $('#cig_custom_connection_preview').text(previewLines.join('\n'));
+}
+
+function readCustomConnectionDraft() {
+    const settings = extension_settings[extensionName] || {};
+    const existing = selectedCustomConnection(settings);
+    const id = existing?.id || customConnectionDraftId || createCustomConnectionId();
+    const protocol = $('#cig_custom_connection_protocol').val() === 'gemini-compatible' ? 'gemini-compatible' : 'openai-images';
+    const authPreset = $('#cig_custom_connection_auth').val() === 'none' ? 'none' : (protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer');
+    return {
+        schema: 1,
+        id,
+        label: String($('#cig_custom_connection_label').val() || ''),
+        protocol,
+        baseUrl: String($('#cig_custom_connection_base_url').val() || ''),
+        modelsPath: String($('#cig_custom_connection_models_path').val() || '/v1/models'),
+        ...(protocol === 'openai-images' ? { generationPath: String($('#cig_custom_connection_generation_path').val() || '/v1/images/generations') } : {}),
+        credentialRef: authPreset !== 'none' ? customCredentialRef(id) : null,
+        enabled: $('#cig_custom_connection_enabled').prop('checked') !== false,
+    };
+}
+
+function saveCustomConnectionFromEditor() {
+    const settings = extension_settings[extensionName];
+    const draft = readCustomConnectionDraft();
+    const validation = validateCustomConnection(draft);
+    if (!validation.valid) throw new TypeError(validation.errors[0]?.message || 'Invalid custom connection.');
+    settings.custom_connections = upsertCustomConnection(getCustomConnectionStore(settings), validation.connection);
+    if (!settings.custom_connection_keys || typeof settings.custom_connection_keys !== 'object' || Array.isArray(settings.custom_connection_keys)) settings.custom_connection_keys = {};
+    const enteredKey = String($('#cig_custom_connection_key').val() || '');
+    if (validation.connection.credentialRef && enteredKey) settings.custom_connection_keys[validation.connection.credentialRef] = enteredKey;
+    if (!validation.connection.credentialRef && draft.id) delete settings.custom_connection_keys[customCredentialRef(draft.id)];
+    settings.custom_connection_editor_id = validation.connection.id;
+    customConnectionDraftId = validation.connection.id;
+    renderProviderDropdown();
+    $('#cig_provider').val(settings.provider);
+    renderCustomConnectionEditor();
+    saveSettingsDebounced();
+    return validation.connection;
+}
+
+async function testCustomConnectionFromEditor() {
+    let connection;
+    try { connection = saveCustomConnectionFromEditor(); }
+    catch (error) { toastr.warning(error.message, 'Context Image Generation'); return; }
+    const settings = extension_settings[extensionName];
+    const control = $('#cig_custom_connection_test');
+    setBusyState(control, true, { busyTitle: 'Testing connection…' });
+    try {
+        const store = getCustomConnectionStore(settings);
+        const result = await discoverCustomConnectionModels({
+            connection,
+            authPreset: connection.credentialRef ? (connection.protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none',
+            credential: getCustomConnectionKey(settings, connection),
+            existingEvidence: store.evidence[connection.id],
+            savedModels: store.models[connection.id] || [],
+            fetchImpl: fetch,
+        });
+        setProviderModelRecords(settings, connection.id, result.models);
+        setProviderDiscoveryState(settings, connection.id, result);
+        if (!result.warning || result.warning.code === 'DISCOVERY_EMPTY') {
+            settings.provider = connection.id;
+            settings.model = result.models[0]?.id || settings.model;
+            toastr.success(getCustomCatalogRefreshMessage(result.models), 'Context Image Generation');
+        } else toastr.warning(result.warning.userMessage, 'Context Image Generation');
+        renderProviderDropdown();
+        $('#cig_provider').val(settings.provider);
+        refreshManagedModels();
+        renderCustomConnectionEditor();
+        saveSettingsDebounced();
+    } finally {
+        setBusyState(control, false);
+    }
+}
+
+async function deleteSelectedCustomConnection() {
+    const settings = extension_settings[extensionName];
+    const connection = selectedCustomConnection(settings);
+    if (!connection || !getCustomConnectionStore(settings).connections[connection.id]) return;
+    if (!await confirmDestructiveAction('Delete connection? Its saved models, route evidence, and saved key will be removed.', 'Delete connection')) return;
+    cancelModelDiscovery(connection.id);
+    const result = removeCustomConnectionFromSettings(settings, connection.id);
+    if (!result.removed) return;
+    Object.assign(settings, result.settings);
+    customConnectionDraftId = '';
+    clearSetupRuntimeIssue();
+    renderProviderDropdown();
+    $('#cig_provider').val(settings.provider);
+    updateModelDropdown();
+    toggleProviderSpecificSettings();
+    renderModelManager();
+    renderCustomConnectionEditor();
+    saveSettingsDebounced();
+    toastr.success('Custom connection deleted.', 'Context Image Generation');
+}
+
 function renderProviderDropdown() {
     const $providerSelect = $('#cig_provider').empty();
-    for (const provider of projectProviderOptions()) {
+    const customConnections = Object.values(getCustomConnectionStore(extension_settings[extensionName] || {}).connections);
+    for (const provider of projectProviderOptions({ customConnections })) {
         const unavailableLabel = provider.available === false
             ? ` — ${String(provider.unavailableReason || 'Unavailable until server adapter support').replace(/\s+/g, ' ').slice(0, 96)}`
             : '';
@@ -492,13 +751,15 @@ function updateModelDropdown() {
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
     const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const ui = projectProviderUi(providerId, settings.model, {
+    const ui = projectSelectedProviderUi(settings, providerId, settings.model, {
         localEntries,
         discoveryEvidence: discoveryState.evidence,
         discoveryWarning: discoveryState.warning,
     });
     if (!ui) return;
-    settings.model = getModelFallback(providerId, settings.model, localEntries);
+    settings.model = getCustomConnection(settings, providerId)
+        ? ui.selectedModelId || settings.model || ''
+        : getModelFallback(providerId, settings.model, localEntries);
     const $modelSelect = $('#cig_model').empty();
     const query = String($('#cig_model_search').val() || '').trim().toLowerCase();
     const filteredModels = query
@@ -558,7 +819,7 @@ function activateSettingsTab(tabId, { persist = true } = {}) {
 
 function selectInitialSettingsTab(settings) {
     const providerId = settings.provider || 'makersuite';
-    const providerUi = projectProviderUi(providerId, settings.model, {
+    const providerUi = projectSelectedProviderUi(settings, providerId, settings.model, {
         localEntries: getProviderModelEntries(settings, providerId),
     });
     const readiness = deriveSetupReadiness({
@@ -627,7 +888,6 @@ async function loadSettings() {
     updateModelDropdown();
     $('#cig_model').val(extension_settings[extensionName].model);
     $('#cig_provider_api_key').val(getProviderApiKey(cigSettings, cigSettings.provider || 'makersuite'));
-    $('#cig_linkapi_use_legacy_routing').prop('checked', cigSettings.linkapi_use_legacy_routing);
     $('#cig_aspect_ratio').val(extension_settings[extensionName].aspect_ratio);
     $('#cig_image_size').val(extension_settings[extensionName].image_size);
     $('#cig_thinking_level').val(extension_settings[extensionName].thinking_level);
@@ -647,18 +907,18 @@ async function loadSettings() {
     renderSetupRuntimeIssue();
     renderGallery();
     renderAppearanceList();
+    renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
 
 function toggleProviderSpecificSettings() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const ui = projectProviderUi(providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
+    const ui = projectSelectedProviderUi(settings, providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
     if (!ui) return;
     const credential = ui.credential;
     $('#cig_provider_key_container').toggle(credential.mode === 'extension-key');
-    $('#cig_provider_advanced_container').toggle(ui.showsLegacyRecovery || Boolean(credential.advancedHelp));
-    $('#cig_linkapi_legacy_routing_container').toggle(ui.showsLegacyRecovery);
+    $('#cig_provider_advanced_container').toggle(Boolean(credential.advancedHelp));
     $('#cig_provider_api_key_label').text(credential.label);
     $('#cig_provider_api_key').attr('placeholder', credential.placeholder);
     $('#cig_provider_api_key').val(getProviderApiKey(settings, settings.provider));
@@ -672,7 +932,7 @@ function renderModelManager() {
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
     const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const ui = projectProviderUi(providerId, settings.model, {
+    const ui = projectSelectedProviderUi(settings, providerId, settings.model, {
         localEntries,
         discoveryEvidence: discoveryState.evidence,
         discoveryWarning: discoveryState.warning,
@@ -686,7 +946,8 @@ function renderModelManager() {
     }
     $list.val(settings.model);
     $('#cig_managed_model_id').val(settings.model || '');
-    const provider = getProviderDefinition(providerId);
+    const customConnection = getCustomConnection(settings, providerId);
+    const provider = getProviderDefinition(providerId) || (customConnection ? { id: providerId, transports: customConnection.protocol === 'gemini-compatible' ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } } : { openAiImages: { baseUrl: customConnection.baseUrl } }, models: [] } : undefined);
     const selectedEntry = localEntries.find((entry) => entry.id === settings.model);
     const $transport = $('#cig_managed_model_transport').empty();
     for (const transport of Object.keys(provider?.transports || {})) {
@@ -716,7 +977,8 @@ function refreshManagedModels() {
 function saveManagedModel(operation) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const provider = getProviderDefinition(providerId);
+    const customConnection = getCustomConnection(settings, providerId);
+    const provider = getProviderDefinition(providerId) || (customConnection ? { id: providerId, transports: customConnection.protocol === 'gemini-compatible' ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } } : { openAiImages: { baseUrl: customConnection.baseUrl } }, models: [] } : undefined);
     const id = $('#cig_managed_model_id').val().trim();
     if (!id) {
         toastr.warning('Enter an actual model ID.', 'Context Image Generation');
@@ -747,7 +1009,10 @@ function removeManagedModel() {
         return;
     }
     setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type: 'remove', id: selectedId }, providerId));
-    settings.model = getModelFallback(providerId, settings.model, getProviderModelEntries(settings, providerId));
+    const customUi = projectSelectedProviderUi(settings, providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
+    settings.model = getCustomConnection(settings, providerId)
+        ? customUi?.selectedModelId || ''
+        : getModelFallback(providerId, settings.model, getProviderModelEntries(settings, providerId));
     clearSetupRuntimeIssue();
     refreshManagedModels();
     saveSettingsDebounced();
@@ -755,7 +1020,15 @@ function removeManagedModel() {
 function toggleImageSizeVisibility() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const ui = projectProviderControls(providerId, settings.model, settings.image_size, { localEntries: getProviderModelEntries(settings, providerId) });
+    const connection = getCustomConnection(settings, providerId);
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const ui = projectProviderControls(providerId, settings.model, settings.image_size, {
+        localEntries: getProviderModelEntries(settings, providerId),
+        connection,
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+        credentialConfigured: Boolean(getCustomConnectionKey(settings, connection)),
+    });
     if (!ui) return;
     const imageSizePreference = projectImageSizePreference(settings.image_size, ui.imageSizeOptions);
     $('#cig_image_size_container').toggle(imageSizePreference.showControl);
@@ -876,11 +1149,51 @@ function cloneSnapshot(value) {
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
 }
 
-function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings') {
+async function confirmCustomConnectionRoute(settings, invocation) {
+    const connection = getCustomConnection(settings, settings.provider);
+    if (!connection) return { accepted: false, confirmedRevision: '' };
+    const store = getCustomConnectionStore(settings);
+    const revision = connectionRevision(connection);
+    const evidence = store.evidence[connection.id];
+    if (evidence?.revision !== revision || !['configured', 'verified'].includes(evidence?.state)) {
+        throw new Error('Test and fetch models before generating through this custom connection.');
+    }
+    if (evidence.state === 'verified') return { accepted: true, confirmedRevision: revision };
+    if (!['settings', 'wand', 'slash'].includes(invocation)) {
+        throw new Error('Configured custom connections cannot run from automation, swipe, or background generation.');
+    }
+    const projection = projectCustomConnectionEditor(connection, {
+        credentialConfigured: Boolean(getCustomConnectionKey(settings, connection)),
+        evidence,
+    });
+    const confirmation = projectCustomFirstRequestConfirmation(connection);
+    const popup = new Popup(confirmation.message, POPUP_TYPE.CONFIRM, null, {
+        okButton: 'Test with one generation',
+        cancelButton: 'Cancel',
+        animation: 'fast',
+    });
+    const accepted = (await popup.show()) === POPUP_RESULT.AFFIRMATIVE;
+    if (!accepted) throw new Error('Custom connection generation was cancelled before any request.');
+    return { accepted: true, confirmedRevision: revision };
+}
+
+function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const modelId = settings.model;
-    let providerRoute = resolveProviderRoute(providerId, modelId);
+    const customConnection = getCustomConnection(settings, providerId);
+    let providerRoute = customConnection ? {
+        provider: {
+            id: customConnection.id,
+            label: customConnection.label,
+            credentialKey: customConnection.credentialRef || undefined,
+            transports: customConnection.protocol === 'gemini-compatible'
+                ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } }
+                : { openAiImages: { baseUrl: `${customConnection.baseUrl}${customConnection.generationPath}` } },
+        },
+        model: getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId),
+        transport: customConnection.protocol === 'gemini-compatible' ? 'sillyTavernGeminiProxy' : 'openAiImages',
+    } : resolveProviderRoute(providerId, modelId);
     const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
     if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
         providerRoute = { ...providerRoute, model: { id: modelId, ...cloneSnapshot(localModel) }, transport: localModel.transportId || localModel.transport };
@@ -892,10 +1205,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     if (providerRoute.provider.available === false || providerRoute.provider.posture === 'future-server') {
         throw new Error(`${providerRoute.provider.label || providerId} is unavailable until a server adapter is available.`);
     }
-    const manualLegacyRecovery = invocation !== 'automation' && invocation !== 'swipe' && isManualLegacyLinkApiRecovery(providerId, settings);
-    const transportId = manualLegacyRecovery
-        ? 'linkapi-legacy-recovery'
-        : ({ openAiImages: 'openai-images', sillyTavernGeminiProxy: 'sillytavern-gemini-proxy', 'host-chat-image': 'host-chat-image' }[legacyTransport]);
+    const transportId = resolveAdapterId(legacyTransport);
     if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
     const preflightRoute = { providerId, modelId, transportId: legacyTransport };
@@ -939,20 +1249,28 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: 'character' });
         referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: 'user' });
     }
+    const connectionId = routeModel.connectionId || `${providerId}:default`;
+    const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
         id: `generation:${getGenerationKey(prompt, messageId, target)}`,
         idempotencyKey: getGenerationKey(prompt, messageId, target),
         invocation,
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
-        resolved: { connectionId: `${providerId}:default`, providerId, modelId, transportId, modelDefinition: routeModel, ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), ...(manualLegacyRecovery ? { legacyKind: legacyTransport === 'openAiImages' ? 'openai-images' : 'gemini-proxy' } : {}), capabilities: routeModel.capabilities || routeModel },
+        resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         references: referenceCandidates,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
-        policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted },
+        policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
     };
-    return Object.freeze({ planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot, apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot, referenceAssets: appearanceMaterial.assets, referenceCandidates });
+    return Object.freeze({
+        planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot,
+        apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot,
+        referenceAssets: appearanceMaterial.assets, referenceCandidates,
+        customConnection: customConnection ? cloneSnapshot(customConnection) : null,
+        confirmedRevision: routeConfirmation.confirmedRevision || '',
+    });
 }
 
 async function materializeSnapshotAssets(snapshot) {
@@ -988,14 +1306,6 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     return [{ role: 'user', content: contentParts }];
 }
 
-// Retained as a named compatibility marker; recovery is now resolved only by
-// the explicit schema-2 linkapi-legacy-recovery transport adapter.
-async function generateLegacyLinkApiImage(settings, messages) {
-    void settings;
-    void messages;
-    throw new Error('Legacy LinkAPI recovery is available only through the explicit plan dispatcher.');
-}
-
 function getStableSpeakerIdentityId(sender) {
     const context = getContext();
     if (String(sender || '').startsWith('{{user}}')) return user_avatar ? `user:${user_avatar}` : 'user:display';
@@ -1024,7 +1334,8 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
     let snapshot;
     try {
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
-        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation);
+        const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
+        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
         const assets = await materializeSnapshotAssets(snapshot);
         const availableReferences = snapshot.referenceCandidates.filter((reference) => !reference.assetId || assets[reference.assetId]);
         const missingReferenceOmissions = snapshot.referenceCandidates.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
@@ -1034,7 +1345,11 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         // Retain only the redacted Advanced projection; prompt/context/assets
         // must not survive the dispatch lifecycle in extension state.
         lastGenerationPlanInspection = inspectGenerationPlan(dispatchedPlan);
-        const connection = {
+        const connection = snapshot.customConnection ? {
+            ...snapshot.customConnection,
+            providerId: dispatchedPlan.resolved.providerId,
+            confirmedRevision: snapshot.confirmedRevision,
+        } : {
             id: dispatchedPlan.resolved.connectionId,
             providerId: dispatchedPlan.resolved.providerId,
             kind: snapshot.providerRoute?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
@@ -1054,6 +1369,37 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                     mapAspectRatioToSize,
                 },
             });
+            if (snapshot.customConnection) {
+                const currentSettings = extension_settings[extensionName];
+                const currentStore = getCustomConnectionStore(currentSettings);
+                const promoted = promoteCustomConnectionEvidence({
+                    connection: snapshot.customConnection,
+                    evidence: currentStore.evidence[snapshot.customConnection.id],
+                    decodedResult: generated,
+                });
+                const promotedModel = promoteCustomModelEvidence({
+                    connection: snapshot.customConnection,
+                    modelId: dispatchedPlan.resolved.modelId,
+                    decodedResult: generated,
+                });
+                if (promoted?.state === 'verified'
+                    && promoted.revision === connectionRevision(snapshot.customConnection)
+                    && promotedModel?.revision === promoted.revision) {
+                    currentSettings.custom_connections = migrateCustomConnections({
+                        ...currentStore,
+                        evidence: { ...currentStore.evidence, [snapshot.customConnection.id]: promoted },
+                        modelEvidence: {
+                            ...currentStore.modelEvidence,
+                            [snapshot.customConnection.id]: {
+                                ...currentStore.modelEvidence?.[snapshot.customConnection.id],
+                                [dispatchedPlan.resolved.modelId]: promotedModel,
+                            },
+                        },
+                    });
+                    saveSettingsDebounced();
+                    renderCustomConnectionEditor();
+                }
+            }
             if (typeof finalize !== 'function') return generated;
             const persisted = await finalize(generated, signal);
             return persisted?.persistence?.stale ? { ...persisted, stale: true } : persisted;
@@ -1905,7 +2251,7 @@ jQuery(async () => {
         const settings = extension_settings[extensionName];
         const provider = settings.provider || 'makersuite';
         cancelModelDiscovery(provider);
-        if (projectProviderUi(provider, settings.model)?.requiresApiKey) {
+        if (projectSelectedProviderUi(settings, provider, settings.model)?.requiresApiKey) {
             setProviderApiKey(settings, provider, $(this).val());
             clearSetupRuntimeIssue();
             renderSetupReadiness(settings);
@@ -1913,16 +2259,44 @@ jQuery(async () => {
         }
     });
 
-    $('#cig_linkapi_use_legacy_routing').on('change', function () {
-        extension_settings[extensionName].linkapi_use_legacy_routing = $(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
     $('#cig_cancel_generation').on('click', function () {
         if (currentGenerationRunId) generationCoordinator.cancel(currentGenerationRunId);
     });
     $('#cig_show_preflight').on('click', renderAdvancedPlanInspector);
     $('#cig_export_diagnostics').on('click', exportDiagnostics);
+
+    $('#cig_custom_connection_list').on('change', function () {
+        const settings = extension_settings[extensionName];
+        settings.custom_connection_editor_id = $(this).val() || '';
+        customConnectionDraftId = settings.custom_connection_editor_id;
+        renderCustomConnectionEditor();
+    });
+    $('#cig_custom_connection_add').on('click', function () {
+        const settings = extension_settings[extensionName];
+        customConnectionDraftId = createCustomConnectionId();
+        settings.custom_connection_editor_id = '';
+        renderCustomConnectionEditor();
+    });
+    $('#cig_custom_connection_auth').on('change', function () {
+        const enabled = $(this).val() !== 'none';
+        $('#cig_custom_connection_key').prop('disabled', !enabled);
+    });
+    $('#cig_custom_connection_protocol').on('change', function () {
+        const gemini = $(this).val() === 'gemini-compatible';
+        $('#cig_custom_connection_generation_path').toggle(!gemini);
+        $('#cig_custom_connection_generation_path_label').toggle(!gemini);
+        if ($('#cig_custom_connection_auth').val() !== 'none') $('#cig_custom_connection_auth').val(gemini ? 'gemini-api-key' : 'bearer');
+    });
+    $('#cig_custom_connection_save').on('click', function () {
+        try {
+            saveCustomConnectionFromEditor();
+            toastr.success('Custom connection saved. No network request was made.', 'Context Image Generation');
+        } catch (error) {
+            toastr.warning(error.message, 'Context Image Generation');
+        }
+    });
+    $('#cig_custom_connection_test').on('click', testCustomConnectionFromEditor);
+    $('#cig_custom_connection_delete').on('click', deleteSelectedCustomConnection);
 
     $('#cig_model_refresh').on('click', fetchManagedProviderModels);
     $('#cig_model_search').on('input', updateModelDropdown);

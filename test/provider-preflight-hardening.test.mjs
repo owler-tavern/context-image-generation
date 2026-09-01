@@ -5,6 +5,7 @@ import { createGenerationPlan } from '../lib/generation-plan.js';
 import { createTransportRegistry, dispatchProviderRoute } from '../lib/providers/dispatch.js';
 import { migrateProviderSettings } from '../lib/providers/settings-migration.js';
 import { normalizeProviderError } from '../lib/providers/errors.js';
+import { getModelDefinition } from '../lib/providers/registry.js';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
 
@@ -83,20 +84,20 @@ test('unknown manual and fetched image models require explicit experimental pref
     }
 });
 
-test('explicit experimental preflight permits minimal text-only dispatch', async () => {
+test('explicit experimental preflight does not substitute for verified route evidence', async () => {
     const calls = [];
-    const result = await dispatchProviderRoute({
+    await assert.rejects(dispatchProviderRoute({
         plan: experimentalPlan({ source: 'fetched', preflightAccepted: true }),
         connection: { id: 'fixture:default', providerId: 'fixture', enabled: true },
         signal: new AbortController().signal,
         transportContext: { transports: transport(calls) },
-    });
-    assert.equal(result.imageData, PNG);
-    assert.deepEqual(calls, ['request']);
+    }), /route evidence|unverified/i);
+    assert.deepEqual(calls, []);
 });
 
 test('curated built-in image-generation models remain dispatchable without experimental preflight', async () => {
     let called = false;
+    const model = getModelDefinition('openai', 'gpt-image-1');
     const result = await dispatchProviderRoute({
         plan: createGenerationPlan({
             id: 'preflight:built-in',
@@ -107,6 +108,8 @@ test('curated built-in image-generation models remain dispatchable without exper
                 modelId: 'gpt-image-1',
                 transportId: 'openai-images',
                 endpoint: 'https://api.openai.com/v1',
+                modelDefinition: model,
+                routeEvidence: model.routeEvidence,
             },
             prompt: { sourceMessage: 'a quiet forest' },
         }),

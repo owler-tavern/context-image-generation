@@ -91,8 +91,8 @@ test('keeps native SillyTavern providers out of adapter dispatch', () => {
     assert.equal(requiresAdapterRoute(resolveProviderRoute('linkapi', 'gemini-2.5-flash-image')), true);
 });
 
-test('retains dynamic LinkAPI models and validates image size metadata', () => {
-    for (const modelId of ['gpt-image-1', 'dall-e-3']) assert.equal(getModelFallback('linkapi', modelId), modelId);
+test('does not treat unknown LinkAPI catalog IDs as route-safe fallbacks and validates image size metadata', () => {
+    for (const modelId of ['gpt-image-1', 'dall-e-3']) assert.notEqual(getModelFallback('linkapi', modelId), modelId);
     const pro = projectProviderControls('linkapi', 'gemini-3-pro-image-preview', '512');
     assert.equal(pro.imageSize, '');
     assert.deepEqual(pro.imageSizeOptions[0], { value: '1K', label: '1K' });

@@ -41,6 +41,53 @@ test('creates an immutable plan snapshot and trims only to a known positive refe
     assert.throws(() => { plan.prompt.focusText = 'changed'; }, TypeError);
 });
 
+test('captures an immutable complete route snapshot', () => {
+    const modelDefinition = {
+        id: 'image-model', providerId: 'fixture', connectionId: 'fixture:primary', transportId: 'openAiImages', endpointClass: 'fixture-openai-images',
+        source: { kind: 'manual' },
+        routeEvidence: { state: 'verified', source: 'official-docs', observedAt: '2026-08-30T00:00:00.000Z', protocol: 'openai-images', requestShapeRevision: 'openai-images-v1' },
+    };
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'route-snapshot',
+        resolved: {
+            connectionId: 'fixture:primary', providerId: 'fixture', modelId: 'image-model', transportId: 'openAiImages',
+            endpoint: 'https://fixture.example/v1', endpointClass: 'fixture-openai-images', modelDefinition,
+        },
+    });
+
+    modelDefinition.connectionId = 'fixture:mutated';
+    modelDefinition.endpointClass = 'mutated';
+    modelDefinition.routeEvidence.state = 'unverified';
+    assert.equal(plan.resolved.connectionId, 'fixture:primary');
+    assert.equal(plan.resolved.endpoint, 'https://fixture.example/v1');
+    assert.equal(plan.resolved.endpointClass, 'fixture-openai-images');
+    assert.equal(plan.resolved.modelDefinition.connectionId, 'fixture:primary');
+    assert.equal(plan.resolved.modelDefinition.endpointClass, 'fixture-openai-images');
+    assert.equal(plan.resolved.modelDefinition.routeEvidence.state, 'verified');
+});
+
+test('captures route confirmation as a generation policy decision', () => {
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'configured-route-confirmation',
+        policy: { routeConfirmationAccepted: true },
+    });
+    assert.equal(plan.policy.routeConfirmationAccepted, true);
+});
+
+test('copies direct resolved route evidence into the immutable route snapshot', () => {
+    const routeEvidence = { state: 'configured', source: 'user-configured-protocol', observedAt: '2026-08-30T00:00:00.000Z', protocol: 'openai-images', requestShapeRevision: 'openai-images-v1' };
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'direct-route-evidence',
+        resolved: { connectionId: 'fixture:primary', providerId: 'fixture', modelId: 'image-model', transportId: 'openAiImages', routeEvidence },
+    });
+    routeEvidence.state = 'unverified';
+    assert.equal(plan.resolved.routeEvidence.state, 'configured');
+    assert.equal(Object.isFrozen(plan.resolved.routeEvidence), true);
+});
+
 test('unknown caps admit no references and preserve omission reasons', () => {
     const plan = createGenerationPlan({
         ...baseInput,

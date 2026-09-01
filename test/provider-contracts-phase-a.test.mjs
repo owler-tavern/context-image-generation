@@ -164,6 +164,26 @@ test('sanitizes prior raw model discovery state into an allowlisted idempotent r
     assert.deepEqual(migrateProviderSettings(migrated).model_discovery, migrated.model_discovery);
 });
 
+test('keeps bounded discovery counts while removing the obsolete LinkAPI recovery flag', () => {
+    const migrated = migrateProviderSettings({
+        linkapi_use_legacy_routing: true,
+        model_discovery: {
+            linkapi: {
+                evidence: {
+                    kind: 'openai-list', source: 'provider /models endpoint', observedAt: '2026-08-31T00:00:00.000Z', retryCount: 0,
+                    returnedCount: 3, acceptedCount: 2, unresolvedCount: 0, rejectedCount: 1, rawCatalog: [{ id: 'gpt-image-2-c' }],
+                },
+            },
+        },
+    });
+
+    assert.equal(Object.hasOwn(migrated, 'linkapi_use_legacy_routing'), false);
+    assert.deepEqual(migrated.model_discovery.linkapi.evidence, {
+        kind: 'openai-list', source: 'provider /models endpoint', observedAt: '2026-08-31T00:00:00.000Z', retryCount: 0,
+        returnedCount: 3, acceptedCount: 2, unresolvedCount: 0, rejectedCount: 1,
+    });
+});
+
 test('retains fetched discovery timestamp and evidence source on structured records', () => {
     const records = normalizeModelRecords('fixture', [{
         id: 'fetched-image', source: 'fetched', discoveredAt: '2026-08-24T01:02:03.000Z', sourceLabel: 'fixture /models',
@@ -244,6 +264,6 @@ test('loads the additive provider migration at the existing settings boundary', 
     assert.match(source, /migrateProviderSettings/);
     assert.match(source, /migratedProviderSettings\s*=\s*migrateProviderSettings\(existingProviderSettings\)/);
     assert.match(source, /settings\.model_records/);
-    assert.match(source, /mergeFetchedModelRecords/);
+    assert.match(source, /mergeDiscoveryModelRecords/);
     assert.match(source, /setProviderModelRecords/);
 });

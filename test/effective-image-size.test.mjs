@@ -15,6 +15,14 @@ const unsupportedSizes = {
     imageGeneration: { state: 'supported', source: 'curated-fixture', confidence: 'high' },
     sizes: { state: 'unsupported', source: 'curated-fixture', confidence: 'high' },
 };
+const VERIFIED_OPENAI_ROUTE = {
+    state: 'verified', source: 'built-in', observedAt: '2026-08-31T00:00:00.000Z',
+    protocol: 'openai-images', requestShapeRevision: 'openai-images-v1',
+};
+const VERIFIED_GEMINI_ROUTE = {
+    state: 'verified', source: 'built-in', observedAt: '2026-08-31T00:00:00.000Z',
+    protocol: 'gemini-compatible', requestShapeRevision: 'st-gemini-proxy-v1',
+};
 
 function planFor(capabilities, transportId = 'host-chat-image') {
     return createGenerationPlan({
@@ -100,16 +108,16 @@ test('host and OpenAI transports omit an unsupported saved size from request pay
     }).size, undefined);
 });
 
-test('schema-2 LinkAPI gpt-image and dall-e plans derive their OpenAI Images size from aspect ratio', async () => {
+test('schema-2 LinkAPI curated OpenAI Images plan derives its size from aspect ratio', async () => {
     const calls = [];
-    for (const modelId of ['gpt-image-1', 'dall-e-3']) {
+    for (const modelId of ['gpt-image-2-c']) {
         const plan = indexStylePlan({
             providerId: 'linkapi',
             modelId,
             transport: 'openAiImages',
             transportId: 'openai-images',
             endpoint: 'https://linkapi.ai/v1',
-            modelDefinition: { supportsSize: true },
+            modelDefinition: { supportsSize: true, routeEvidence: VERIFIED_OPENAI_ROUTE },
         });
         assert.equal(plan.options.imageSize, '1536x1024');
         await dispatchProviderRoute({
@@ -119,7 +127,7 @@ test('schema-2 LinkAPI gpt-image and dall-e plans derive their OpenAI Images siz
             transportContext: { requestOpenAiImages: async (request) => { calls.push(request); return { imageData: PNG, mimeType: 'image/png' }; } },
         });
     }
-    assert.deepEqual(calls.map((request) => request.size), ['1536x1024', '1536x1024']);
+    assert.deepEqual(calls.map((request) => request.size), ['1536x1024']);
 });
 
 test('schema-2 Gemini omission does not replace a saved discrete 4K preference', async () => {
@@ -128,7 +136,7 @@ test('schema-2 Gemini omission does not replace a saved discrete 4K preference',
         modelId: 'google/gemini-2.5-flash-image-preview',
         transport: 'host-chat-image',
         transportId: 'host-chat-image',
-        modelDefinition: { capabilities: unsupportedSizes },
+        modelDefinition: { capabilities: unsupportedSizes, routeEvidence: VERIFIED_GEMINI_ROUTE },
     });
     const requests = [];
     await dispatchProviderRoute({

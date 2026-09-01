@@ -6,7 +6,13 @@ import { decodeGenerationArtifact } from '../lib/providers/artifact-decoder.js';
 import { downloadImageData } from '../lib/providers/safe-image-download.js';
 
 const plan = (transportId = 'openai-images') => createGenerationPlan({
-    id: 'residual', invocation: 'wand', resolved: { providerId: 'fixture', modelId: 'image-1', transportId, endpoint: 'https://fixture.example/v1' },
+    id: 'residual', invocation: 'wand', resolved: {
+        providerId: 'fixture', modelId: 'image-1', transportId, endpoint: 'https://fixture.example/v1',
+        routeEvidence: {
+            state: 'verified', source: 'official-docs', observedAt: '2026-08-31T00:00:00.000Z',
+            protocol: 'openai-images', requestShapeRevision: 'openai-images-v1',
+        },
+    },
     prompt: { sourceMessage: 'scene' },
 });
 

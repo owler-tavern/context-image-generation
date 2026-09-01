@@ -16,3 +16,10 @@ test('runtime dispatch does not reference a removed SillyTavern request callback
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.doesNotMatch(index, /\brequestSillyTavernImage\b/u);
 });
+
+test('runtime snapshots resolve adapter IDs through the shared route contract', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const snapshot = index.slice(index.indexOf('function captureGenerationSnapshot'), index.indexOf('async function materializeSnapshotAssets'));
+    assert.match(snapshot, /resolveAdapterId\(legacyTransport\)/);
+    assert.doesNotMatch(snapshot, /openAiImages:\s*'openai-images'/);
+});

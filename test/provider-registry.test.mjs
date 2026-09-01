@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
-import { PROVIDERS, getModelDefinition, getProviderDefinition, getReferenceImageCapability, resolveProviderRoute, resolveTransport } from '../lib/providers/registry.js';
+import { PROVIDERS, getModelDefinition, getNormalizedProviderDefinition, getProviderDefinition, getReferenceImageCapability, resolveAdapterId, resolveProviderRoute, resolveTransport } from '../lib/providers/registry.js';
 import { projectProviderUi } from '../lib/providers/ui-projection.js';
 
 test('routes LinkAPI Gemini and OpenAI image models by model contract', () => {
@@ -56,6 +56,30 @@ test('projects reference and size controls from model capabilities', () => {
     assert.equal(flash2.supportsThinking, true);
 });
 
+test('resolves legacy transport names through one adapter contract', () => {
+    assert.equal(resolveAdapterId('openAiImages'), 'openai-images');
+    assert.equal(resolveAdapterId('sillyTavernGeminiProxy'), 'sillytavern-gemini-proxy');
+    assert.equal(resolveAdapterId('missing-transport'), null);
+});
+
+test('normalizes built-in LinkAPI models with verified route evidence', () => {
+    const provider = getNormalizedProviderDefinition('linkapi');
+    for (const model of provider.builtInModels) {
+        assert.equal(model.routeEvidence.state, 'verified', model.id);
+        assert.equal(typeof model.routeEvidence.protocol, 'string', model.id);
+        assert.equal(typeof model.routeEvidence.requestShapeRevision, 'string', model.id);
+    }
+});
+
+test('normalizes Z.AI and ArliAI built-ins with their explicit native route evidence', () => {
+    const zai = getNormalizedProviderDefinition('zai');
+    const arliai = getNormalizedProviderDefinition('arliai');
+    assert.equal(zai.builtInModels.find((model) => model.id === 'glm-image').routeEvidence.state, 'verified');
+    assert.equal(zai.builtInModels.find((model) => model.id === 'glm-image').routeEvidence.protocol, 'zai-native');
+    assert.equal(arliai.builtInModels.find((model) => model.id === 'stable-diffusion-xl').routeEvidence.state, 'verified');
+    assert.equal(arliai.builtInModels.find((model) => model.id === 'stable-diffusion-xl').routeEvidence.protocol, 'arliai-native');
+});
+
 test('preserves Gemini reference caps through Google AI Studio and LinkAPI proxy routes', () => {
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-2.5-flash-image'), { maxCount: 3 });
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3-pro-image-preview'), { maxCount: 14 });
@@ -91,11 +115,9 @@ test('resolves a declarative OpenAI Images fixture without a provider-name branc
     assert.doesNotMatch(generation, /selectedProvider === 'tokenreply'/);
 });
 
-test('gives dynamic LinkAPI gpt-image and dall-e models explicit image capabilities', () => {
+test('does not turn unlisted LinkAPI catalog IDs into curated models', () => {
     for (const modelId of ['gpt-image-1', 'dall-e-3']) {
         const model = getModelDefinition('linkapi', modelId);
-        assert.equal(model.transport, 'openAiImages', modelId);
-        assert.equal(model.supportsSize, true, modelId);
-        assert.equal(model.supportsReferenceImages, false, modelId);
+        assert.equal(model, undefined, modelId);
     }
 });

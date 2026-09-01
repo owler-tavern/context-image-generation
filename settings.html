@@ -15,7 +15,44 @@
                 <small id="cig_setup_status" class="cig-setup-status" role="status" aria-live="polite"></small>
                 <small id="cig_setup_issue" class="cig-setup-issue" role="status" aria-live="polite" style="display: none;"></small>
                 <details id="cig_advanced_setup" class="cig_advanced_setup" style="margin-top: 5px;"><summary>Advanced setup</summary>
-                    <div id="cig_provider_advanced_container" class="flex-container flexFlowColumn" style="display: none;"><small id="cig_provider_advanced_info" style="display: none; opacity: 0.8;"></small><label id="cig_linkapi_legacy_routing_container" class="checkbox_label" title="Manually use the pre-adapter LinkAPI request path for recovery. This is never used automatically." style="display: none;"><input type="checkbox" id="cig_linkapi_use_legacy_routing" class="cig-setting" /><span>Use legacy LinkAPI routing</span></label></div>
+                    <div id="cig_provider_advanced_container" class="flex-container flexFlowColumn" style="display: none;"><small id="cig_provider_advanced_info" style="display: none; opacity: 0.8;"></small></div>
+                    <section id="cig_custom_connection_editor" class="cig-custom-connection-editor" aria-labelledby="cig_custom_connection_heading">
+                        <h3 id="cig_custom_connection_heading">Custom image connections</h3>
+                        <small>Add a validated OpenAI Images or Gemini-compatible gateway. Saving does not contact it.</small>
+                        <div class="cig-custom-connection-picker">
+                            <label for="cig_custom_connection_list">Saved connection</label>
+                            <select id="cig_custom_connection_list" class="text_pole"></select>
+                            <input id="cig_custom_connection_add" class="menu_button" type="button" value="New connection" />
+                        </div>
+                        <div class="cig-custom-connection-fields">
+                            <label for="cig_custom_connection_label">Label</label>
+                            <input id="cig_custom_connection_label" class="text_pole" type="text" maxlength="80" autocomplete="off" />
+                            <label for="cig_custom_connection_protocol">Protocol</label>
+                            <select id="cig_custom_connection_protocol" class="text_pole"><option value="openai-images">OpenAI Images</option><option value="gemini-compatible">Gemini-compatible</option></select>
+                            <label for="cig_custom_connection_base_url">Gateway origin</label>
+                            <input id="cig_custom_connection_base_url" class="text_pole" type="url" placeholder="https://gateway.example" autocomplete="off" />
+                            <label for="cig_custom_connection_models_path">Models path</label>
+                            <input id="cig_custom_connection_models_path" class="text_pole" type="text" value="/v1/models" autocomplete="off" />
+                            <label id="cig_custom_connection_generation_path_label" for="cig_custom_connection_generation_path">Generation path</label>
+                            <input id="cig_custom_connection_generation_path" class="text_pole" type="text" value="/v1/images/generations" autocomplete="off" />
+                            <label for="cig_custom_connection_auth">Authentication</label>
+                            <select id="cig_custom_connection_auth" class="text_pole"><option value="bearer">Bearer token</option><option value="gemini-api-key">Gemini/API-key proxy password</option><option value="none">No authentication</option></select>
+                            <label for="cig_custom_connection_key">API key</label>
+                            <input id="cig_custom_connection_key" class="text_pole" type="password" aria-describedby="cig_custom_connection_key_warning" autocomplete="off" placeholder="Enter API key" />
+                            <small id="cig_custom_connection_key_warning">This key is stored in browser-side SillyTavern extension settings.</small>
+                            <label class="checkbox_label"><input id="cig_custom_connection_enabled" type="checkbox" checked /><span>Enabled</span></label>
+                        </div>
+                        <div class="cig-custom-connection-actions">
+                            <input id="cig_custom_connection_save" class="menu_button" type="button" value="Save connection" />
+                            <input id="cig_custom_connection_test" class="menu_button" type="button" value="Test and fetch models" />
+                            <button id="cig_custom_connection_delete" class="menu_button" type="button" aria-label="Delete selected custom connection">Delete connection</button>
+                        </div>
+                        <small id="cig_custom_connection_status" role="status" aria-live="polite"></small>
+                        <small id="cig_custom_connection_route_summary" role="status" aria-live="polite"></small>
+                        <small id="cig_custom_connection_local_warning" class="cig-custom-connection-warning" role="status" aria-live="polite" hidden></small>
+                        <small id="cig_custom_connection_first_request_warning" class="cig-custom-connection-warning" role="status" aria-live="polite" hidden></small>
+                        <pre id="cig_custom_connection_preview" aria-label="Sanitized route preview"></pre>
+                    </section>
                     <div id="cig_model_manager" class="cig_model_manager" style="margin-top: 5px;"><h3>Manage models</h3><small>Actual model IDs are sent unchanged. Refresh merges discovered models and keeps your local entries.</small><input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Filter models" aria-label="Filter models" autocomplete="off" /><small id="cig_model_note" style="display: none; opacity: 0.8;"></small><small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small><select id="cig_managed_model_list" size="4" class="text_pole" style="width: 100%; margin-top: 5px;"></select><div class="flex-container" style="margin-top: 5px;"><input id="cig_managed_model_id" class="text_pole flex1" type="text" placeholder="Actual model ID" autocomplete="off" /><div id="cig_managed_model_transport_container" class="flex-container flexFlowColumn" style="margin-top: 5px;"><label for="cig_managed_model_transport">Route for this model</label><select id="cig_managed_model_transport" class="text_pole"></select></div></div><div id="cig_experimental_preflight" class="flex-container flexFlowColumn" style="display: none; margin-top: 5px;"><label class="checkbox_label" title="The endpoint/model is unverified and optional image features remain disabled until verified."><input type="checkbox" id="cig_experimental_preflight_checkbox" /><span>Allow experimental text-only generation</span></label><small id="cig_experimental_preflight_warning">Endpoint/model is unverified; optional features are disabled.</small></div><div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;"><input id="cig_add_model" class="menu_button" type="button" value="Add model" /><input id="cig_save_model" class="menu_button" type="button" value="Save ID" /><input id="cig_remove_model" class="menu_button" type="button" value="Remove local" /></div><small id="cig_model_discovery_note" style="display: none; opacity: 0.8;"></small></div>
                     <div class="cig_advanced_run_controls" style="margin-top: 5px;"><h3>Advanced run controls</h3><button id="cig_cancel_generation" class="menu_button" type="button" style="display: none;" disabled>Cancel current generation</button><div class="flex-container" style="margin-top: 5px; gap: 5px; flex-wrap: wrap;"><button id="cig_show_preflight" class="menu_button" type="button">Inspect last plan</button><button id="cig_export_diagnostics" class="menu_button" type="button">Export diagnostics</button></div><pre id="cig_preflight_summary" role="status" style="display: none; max-height: 240px; overflow: auto; white-space: pre-wrap; margin-top: 5px;"></pre></div>
                 </details>

@@ -31,6 +31,54 @@
     opacity: 0.72;
 }
 
+#cig_settings .cig-custom-connection-editor {
+    display: grid;
+    gap: 0.65rem;
+    padding: 0.75rem;
+    margin-top: 0.75rem;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 0.5rem;
+}
+
+#cig_settings .cig-custom-connection-editor h3 {
+    margin: 0;
+}
+
+#cig_settings .cig-custom-connection-picker,
+#cig_settings .cig-custom-connection-actions {
+    display: flex;
+    align-items: end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#cig_settings .cig-custom-connection-actions > .menu_button {
+    min-height: 44px;
+}
+
+#cig_settings .cig-custom-connection-picker select {
+    min-width: 12rem;
+    flex: 1 1 12rem;
+}
+
+#cig_settings .cig-custom-connection-fields {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.35fr) minmax(12rem, 1fr);
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+}
+
+#cig_settings #cig_custom_connection_preview {
+    max-height: 10rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+#cig_settings .cig-custom-connection-warning {
+    color: var(--warning-color, #d99b22);
+}
+
 .cig-setup-status,
 .cig-setup-issue {
     display: block;
@@ -53,6 +101,19 @@
     }
 
     #cig_model_refresh {
+        width: 100%;
+    }
+
+    #cig_settings .cig-custom-connection-fields {
+        grid-template-columns: 1fr;
+    }
+
+    #cig_settings .cig-custom-connection-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    #cig_settings .cig-custom-connection-actions > .menu_button {
         width: 100%;
     }
 }
