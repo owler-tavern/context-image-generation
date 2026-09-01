@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { executeCanonAction, CANON_OUTCOMES } from '../lib/rp/appearance-runtime.js';
+import { createAppearanceFeatureController, executeCanonAction, CANON_OUTCOMES } from '../lib/rp/appearance-runtime.js';
 
 test('production canon action orders target check, candidate build, persistence, and exact Remember outcome', async () => {
     const events = [];
@@ -28,4 +28,32 @@ test('canon orchestration never invokes an image provider tripwire', async () =>
     const providerRequest = () => { providerCalls++; throw new Error('provider request forbidden'); };
     await executeCanonAction({ action: 'use', captured: {}, baselineFingerprint: 'x', isCurrent: () => true, getFingerprint: () => 'x', buildCandidate: () => ({ revision: 'y' }), persist: async () => ({ status: 'confirmed' }), providerRequest });
     assert.equal(providerCalls, 0);
+});
+
+test('production feature controller persists the appearance before chat metadata and blocks provider endpoints', async () => {
+    const events = [];
+    const allowed = new Set(['/api/settings/save', '/api/settings/get', '/api/chats/save', '/api/chats/get', '/api/images/upload']);
+    const request = async (path) => { if (!allowed.has(path)) throw new Error(`provider request forbidden: ${path}`); events.push(path); };
+    const controller = createAppearanceFeatureController({
+        isCurrent: () => true, getFingerprint: () => 'base',
+        promoteLook: async () => { await request('/api/images/upload'); return { look: { id: 'look' } }; },
+        persistLibrary: async () => { await request('/api/settings/save'); await request('/api/settings/get'); return { status: 'confirmed' }; },
+        persistChat: async () => { await request('/api/chats/save'); await request('/api/chats/get'); return { status: 'confirmed' }; },
+    });
+    const result = await controller.remember({ captured: {}, identityId: 'character', baselineFingerprint: 'base', buildCandidate: () => ({ revision: 'chat-r2' }) });
+    assert.equal(result.status, 'confirmed');
+    assert.deepEqual(events, ['/api/images/upload', '/api/settings/save', '/api/settings/get', '/api/chats/save', '/api/chats/get']);
+    await assert.rejects(request('/api/backends/chat-completions/generate'), /provider request forbidden/);
+});
+
+test('production feature controller stops Remember across lifecycle and revision races', async () => {
+    let current = true;
+    let fingerprint = 'base';
+    let chatWrites = 0;
+    const controller = createAppearanceFeatureController({ isCurrent: () => current, getFingerprint: () => fingerprint, promoteLook: async () => { current = false; return {}; }, persistLibrary: async () => { throw new Error('must not save'); }, persistChat: async () => { chatWrites++; return { status: 'confirmed' }; } });
+    assert.equal((await controller.remember({ captured: {}, identityId: 'x', baselineFingerprint: 'base', buildCandidate: () => ({}) })).status, 'stale');
+    current = true;
+    const use = createAppearanceFeatureController({ isCurrent: () => true, getFingerprint: () => 'new', persistChat: async () => { chatWrites++; }, promoteLook: async () => {}, persistLibrary: async () => ({}) });
+    assert.equal((await use.use({ captured: {}, identityId: 'x', baselineFingerprint: 'old', buildCandidate: () => ({}) })).status, 'stale');
+    assert.equal(chatWrites, 0);
 });
