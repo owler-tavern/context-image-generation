@@ -81,6 +81,8 @@ import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutf
 import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
+import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
+import { createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 
 const extensionName = 'context-image-generation';
@@ -113,6 +115,7 @@ const defaultSettings = {
     custom_visual_instruction: '',
     system_instruction: 'You are an image generation assistant. When reference images are provided, they represent the characters in the story. Generate an illustration that depicts the scene described in the prompt while maintaining the art style and appearance of the reference characters. You are not obligated to include both characters - if the scene depicts only one character alone, illustrate them alone. When available, you can use the internet to search for reference pictures and information to improve the accuracy and quality of your generations.',
     gallery: [],
+    [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
     visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
     rp_outfits: { schema: 1, outfits: [] },
@@ -128,6 +131,9 @@ let setupRuntimeIssue = null;
 const activeImageBoundaryGenerations = new Set();
 const iterationSurfaceMounts = new Map();
 const iterationInvocations = new Set();
+let storyMemoryController = null;
+let storyMemorySurfaceMount = null;
+let pendingStoryMemoryContinuation = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -859,6 +865,66 @@ function selectInitialSettingsTab(settings) {
     activateSettingsTab(resolveInitialSettingsTab({ savedTab: settings.ui_last_settings_tab, readiness }), { persist: false });
 }
 
+function createStoryMemorySurface() {
+    const settings = extension_settings[extensionName];
+    const runtime = createStoryMemoryRuntime({
+        extensionName,
+        settings,
+        getChat: () => getContext().chat || [],
+        getChatId: () => getContext().chatId,
+        isCurrent: ({ chatId, epoch }) => String(getContext().chatId) === String(chatId) && chatLifecycleEpoch.isCurrent(epoch),
+        saveSettings,
+        fetchImpl: fetch,
+        getHeaders: getRequestHeaders,
+    });
+    const dependencies = {
+        ...runtime,
+        continuePlanner: async (request) => {
+            const captured = { chatId: request.chatId, epoch: chatLifecycleEpoch.capture() };
+            if (!String(getContext().chatId) || String(getContext().chatId) !== String(captured.chatId) || !chatLifecycleEpoch.isCurrent(captured.epoch)) {
+                throw new Error('Continue from this scene was blocked because the chat changed.');
+            }
+            pendingStoryMemoryContinuation = {
+                plan: cloneSnapshot(request.plan),
+                selectedImage: cloneSnapshot(request.plan?.selectedImage),
+                artifactId: request.artifactId,
+                artifactVersion: request.artifactVersion,
+                requestId: request.requestId,
+                chatId: captured.chatId,
+                epoch: captured.epoch,
+            };
+            return {
+                status: 'planned',
+                artifactId: request.artifactId,
+                artifactVersion: request.artifactVersion,
+                requestId: request.requestId,
+                chatId: captured.chatId,
+            };
+        },
+    };
+    storyMemoryController = createStoryMemoryController(dependencies);
+    const host = document.getElementById('cig_story_memory_surface');
+    if (!host) return;
+    storyMemorySurfaceMount?.destroy?.();
+    storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true });
+    void storyMemoryController.load({ chatId: getContext().chatId });
+}
+
+function refreshStoryMemorySurface() {
+    if (!storyMemoryController) return;
+    pendingStoryMemoryContinuation = null;
+    void storyMemoryController.load({ chatId: getContext().chatId });
+}
+
+function openStoryMemoryArtifact(messageId) {
+    activateSettingsTab('images-cast');
+    const message = getContext().chat?.[Number(messageId)];
+    const media = message?.extra?.media?.find((item) => isCigOwnedMedia(item));
+    const entry = storyMemoryController?.getState().timeline?.find((item) => item.messageId === Number(messageId) && item.url === media?.url);
+    if (entry) storyMemoryController.setSelectedArtifact(entry.id);
+    document.getElementById('cig_story_memory_surface')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+}
+
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     let settingsMigrated = false;
@@ -953,6 +1019,7 @@ async function loadSettings() {
     renderSetupRuntimeIssue();
     renderGallery();
     renderAppearanceList();
+    createStoryMemorySurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -1227,7 +1294,7 @@ async function confirmCustomConnectionRoute(settings, invocation) {
     return { accepted: true, confirmedRevision: revision };
 }
 
-function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}) {
+function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}, continuation = null) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const modelId = settings.model;
@@ -1290,8 +1357,13 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const referenceCandidates = [];
     const settingsSnapshot = cloneSnapshot(settings) || {};
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
+    const continuationIsCurrent = continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
+        && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
+    const continuationGallery = continuationIsCurrent
+        ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }, ...gallerySnapshot]
+        : gallerySnapshot;
     const appearanceIdentities = getAppearanceIdentityChoices();
-    if (capability && settingsSnapshot.use_previous_image && gallerySnapshot.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
+    if (capability && (settingsSnapshot.use_previous_image || continuationIsCurrent) && continuationGallery.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: continuationIsCurrent ? 'selected story scene' : 'previous image' });
     // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
     // the captured capability/setting snapshot below is the authority.
     if (capability && settingsSnapshot.use_avatars) {
@@ -1306,7 +1378,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     }
     const canonCapture = captureCanonForGeneration({
         library: settingsSnapshot.rp_library,
-        gallery: gallerySnapshot,
+        gallery: continuationGallery,
         chatState: chat_metadata[CHAT_CANON_KEY],
         identities: appearanceIdentities,
         references: referenceCandidates,
@@ -1356,6 +1428,10 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     // selected text wins, while the clicked message and nearby context resolve
     // cast, location, and current scene facts.
     messageContent = sceneSnapshot.prompt || messageContent;
+    if (continuationIsCurrent && continuation.plan?.facts?.length) {
+        const facts = continuation.plan.facts.map((fact) => fact?.text || fact?.value || fact?.label).filter(Boolean);
+        if (facts.length) messageContent = `${messageContent}\n\n[Still-valid story facts]\n${facts.join('; ')}`;
+    }
     const connectionId = routeModel.connectionId || `${providerId}:default`;
     const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
@@ -1378,12 +1454,13 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     };
     return Object.freeze({
         planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot,
-        apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot,
+        apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot: continuationGallery,
         referenceAssets: canonCapture.canonSnapshot.assets,
         referenceCandidates: [...canonCapture.canonSnapshot.references, ...canonCapture.references],
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
         continuityCandidates,
+        storyMemoryContinuation: continuationIsCurrent ? cloneSnapshot(continuation) : null,
     });
 }
 
@@ -1463,7 +1540,8 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
     try {
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
-        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
+        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation, pendingStoryMemoryContinuation);
+        if (snapshot.storyMemoryContinuation) pendingStoryMemoryContinuation = null;
         if (iterationRecipe && typeof iterationRecipe === 'object') {
             assertExactIterationRoute(snapshot, iterationRecipe);
             const savedReferences = Array.isArray(iterationRecipe.references) ? cloneSnapshot(iterationRecipe.references) : [];
@@ -1661,12 +1739,14 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
     }
 
     const galleryId = sourceMetadata?.galleryId || `gallery:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const galleryChatId = sourceMetadata?.chatId || getContext().chatId || null;
     settings.gallery.unshift({
         id: galleryId,
         url: url,
         prompt: prompt.substring(0, 200),
         timestamp: Date.now(),
         messageId: messageId,
+        ...(galleryChatId ? { chatId: galleryChatId } : {}),
         ...(sourceMetadata ? { sourceMetadata } : {}),
     });
 
@@ -3001,8 +3081,11 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
     const button = $('<button type="button" class="menu_button cig_iteration_improve" data-cig-iteration-open="true" data-cig-iteration-improve="true" style="min-height:44px"></button>')
         .text('Improve')
         .attr({ title: 'Improve this generated image', 'aria-label': 'Improve this generated image', 'data-message-id': String(messageId) });
+    const memoryButton = $('<button type="button" class="menu_button cig_story_memory_inline" style="min-height:44px"></button>')
+        .text('Open story memory')
+        .attr({ title: 'Open this image in visual story memory', 'aria-label': 'Open this image in visual story memory', 'data-message-id': String(messageId) });
     const host = $('<div class="cig_iteration_host" data-cig-iteration-host hidden></div>');
-    root.append(button, host);
+    root.append(button, memoryButton, host);
     const anchor = messageElement.find('.mes_img_container, .mes_media_container').last();
     if (anchor.length) anchor.after(root); else messageElement.append(root);
     button.on('click', () => {
@@ -3906,6 +3989,11 @@ jQuery(async () => {
         await deleteGalleryImage(index);
     });
 
+    $(document).on('click', '.cig_story_memory_inline', function (e) {
+        e.stopPropagation();
+        openStoryMemoryArtifact($(this).attr('data-message-id'));
+    });
+
     $(document).on('click', '.cig_appearance_stop', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
@@ -4042,6 +4130,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         destroyIterationSurfaceMounts();
+        refreshStoryMemorySurface();
         setTimeout(() => {
             injectAllMessageButtons();
             renderContinuityShelves();
@@ -4066,6 +4155,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CREATED, () => {
         destroyIterationSurfaceMounts();
+        refreshStoryMemorySurface();
         setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
     });
 
