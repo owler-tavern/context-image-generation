@@ -6,6 +6,8 @@ import {
     queueVisibleCanonPending,
     reconcileVisibleCanonPendingLink,
     resumeVisibleCanonPending,
+    splitVisibleCanonPendingByChat,
+    visibleCanonPendingKey,
 } from '../lib/rp/visible-canon-persistence.js';
 
 const pendingLink = {
@@ -22,12 +24,15 @@ const pendingLink = {
 
 test('pending visible canon links survive indeterminate results and confirmed-absent read-back', () => {
     let state = queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink);
+    const key = visibleCanonPendingKey(pendingLink);
     state = applyVisibleCanonPendingResult(state, pendingLink.artifactId, { status: 'indeterminate' });
-    assert.deepEqual(state.pending[pendingLink.artifactId], pendingLink);
+    assert.deepEqual(state.pending[key], pendingLink);
     state = applyVisibleCanonPendingResult(state, pendingLink.artifactId, { status: 'confirmed-absent' });
-    assert.deepEqual(state.pending[pendingLink.artifactId], pendingLink);
+    assert.deepEqual(state.pending[key], pendingLink);
     state = applyVisibleCanonPendingResult(state, pendingLink.artifactId, { status: 'confirmed' });
-    assert.equal(state.pending[pendingLink.artifactId], undefined);
+    assert.deepEqual(state.pending[key], pendingLink);
+    state = applyVisibleCanonPendingResult(state, key, { status: 'confirmed' });
+    assert.equal(state.pending[key], undefined);
 });
 
 test('pending visible canon links resume after reload and retain repeated indeterminate work', async () => {
@@ -38,18 +43,18 @@ test('pending visible canon links resume after reload and retain repeated indete
         return { status: calls.length < 3 ? 'indeterminate' : 'confirmed' };
     });
     assert.deepEqual(calls, [pendingLink.artifactId]);
-    assert.deepEqual(result.state.pending[pendingLink.artifactId], pendingLink);
+    assert.deepEqual(result.state.pending[visibleCanonPendingKey(pendingLink)], pendingLink);
     assert.equal(result.status, 'indeterminate');
     const retried = await resumeVisibleCanonPending(result.state, async () => ({ status: 'indeterminate' }));
-    assert.deepEqual(retried.state.pending[pendingLink.artifactId], pendingLink);
+    assert.deepEqual(retried.state.pending[visibleCanonPendingKey(pendingLink)], pendingLink);
 });
 
 test('stale pending media replacement cannot overwrite a newer artifact target', async () => {
     const newer = { ...pendingLink, mediaUrl: '/new.png', artifactId: 'message:4:url:/new.png', epoch: 3 };
     const state = queueVisibleCanonPending(queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink), newer);
     const result = await resumeVisibleCanonPending(state, async (link) => ({ status: link.epoch === 2 ? 'confirmed' : 'indeterminate' }));
-    assert.equal(result.state.pending[pendingLink.artifactId], undefined);
-    assert.deepEqual(result.state.pending[newer.artifactId], newer);
+    assert.equal(result.state.pending[visibleCanonPendingKey(pendingLink)], undefined);
+    assert.deepEqual(result.state.pending[visibleCanonPendingKey(newer)], newer);
 });
 
 test('pending reconciliation retries a failed full-chat save without trimming later messages, then verifies read-back', async () => {
@@ -81,8 +86,8 @@ test('pending reconciliation rejects a stale media target before or after save',
 
 test('pending operation retains the complete candidate canon needed for reload replay', () => {
     const state = queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink);
-    assert.deepEqual(state.pending[pendingLink.artifactId].candidate, pendingLink.candidate);
-    assert.equal(state.pending[pendingLink.artifactId].expectedFingerprint, pendingLink.expectedFingerprint);
+    assert.deepEqual(state.pending[visibleCanonPendingKey(pendingLink)].candidate, pendingLink.candidate);
+    assert.equal(state.pending[visibleCanonPendingKey(pendingLink)].expectedFingerprint, pendingLink.expectedFingerprint);
 });
 
 test('reload replay retries repeated save failures and verifies the exact candidate binding', async () => {
@@ -103,5 +108,21 @@ test('reload replay retries repeated save failures and verifies the exact candid
     assert.equal(second.status, 'indeterminate');
     const third = await resumeVisibleCanonPending(second.state, reconcile);
     assert.equal(third.status, 'confirmed');
-    assert.equal(third.state.pending[pendingLink.artifactId], undefined);
+    assert.equal(third.state.pending[visibleCanonPendingKey(pendingLink)], undefined);
+});
+
+test('composite pending keys isolate the same artifact across chats', () => {
+    const otherChat = { ...pendingLink, chatId: 'chat-b' };
+    const state = queueVisibleCanonPending(queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink), otherChat);
+    assert.equal(Object.keys(state.pending).length, 2);
+    assert.deepEqual(state.pending[visibleCanonPendingKey(pendingLink)], pendingLink);
+    assert.deepEqual(state.pending[visibleCanonPendingKey(otherChat)], otherChat);
+});
+
+test('active-chat split keeps foreign recovery global and out of local replay', () => {
+    const foreign = { ...pendingLink, chatId: 'chat-b' };
+    const state = queueVisibleCanonPending(queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink), foreign);
+    const split = splitVisibleCanonPendingByChat(state, 'chat-a');
+    assert.deepEqual(Object.keys(split.active), [visibleCanonPendingKey(pendingLink)]);
+    assert.deepEqual(Object.keys(split.foreign), [visibleCanonPendingKey(foreign)]);
 });

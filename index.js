@@ -73,7 +73,7 @@ import { createAppearanceFeatureController, runRememberAppearance } from './lib/
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
 import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
-import { createVisibleCanonPendingState, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending } from './lib/rp/visible-canon-persistence.js';
+import { createVisibleCanonPendingState, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1834,7 +1834,11 @@ function scheduleLibraryPromotionReconciliation(operationId, _expectedRevision) 
 async function resumePendingVisibleCanonLinks() {
     const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
     const settings = extension_settings[extensionName];
-    const pendingState = createVisibleCanonPendingState({ pending: { ...(settings.visible_canon_pending || {}), ...(canon.visibleCanonPending || {}) } });
+    const currentChatId = getContext().chatId;
+    const globalPending = createVisibleCanonPendingState({ pending: settings.visible_canon_pending }).pending;
+    const globalSplit = splitVisibleCanonPendingByChat({ pending: globalPending }, currentChatId);
+    const chatSplit = splitVisibleCanonPendingByChat({ pending: canon.visibleCanonPending }, currentChatId);
+    const pendingState = createVisibleCanonPendingState({ pending: { ...globalSplit.active, ...chatSplit.active } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
         if (!link.candidate?.revision || !link.expectedFingerprint) return { status: 'confirmed' };
@@ -1859,10 +1863,16 @@ async function resumePendingVisibleCanonLinks() {
             },
         });
     }, { isCurrent: (link) => getContext().chatId === link.chatId });
-    if (JSON.stringify(resumed.state.pending) !== JSON.stringify(pendingState.pending)) {
-        chat_metadata[CHAT_CANON_KEY] = { ...canon, visibleCanonPending: resumed.state.pending };
-        settings.visible_canon_pending = resumed.state.pending;
+    const activePending = resumed.state.pending;
+    const nextGlobalPending = { ...globalSplit.foreign, ...chatSplit.foreign, ...activePending };
+    const chatChanged = JSON.stringify(canon.visibleCanonPending || {}) !== JSON.stringify(activePending);
+    const settingsChanged = JSON.stringify(globalPending) !== JSON.stringify(nextGlobalPending);
+    if (chatChanged) {
+        chat_metadata[CHAT_CANON_KEY] = { ...canon, visibleCanonPending: activePending };
         await saveVisibleCanonChat();
+    }
+    if (settingsChanged) {
+        settings.visible_canon_pending = nextGlobalPending;
         await saveSettings();
     }
     return resumed;

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedVisibleCanonPending, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
+import { visibleCanonPendingKey } from '../lib/rp/visible-canon-persistence.js';
 
 test('library verification is three-state and checks exact revision', async () => {
     let method;
@@ -52,10 +53,14 @@ test('chat media verification checks exact message and artifact identity/look li
 });
 
 test('visible canon pending verification confirms the complete replay candidate before chat save', async () => {
-    const pending = { artifactId: 'message:4:url:/sam.png', chatId: 'chat', messageId: 4, mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam', expectedFingerprint: 'canon-v1-a', candidate: { revision: 'chat-canon:1', bindings: { who: { activeLookId: 'look:sam' } } } };
+    const pending = { artifactId: 'message:4:url:/sam.png', chatId: 'chat', messageId: 4, mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam', expectedFingerprint: 'canon-v1-a', candidate: { schema: 1, revision: 'chat-canon:1', bindings: { who: { activeLookId: 'look:sam' } } } };
     const fetchImpl = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': { visible_canon_pending: { [pending.artifactId]: pending } } } }) });
-    assert.equal((await verifyPersistedVisibleCanonPending({ pending, fetchImpl })).status, 'confirmed');
+    const persisted = { ...pending, candidate: structuredClone(pending.candidate) };
+    const persistedFetch = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': { visible_canon_pending: { [visibleCanonPendingKey(persisted)]: persisted } } } }) });
+    assert.equal((await verifyPersistedVisibleCanonPending({ pending, fetchImpl: persistedFetch })).status, 'confirmed');
     assert.equal((await verifyPersistedVisibleCanonPending({ pending: { ...pending, expectedFingerprint: 'canon-v1-other' }, fetchImpl })).status, 'confirmed-absent');
+    const differentBinding = { ...pending, candidate: { ...pending.candidate, bindings: { who: { activeLookId: 'look:other' } } } };
+    assert.equal((await verifyPersistedVisibleCanonPending({ pending: differentBinding, fetchImpl: persistedFetch })).status, 'confirmed-absent');
 });
 
 test('chat verifier understands real single and group JSONL responses and exact request bodies', async () => {
