@@ -28,10 +28,13 @@ test('reconciles scene facts while preserving durable identity facts', () => {
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
     assert.equal(result.nextState.sceneFacts.location, 'library');
     assert.deepEqual(result.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'wet blue coat' }]);
+    assert.deepEqual(result.nextState.sceneFacts.objects, [
+        { value: 'map', holderIdentityId: 'character:ava' },
+        { value: 'silver lantern', holderIdentityId: 'character:ava' },
+    ]);
     assert.deepEqual(result.removedSceneFacts, {
         location: 'station',
         outfits: [{ identityId: 'character:ava', value: 'red coat' }],
-        objects: [{ value: 'map', holderIdentityId: 'character:ava' }],
         injuries: [{ identityId: 'character:ava', value: 'cut on hand' }],
     });
     assert.deepEqual(result.updatedSceneFacts, {
@@ -59,10 +62,10 @@ test('clears a prior scene fact only on explicit high-confidence removal evidenc
     const result = reconcileStoryState(prior, {
         location: { status: 'unknown', value: null },
         objects: [],
-        sceneSignals: { location: { clear: true, confidence: 'high' }, objects: { clear: true, confidence: 'high' } },
+        sceneSignals: { location: { clear: true, confidence: 'high' }, objects: { remove: [{ value: 'map' }], confidence: 'high' } },
     });
     assert.equal('location' in result.nextState.sceneFacts, false);
-    assert.equal('objects' in result.nextState.sceneFacts, false);
+    assert.deepEqual(result.nextState.sceneFacts.objects, []);
     assert.deepEqual(result.removedSceneFacts, { location: 'station', objects: [{ value: 'map' }] });
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
 });

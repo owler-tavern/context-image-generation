@@ -153,8 +153,8 @@ test('explicit object removal clears only the obsolete object fact', () => {
         priorStoryState: { sceneFacts: { objects: [{ value: 'map' }], outfits: [{ identityId: 'character:ava', value: 'red coat' }] } },
         identities,
     });
-    assert.equal(result.sceneSignals.objects.clear, true);
-    assert.equal(result.storyStateDelta.nextState.sceneFacts.objects, undefined);
+    assert.deepEqual(result.sceneSignals.objects.remove, [{ value: 'map', identityId: 'character:ava', holderIdentityId: 'character:ava' }]);
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.objects, []);
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'red coat' }]);
 });
 
@@ -167,4 +167,103 @@ test('low-confidence recent departure is evidence but does not clear prior locat
     assert.equal(result.sceneSignals.location.confidence, 'medium');
     assert.equal(result.storyStateDelta.nextState.sceneFacts.location, 'station');
     assert.deepEqual(result.storyStateDelta.removedSceneFacts, {});
+});
+
+test('scopes identity negation to presence predicates instead of unrelated actions', () => {
+    const result = interpretScene({ selectedPassage: 'No one sees Ava smile.', identities });
+    assert.deepEqual(result.cast.map((entry) => entry.identityId), ['character:ava']);
+});
+
+test('keeps ASCII and curly single or double quoted aliases unresolved', () => {
+    const texts = [
+        'Ava says, "Sam is here."',
+        'Ava says, “Sam is here.”',
+        "Ava says, 'Sam is here.'",
+        'Ava says, ‘Sam is here.’',
+    ];
+    for (const selectedPassage of texts) {
+        const result = interpretScene({ selectedPassage, identities });
+        assert.equal(result.cast.some((entry) => entry.identityId === 'user:sam'), false, selectedPassage);
+        assert.ok(result.ambiguities.some((entry) => entry.alias === 'Sam' && entry.reason === 'quoted'), selectedPassage);
+    }
+});
+
+test('an absent identity blocks only its lower-rank outfit and object facts', () => {
+    const result = interpretScene({
+        selectedPassage: 'Sam is absent.',
+        clickedMessage: { name: 'Sam', role: 'character', mes: 'Sam wears a red coat and holds a map.' },
+        identities,
+    });
+    assert.deepEqual(result.outfits, []);
+    assert.deepEqual(result.objects, []);
+});
+
+test('selected absence suppresses lower-rank location facts attributable only to that identity', () => {
+    const result = interpretScene({
+        selectedPassage: 'Sam is absent.',
+        clickedMessage: { name: 'Sam', role: 'character', mes: 'Sam waits at the station.' },
+        identities,
+    });
+    assert.equal(result.location.status, 'unknown');
+});
+
+test('selected absence does not suppress lower-rank facts for another identity', () => {
+    const result = interpretScene({
+        selectedPassage: 'Sam is absent; Sam wears a red coat.',
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava wears a blue coat.' },
+        identities,
+    });
+    assert.deepEqual(result.outfits, [{ identityId: 'character:ava', value: 'blue coat', confidence: 'high', evidence: [{ source: 'clicked-message', text: 'Ava wears a blue coat.', speaker: 'Ava', role: 'character' }] }]);
+});
+
+test('targeted absence removes only that identity from retained cast', () => {
+    const result = interpretScene({
+        selectedPassage: 'Sam is absent.',
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava is here.' },
+        priorStoryState: { sceneFacts: { cast: [{ identityId: 'user:sam', label: 'Sam' }, { identityId: 'character:ava', label: 'Ava' }] } },
+        identities,
+    });
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.cast.map((entry) => entry.identityId), ['character:ava']);
+});
+
+test('removal signals target one object or outfit rather than clearing a collection', () => {
+    const objectResult = interpretScene({
+        clickedMessage: { name: 'Ava', mes: 'Ava drops the map.' },
+        priorStoryState: { sceneFacts: { objects: [{ value: 'map', holderIdentityId: 'character:ava' }, { value: 'lantern', holderIdentityId: 'character:ava' }] } },
+        identities,
+    });
+    assert.deepEqual(objectResult.storyStateDelta.nextState.sceneFacts.objects, [{ value: 'lantern', holderIdentityId: 'character:ava' }]);
+
+    const outfitResult = interpretScene({
+        clickedMessage: { name: 'Ava', mes: 'Ava removes the red coat.' },
+        priorStoryState: { sceneFacts: { outfits: [{ identityId: 'character:ava', value: 'red coat' }, { identityId: 'user:sam', value: 'blue shirt' }] } },
+        identities,
+    });
+    assert.deepEqual(outfitResult.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'user:sam', value: 'blue shirt' }]);
+});
+
+test('new observations do not remove unmentioned identities or outfits', () => {
+    const result = interpretScene({
+        selectedPassage: 'Ava wears a blue coat.',
+        priorStoryState: { sceneFacts: { cast: [{ identityId: 'user:sam', label: 'Sam' }], outfits: [{ identityId: 'user:sam', value: 'blue shirt' }] } },
+        identities,
+    });
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.cast.map((entry) => entry.identityId).sort(), ['user:sam', 'character:ava'].sort());
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [
+        { identityId: 'user:sam', value: 'blue shirt' },
+        { identityId: 'character:ava', value: 'blue coat' },
+    ]);
+    assert.deepEqual(result.storyStateDelta.removedSceneFacts, {});
+});
+
+test('new object observations preserve other objects held by the same identity', () => {
+    const result = interpretScene({
+        selectedPassage: 'Ava holds a lantern.',
+        priorStoryState: { sceneFacts: { objects: [{ value: 'map', holderIdentityId: 'character:ava' }] } },
+        identities,
+    });
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.objects, [
+        { value: 'map', holderIdentityId: 'character:ava' },
+        { value: 'lantern', holderIdentityId: 'character:ava' },
+    ]);
 });

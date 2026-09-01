@@ -22,9 +22,10 @@ test('projects an interpretation into a stable, human-readable inspection view',
             'Location: library.',
             'Outfits: Ava — wet blue coat.',
             'Objects: silver lantern (held by Ava).',
-            'Injuries: none recorded.',
+            'Injuries: unknown.',
             'State changes: none recorded.',
         ],
+        statuses: { cast: 'observed', location: 'observed', outfits: 'observed', objects: 'observed', injuries: 'unknown' },
         warnings: [],
     });
 });
@@ -42,8 +43,36 @@ test('inspection makes uncertainty and omissions visible instead of inventing de
     });
 
     assert.equal(view.lines[0], 'Focus: unavailable.');
-    assert.equal(view.lines[1], 'Present: none confidently identified.');
+    assert.equal(view.lines[1], 'Present: unknown.');
     assert.equal(view.lines[2], 'Location: ambiguous (station, library).');
     assert.ok(view.warnings.includes('The alias "Guide" matched more than one identity.'));
     assert.ok(view.warnings.includes('One or more mentions were excluded because they were negated or absent.'));
+});
+
+test('inspection projects retained reconciled state and exposes fact status', () => {
+    const view = projectSceneInspection({
+        focusPassage: { text: 'Ava waits.', source: 'selected-passage', confidence: 'high' },
+        cast: [{ identityId: 'character:ava', label: 'Ava', confidence: 'high' }],
+        location: { status: 'unknown', confidence: 'low' },
+        outfits: [],
+        objects: [],
+        injuries: [],
+        storyStateDelta: {
+            nextState: {
+                sceneFacts: {
+                    cast: [{ identityId: 'character:ava', label: 'Ava' }, { identityId: 'user:sam', label: 'Sam' }],
+                    location: 'station',
+                    outfits: [{ identityId: 'user:sam', value: 'blue shirt' }],
+                },
+            },
+            updatedSceneFacts: { location: { from: 'library', to: 'station' } },
+            removedSceneFacts: {},
+        },
+    });
+    assert.deepEqual(view.statuses, {
+        cast: 'changed', location: 'changed', outfits: 'retained', objects: 'unknown', injuries: 'unknown',
+    });
+    assert.ok(view.lines.some((line) => line.includes('Sam') && line.includes('retained')));
+    assert.ok(view.lines.some((line) => line.includes('station') && line.includes('changed')));
+    assert.ok(view.lines.some((line) => line.includes('unknown')));
 });
