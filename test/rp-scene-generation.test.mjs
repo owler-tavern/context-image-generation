@@ -80,9 +80,9 @@ test('scene artifact metadata preserves the safe inspection and exact source mom
 
     assert.equal(metadata.schema, 1);
     assert.equal(metadata.sourcePassage, 'Ava raises the lantern.');
-    assert.deepEqual(metadata.state, snapshot.state);
     assert.deepEqual(metadata.inspection, snapshot.inspection);
     assert.equal(metadata.prompt, snapshot.prompt);
+    assert.equal(Object.hasOwn(metadata, 'state'), false);
     assert.equal(Object.hasOwn(metadata, 'interpretation'), false);
 });
 

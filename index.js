@@ -1525,7 +1525,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: dispatchedPlan.scene }
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: dispatchedPlan.scene, __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state) }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -1872,13 +1872,13 @@ async function verifyPersistedSceneState(entry) {
 }
 
 async function persistSceneStateForAttachment(result, target, epoch) {
-    const scene = result?.__cigSceneMetadata;
-    if (!scene?.state || !target?.chatId || !Number.isInteger(target.messageId)) return { saved: true, status: 'not-applicable' };
+    const sceneState = result?.__cigSceneState;
+    if (!sceneState || !target?.chatId || !Number.isInteger(target.messageId)) return { saved: true, status: 'not-applicable' };
     const captured = { chatId: target.chatId, epoch };
     const pending = createSceneStatePending({
         chatId: target.chatId,
         epoch,
-        state: scene.state,
+        state: sceneState,
         target: { ...target, groupId: getContext().groupId || null },
     });
     const settings = extension_settings[extensionName];
