@@ -86,12 +86,13 @@ test('approval blocks when the captured route changes after the card was created
 });
 
 test('manual retrigger is explicit provenance and does not replay a chat event', async () => {
-    const { runtime } = setup({ getChat: () => [{ mes: 'Ava enters the library.', name: 'Ava' }] });
+    const { runtime, calls } = setup({ getChat: () => [{ mes: 'Ava enters the library.', name: 'Ava' }] });
     await runtime.load({ chatId: 'chat-a', epoch: 1 });
     const result = await runtime.retrigger('beat:missed', 'retry-1', 'missed beat');
     assert.equal(result.suggestion.triggerSource, 'manual-retrigger');
     assert.equal(result.suggestion.replayedChatEvent, false);
     assert.equal(result.suggestion.target.messageId, 0);
+    assert.equal(calls.dispatch, 0);
 });
 
 test('generation-count ceiling stops later suggestions after a completed receipt', async () => {

@@ -47,3 +47,8 @@ test('manual cinematic retrigger reports a visible suggestion result even before
     assert.match(index, /Manual cinematic suggestion is ready/u);
     assert.match(index, /No chat event was replayed/u);
 });
+
+test('production cinematic runtime binds manual retriggers to the current chat messages', () => {
+    assert.match(index, /createCinematicRuntime\(\{[\s\S]*getChat: \(\) => getContext\(\)\.chat \|\| \[\]/u);
+    assert.match(index, /renderCinematicSuggestion\(suggestionOverride\)/u);
+});

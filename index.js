@@ -982,6 +982,7 @@ function createCinematicSurface() {
     cinematicRuntime = createCinematicRuntime({
         settings: runtimeSettings,
         getChatId: () => getContext().chatId,
+        getChat: () => getContext().chat || [],
         getEpoch: () => chatLifecycleEpoch.capture(),
         readState: () => ({
             cinematicAutomation: chat_metadata?.[CHAT_CANON_KEY]?.[CINEMATIC_AUTOMATION_KEY],
