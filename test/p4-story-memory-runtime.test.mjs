@@ -166,6 +166,21 @@ test('production story memory mount disables the unscoped auto-load before expli
     assert.match(index, /void storyMemoryController\.load\(\{ chatId: getContext\(\)\.chatId \}\)/u);
 });
 
+test('production story memory opener reveals host and extension drawers before selecting and focusing the entry', async () => {
+    const [index, entry] = await Promise.all([
+        readFile(new URL('../index.js', import.meta.url), 'utf8'),
+        readFile(new URL('../lib/rp/story-memory-entry.js', import.meta.url), 'utf8'),
+    ]);
+    assert.match(index, /revealStoryMemoryEntry\(/u);
+    assert.match(entry, /#rm_extensions_block/u);
+    assert.match(entry, /#extensions-settings-button > \.drawer-toggle/u);
+    assert.match(entry, /\.inline-drawer-content/u);
+    assert.match(index, /activateTab: \(tab\) => activateSettingsTab\(tab\)/u);
+    assert.match(index, /selectArtifact: \(targetMessageId\)/u);
+    assert.match(index, /storyMemoryController\.setSelectedArtifact\(entry\.id\)/u);
+    assert.match(entry, /scrollIntoView/u);
+});
+
 test('real P2 scene state becomes bounded valid story facts on CIG media', () => {
     const facts = buildStoryMemoryFactSnapshot({ schema: 1, sceneFacts: {
         cast: [{ identityId: 'ava', label: 'Ava', confidence: 'high' }],

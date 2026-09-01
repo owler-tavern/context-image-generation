@@ -82,6 +82,7 @@ import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, pers
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
+import { revealStoryMemoryEntry } from './lib/rp/story-memory-entry.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
@@ -936,13 +937,18 @@ function refreshStoryMemorySurface() {
 }
 
 function openStoryMemoryArtifact(messageId) {
-    activateSettingsTab('images-cast');
-    const message = getContext().chat?.[Number(messageId)];
-    const activeMedia = activeMediaForMessage(message);
-    const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
-    const entry = storyMemoryController?.getState().timeline?.find((item) => item.messageId === Number(messageId) && item.url === media?.url);
-    if (entry) storyMemoryController.setSelectedArtifact(entry.id);
-    document.getElementById('cig_story_memory_surface')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+    revealStoryMemoryEntry({
+        documentLike: document,
+        activateTab: (tab) => activateSettingsTab(tab),
+        selectArtifact: (targetMessageId) => {
+            const message = getContext().chat?.[Number(targetMessageId)];
+            const activeMedia = activeMediaForMessage(message);
+            const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
+            const entry = storyMemoryController?.getState().timeline?.find((item) => item.messageId === Number(targetMessageId) && item.url === media?.url);
+            if (entry) storyMemoryController.setSelectedArtifact(entry.id);
+        },
+        messageId,
+    });
 }
 
 function cinematicRuntimeSettings() {
