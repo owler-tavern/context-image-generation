@@ -251,6 +251,11 @@ test('stale favorite readback and missing continue receipt fail closed', async (
     const blocked = await second.continueFromScene('story:a');
     assert.equal(blocked.status, 'error');
     assert.match(blocked.error, /receipt|requestId|artifact/u);
+
+    const authority = dependencies({ continuePlanner: async () => ({ status: 'planned', authorityToken: 'authority:story-a:v1' }) });
+    const third = createStoryMemoryController(authority.deps);
+    await third.load({ chatId: 'chat-a' });
+    assert.equal((await third.continueFromScene('story:a')).status, 'planned');
 });
 
 test('setFilters supports replacement so Clear filters removes the complete compound query', async () => {
