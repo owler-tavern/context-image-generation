@@ -4,10 +4,12 @@ import { readFile } from 'node:fs/promises';
 
 test('Remember promotes a distinct asset and binds only the captured current chat', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const runtime = await readFile(new URL('../lib/rp/appearance-runtime.js', import.meta.url), 'utf8');
     assert.match(source, /promoteGalleryArtifact/);
-    assert.match(source, /Saved and active in this chat\./);
+    assert.match(source, /executeCanonAction/);
+    assert.match(runtime, /Saved and active in this chat\./);
     assert.match(source, /Saved as an alternate; your locked look was not changed\./);
-    assert.match(source, /Saved to the appearance library, but the chat changed before it could be activated\./);
+    assert.match(runtime, /Saved to the appearance library, but the chat changed before it could be activated\./);
     assert.match(source, /chatLifecycleEpoch\.isCurrent/);
     assert.match(source, /saveMetadata/);
 });

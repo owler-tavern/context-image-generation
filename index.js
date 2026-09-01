@@ -69,7 +69,8 @@ import {
 import { deleteAppearanceAssetFile, promoteGalleryArtifact } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
-import { reconcileAppearanceOperations, runRebasedLibraryOperation } from './lib/rp/appearance-operations.js';
+import { reconcileAppearanceOperations, runRebasedLibraryMutation, runRebasedLibraryOperation } from './lib/rp/appearance-operations.js';
+import { executeCanonAction } from './lib/rp/appearance-runtime.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1672,15 +1673,35 @@ async function resumePendingAppearanceOperations() {
     return result;
 }
 
-async function persistOrphanCleanupRetry(libraryValue, url) {
-    const library = migrateAppearanceLibrary(libraryValue);
-    const operationId = `orphan-cleanup:${crypto.randomUUID()}`;
-    library.operations = { ...(library.operations || {}), [operationId]: { status: 'orphan-cleanup', url } };
-    library.revision = `appearance-orphan:${crypto.randomUUID()}`;
-    extension_settings[extensionName].rp_library = library;
-    await saveSettings();
-    await verifyPersistedExtensionLibrary({ expectedRevision: library.revision, fetchImpl: fetch, getHeaders: getRequestHeaders });
-    scheduleLibraryPromotionReconciliation(operationId, library.revision);
+async function persistOrphanCleanupRetry(libraryValue, url, { alreadyQueued = true, operationId = `orphan-cleanup:${crypto.randomUUID()}` } = {}) {
+    const result = await runRebasedLibraryMutation({
+        readLatest: async () => {
+            const latest = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
+            return latest.status === 'confirmed' ? latest.library : libraryValue;
+        },
+        mutate: async (latest) => {
+            const library = migrateAppearanceLibrary(latest);
+            library.operations = { ...(library.operations || {}), [operationId]: { status: 'orphan-cleanup', url } };
+            library.revision = `appearance-orphan:${crypto.randomUUID()}`;
+            return library;
+        },
+        saveLibrary: async (candidate) => { extension_settings[extensionName].rp_library = candidate; await saveSettings(); },
+        verifySaved: (candidate) => verifyPersistedExtensionLibrary({ expectedRevision: candidate.revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        alreadyQueued,
+    });
+    extension_settings[extensionName].rp_library = result.status === 'confirmed' ? result.library : result.candidate;
+    if (result.status === 'confirmed') {
+        scheduleLibraryPromotionReconciliation(operationId, result.candidate.revision);
+    } else {
+        scheduleOrphanCleanupPersistenceRetry(result.candidate, url, operationId);
+    }
+    return result;
+}
+
+function scheduleOrphanCleanupPersistenceRetry(library, url, operationId) {
+    setTimeout(() => {
+        void persistOrphanCleanupRetry(library, url, { alreadyQueued: false, operationId });
+    }, 1500);
 }
 
 function scheduleLibraryPromotionReconciliation(operationId, _expectedRevision) {
@@ -1811,18 +1832,15 @@ async function rememberGalleryAppearance(index) {
             return;
         }
         const revision = `chat-canon:${crypto.randomUUID()}`;
-        const candidate = { ...setChatBinding(canon, identity.id, { activeLookId: promoted.look.id, expectedAssetId: promoted.asset.id, isLocked: false, selectedAt: Date.now() }), revision };
-        const activation = await persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId: promoted.look.id });
-        if (activation.status === 'indeterminate') {
-            toastr.info('Activation verification pending.', 'Context Image Generation');
-            return;
-        }
-        if (activation.status !== 'confirmed') {
-            toastr.info(activation.status === 'stale' ? 'Saved to the appearance library, but the chat changed before it could be activated.' : 'Saved to the appearance library, but it was not activated in this chat.', 'Context Image Generation');
-            return;
-        }
-        renderAppearanceList();
-        toastr.success('Saved and active in this chat.', 'Context Image Generation');
+        const baselineFingerprint = chatCanonRevisionFingerprint(canon, identity.id);
+        const activation = await executeCanonAction({
+            action: 'remember', captured, baselineFingerprint, isCurrent: chatCaptureIsCurrent,
+            getFingerprint: () => chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identity.id),
+            buildCandidate: () => ({ ...setChatBinding(canon, identity.id, { activeLookId: promoted.look.id, expectedAssetId: promoted.asset.id, isLocked: false, selectedAt: Date.now() }), revision }),
+            persist: (candidate) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId: promoted.look.id }),
+        });
+        if (activation.status === 'confirmed') { renderAppearanceList(); toastr.success(activation.message, 'Context Image Generation'); }
+        else toastr.info(activation.message, 'Context Image Generation');
         },
     });
 }
@@ -2673,16 +2691,16 @@ jQuery(async () => {
             confirmed = await confirmDestructiveAction('Replace the locked look for this chat?', 'Use in this chat');
             if (!confirmed) return;
         }
-        if (!chatCaptureIsCurrent(captured) || chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId) !== captured.fingerprint) {
-            toastr.info('The look selection is stale because the chat changed.', 'Context Image Generation');
-            return;
-        }
-        const selected = selectLookForChat(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), confirmed, expectedLookId: current?.activeLookId });
-        if (selected.status !== 'selected') return;
-        const candidate = { ...selected.state, revision: `chat-canon:${crypto.randomUUID()}` };
-        const persistence = await persistChatCanonChange({ captured, candidate, identityId, activeLookId: look.id });
-        if (persistence.status === 'confirmed') renderAppearanceList();
-        else toastr.info(persistence.status === 'indeterminate' ? 'Activation verification pending.' : persistence.status === 'stale' ? 'The look selection is stale because the chat changed.' : 'The look selection was not saved.', 'Context Image Generation');
+        const action = await executeCanonAction({
+            action: 'use', captured, baselineFingerprint: captured.fingerprint, isCurrent: chatCaptureIsCurrent,
+            getFingerprint: () => chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId),
+            buildCandidate: () => {
+                const selected = selectLookForChat(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), confirmed, expectedLookId: current?.activeLookId });
+                return selected.status === 'selected' ? { ...selected.state, revision: `chat-canon:${crypto.randomUUID()}` } : null;
+            },
+            persist: (candidate) => candidate ? persistChatCanonChange({ captured, candidate, identityId, activeLookId: look.id }) : Promise.resolve({ status: 'stale' }),
+        });
+        if (action.status === 'confirmed') { renderAppearanceList(); toastr.success(action.message, 'Context Image Generation'); } else toastr.info(action.message, 'Context Image Generation');
     });
 
     $(document).on('click', '.cig_appearance_lock', async function (e) {
@@ -2700,14 +2718,14 @@ jQuery(async () => {
         let canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
         const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), fingerprint: chatCanonRevisionFingerprint(canon, identityId) };
         const binding = getChatBinding(canon, identityId);
-        canon = binding
-            ? setChatLock(canon, identityId, !binding.isLocked)
-            : setChatBinding(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, isLocked: true, selectedAt: Date.now() });
-        if (!chatCaptureIsCurrent(captured) || chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId) !== captured.fingerprint) return;
-        const candidate = { ...canon, revision: `chat-canon:${crypto.randomUUID()}` };
-        const persistence = await persistChatCanonChange({ captured, candidate, identityId, activeLookId: look.id });
-        if (persistence.status === 'confirmed') renderAppearanceList();
-        else toastr.info(persistence.status === 'indeterminate' ? 'Activation verification pending.' : persistence.status === 'stale' ? 'The lock change is stale because the chat changed.' : 'The lock change was not saved.', 'Context Image Generation');
+        const actionName = binding?.isLocked ? 'unlock' : 'lock';
+        const action = await executeCanonAction({
+            action: actionName, captured, baselineFingerprint: captured.fingerprint, isCurrent: chatCaptureIsCurrent,
+            getFingerprint: () => chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId),
+            buildCandidate: () => ({ ...(binding ? setChatLock(canon, identityId, !binding.isLocked) : setChatBinding(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, isLocked: true, selectedAt: Date.now() })), revision: `chat-canon:${crypto.randomUUID()}` }),
+            persist: (candidate) => persistChatCanonChange({ captured, candidate, identityId, activeLookId: look.id }),
+        });
+        if (action.status === 'confirmed') { renderAppearanceList(); toastr.success(action.message, 'Context Image Generation'); } else toastr.info(action.message, 'Context Image Generation');
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {

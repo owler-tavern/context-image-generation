@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileAppearanceOperations, runRebasedLibraryMutation, runRebasedLibraryOperation } from '../lib/rp/appearance-operations.js';
+import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation, runRebasedLibraryOperation } from '../lib/rp/appearance-operations.js';
 import { materializeAppearanceAssets } from '../lib/rp/appearance-library.js';
 
 const id = '123e4567-e89b-42d3-a456-426614174000';
@@ -35,4 +35,20 @@ test('shared production operation seam passes each queued action the latest libr
     let revision = 0;
     const run = (name) => runRebasedLibraryOperation({ readLatest: async () => ({ revision }), operation: async (latest) => { assert.equal(latest.revision, revision); revision++; return name; } });
     assert.deepEqual(await Promise.all([run('remember'), run('delete'), run('migration')]), ['remember', 'delete', 'migration']);
+});
+
+test('orphan retry record remains locally recoverable across absent, indeterminate, thrown, then confirmed cleanup', async () => {
+    for (const outcome of ['confirmed-absent', 'indeterminate', 'thrown']) {
+        let scheduled = 0;
+        const local = { schema: 2, revision: 'base', operations: {} };
+        const result = await persistOrphanCleanupRecovery({ library: local, url: `/user/images/context-image-generation-appearances/cig-appearance-${id}.png`, saveLibrary: async () => { if (outcome === 'thrown') throw new Error('offline'); }, verifySaved: async () => ({ status: outcome }), scheduleRetry: () => scheduled++, uuid: () => outcome });
+        assert.equal(result.status, 'recovery-pending');
+        assert.equal(Object.values(result.library.operations)[0].status, 'orphan-cleanup');
+        assert.equal(scheduled, 1);
+    }
+    const pending = await persistOrphanCleanupRecovery({ library: { schema: 2, revision: 'base', operations: {} }, url: `/user/images/context-image-generation-appearances/cig-appearance-${id}.png`, saveLibrary: async () => {}, verifySaved: async () => ({ status: 'confirmed' }), uuid: () => 'ok' });
+    const cleaned = await reconcileAppearanceOperations({ library: pending.library, verifyRevision: async () => ({ status: 'confirmed' }), saveLibrary: async () => {}, verifySaved: async () => ({ status: 'confirmed' }), deleteFile: async () => {}, uuid: () => 'clean' });
+    assert.equal(pending.status, 'tracked');
+    assert.equal(cleaned.status, 'reconciled');
+    assert.equal(Object.keys(cleaned.library.operations).length, 0);
 });
