@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
-import { createAppearanceLifecycleController, createChatLifecycleEpoch } from '../lib/rp-lifecycle.js';
+import { bindAppearanceLifecycle, createAppearanceLifecycleController, createChatLifecycleEpoch } from '../lib/rp-lifecycle.js';
 import * as lifecycleModule from '../lib/rp-lifecycle.js';
 
 test('epoch changes invalidate a save even when the user switches away and back', () => {
@@ -107,9 +106,26 @@ test('reload refresh hydrates the current chat without advancing its epoch', asy
     assert.equal(renders[0].epoch, 0);
 });
 
-test('settings runtime delegates Appearance hydration to the lifecycle controller', async () => {
-    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    assert.match(index, /import \{[^}]*createAppearanceLifecycleController[^}]*createChatLifecycleEpoch[^}]*\} from '\.\/lib\/rp-lifecycle\.js';/);
-    assert.match(index, /appearanceLifecycleController\.bind\(\)/);
-    assert.match(index, /appearanceLifecycleController\.refresh\('reload'\)/);
+test('production lifecycle wiring binds both events and performs reload hydration through injected dependencies', async () => {
+    const calls = [];
+    const handlers = new Map();
+    const lifecycle = createChatLifecycleEpoch();
+    const binding = bindAppearanceLifecycle({
+        eventSource: { on(type, handler) { calls.push(`bind:${type}`); handlers.set(type, handler); } },
+        eventTypes: { CHAT_CHANGED: 'changed', CHAT_CREATED: 'created' },
+        lifecycle,
+        readActiveContext: async () => { calls.push(`read:${lifecycle.capture()}`); return { chatId: `chat:${lifecycle.capture()}`, chatMetadata: {} }; },
+        render: (view) => calls.push(`render:${view.reason}:${view.epoch}`),
+    });
+
+    assert.equal(typeof binding.controller.refresh, 'function');
+    await binding.reload;
+    await handlers.get('changed')();
+    await handlers.get('created')();
+    assert.deepEqual(calls, [
+        'bind:changed', 'bind:created',
+        'read:0', 'render:reload:0',
+        'read:1', 'render:changed:1',
+        'read:2', 'render:created:2',
+    ]);
 });

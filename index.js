@@ -39,7 +39,7 @@ import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
 import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
-import { createAppearanceLifecycleController, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
+import { bindAppearanceLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
@@ -119,16 +119,6 @@ const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 let customConnectionDraftId = '';
 const chatLifecycleEpoch = createChatLifecycleEpoch();
-const appearanceLifecycleController = createAppearanceLifecycleController({
-    eventSource,
-    eventTypes: event_types,
-    lifecycle: chatLifecycleEpoch,
-    readActiveContext: async () => ({
-        chatId: getContext().chatId,
-        chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
-    }),
-    render: (view) => renderAppearanceList(view),
-});
 
 function renderAdvancedPlanInspector() {
     const output = $('#cig_preflight_summary');
@@ -2785,8 +2775,16 @@ jQuery(async () => {
     document.addEventListener('click', onCigImageArrowClick, true);
     document.addEventListener('keydown', onCigImageArrowKeydown, true);
 
-    appearanceLifecycleController.bind();
-    void appearanceLifecycleController.refresh('reload');
+    bindAppearanceLifecycle({
+        eventSource,
+        eventTypes: event_types,
+        lifecycle: chatLifecycleEpoch,
+        readActiveContext: async () => ({
+            chatId: getContext().chatId,
+            chatMetadata: { [CHAT_CANON_KEY]: chat_metadata[CHAT_CANON_KEY] },
+        }),
+        render: (view) => renderAppearanceList(view),
+    });
 
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
