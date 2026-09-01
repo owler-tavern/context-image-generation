@@ -64,13 +64,12 @@ import {
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
     setVisibleAppearanceLook,
-    addPromotedAppearanceLook,
 } from './lib/rp/appearance-library.js';
-import { deleteAppearanceAssetFile, promoteGalleryArtifact } from './lib/rp/appearance-assets.js';
+import { deleteAppearanceAssetFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
-import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation, runRebasedLibraryOperation } from './lib/rp/appearance-operations.js';
-import { createAppearanceFeatureController } from './lib/rp/appearance-runtime.js';
+import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
+import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1767,106 +1766,42 @@ async function rememberGalleryAppearance(index) {
         return;
     }
 
-    await runRebasedLibraryOperation({
-        readLatest: () => readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders }),
-        operation: async (authoritative) => {
-        if (authoritative.status !== 'confirmed') {
-            toastr.info('Saved look verification pending. Please retry after settings can be read.', 'Context Image Generation');
-            return;
-        }
-        settings.rp_library = migrateAppearanceLibrary(authoritative.library);
-        if (!chatCaptureIsCurrent(captured)) return;
-        const readDataUrl = async (galleryItem) => {
-            if (galleryItem.imageData) return `data:${galleryItem.mimeType || 'image/png'};base64,${galleryItem.imageData}`;
-            const response = await fetch(galleryItem.url);
-            if (!response.ok) throw new Error('The Gallery image could not be read.');
-            if (!chatCaptureIsCurrent(captured)) throw new Error('The chat changed before the Gallery image could be promoted.');
-            const blob = await response.blob();
-            if (!chatCaptureIsCurrent(captured)) throw new Error('The chat changed before the Gallery image could be promoted.');
-            const dataUrl = await getBase64Async(blob);
-            if (!chatCaptureIsCurrent(captured)) throw new Error('The chat changed before the Gallery image could be promoted.');
-            return dataUrl;
-        };
-        const promoted = await promoteGalleryArtifact({
-            item, identityId: identity.id, library: settings.rp_library, readDataUrl,
+    const activation = await runRememberAppearance({
+        captured, identity, label, item,
+        io: {
+            isCurrent: chatCaptureIsCurrent,
+            runExclusive: (operation) => enqueueLibraryMutation(operation),
+            readLibrary: async () => {
+                const authoritative = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
+                if (authoritative.status === 'confirmed') settings.rp_library = migrateAppearanceLibrary(authoritative.library);
+                return authoritative;
+            },
+            readDataUrl: async (galleryItem) => {
+                if (galleryItem.imageData) return `data:${galleryItem.mimeType || 'image/png'};base64,${galleryItem.imageData}`;
+                const response = await fetch(galleryItem.url);
+                if (!response.ok) throw new Error('The Gallery image could not be read.');
+                if (!chatCaptureIsCurrent(captured)) throw new Error('The chat changed before the Gallery image could be promoted.');
+                const blob = await response.blob();
+                if (!chatCaptureIsCurrent(captured)) throw new Error('The chat changed before the Gallery image could be promoted.');
+                return getBase64Async(blob);
+            },
             saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
-            isTargetCurrent: () => chatCaptureIsCurrent(captured),
-        });
-        if (!promoted.look || !promoted.asset) throw new Error('This Gallery image could not be remembered.');
-        let activationStale = !chatCaptureIsCurrent(captured);
-        promoted.look.label = label;
-        const inserted = addPromotedAppearanceLook(settings.rp_library, { identity, asset: promoted.asset, look: promoted.look });
-        const operationId = `promotion:${crypto.randomUUID()}`;
-        inserted.library.operations = { ...(inserted.library.operations || {}), [operationId]: { status: 'pending', assetId: promoted.asset.id, lookId: promoted.look.id, identityId: identity.id, galleryArtifactId: galleryArtifactKey(item) } };
-        const operationRevision = `appearance:${crypto.randomUUID()}`;
-        inserted.library.revision = operationRevision;
-        settings.rp_library = inserted.library;
-        await saveSettings();
-        activationStale ||= !chatCaptureIsCurrent(captured);
-        const libraryVerification = await verifyPersistedExtensionLibrary({ expectedRevision: operationRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
-        activationStale ||= !chatCaptureIsCurrent(captured);
-        if (libraryVerification.status !== 'confirmed') {
-            if (libraryVerification.status === 'confirmed-absent') {
-                let cleanupTracked = false;
-                try {
-                    await deleteAppearanceAssetFile(promoted.asset.url, fetch, getRequestHeaders);
-                } catch {
-                    await persistOrphanCleanupRetry(authoritative.library, promoted.asset.url);
-                    cleanupTracked = true;
-                }
-                if (!cleanupTracked) settings.rp_library = migrateAppearanceLibrary(authoritative.library);
-                toastr.warning('The look was not saved.', 'Context Image Generation');
-                renderAppearanceList();
-                return;
-            }
-            scheduleLibraryPromotionReconciliation(operationId, operationRevision);
-            toastr.info('Saved look verification pending. It will be reconciled before use.', 'Context Image Generation');
-            renderAppearanceList();
-            return;
-        }
-        delete inserted.library.operations[operationId];
-        const acceptedRevision = `appearance:${crypto.randomUUID()}`;
-        inserted.library.revision = acceptedRevision;
-        settings.rp_library = inserted.library;
-        await saveSettings();
-        activationStale ||= !chatCaptureIsCurrent(captured);
-        const acceptedVerification = await verifyPersistedExtensionLibrary({ expectedRevision: acceptedRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
-        activationStale ||= !chatCaptureIsCurrent(captured);
-        if (acceptedVerification.status !== 'confirmed') {
-            inserted.library.operations[operationId] = { status: 'pending', assetId: promoted.asset.id, lookId: promoted.look.id, identityId: identity.id, galleryArtifactId: galleryArtifactKey(item) };
-            const pendingRevision = `appearance-pending:${crypto.randomUUID()}`;
-            inserted.library.revision = pendingRevision;
-            settings.rp_library = inserted.library;
-            await saveSettings();
-            await verifyPersistedExtensionLibrary({ expectedRevision: pendingRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
-            scheduleLibraryPromotionReconciliation(operationId, pendingRevision);
-            toastr.info('Saved look verification pending. It will be reconciled before use.', 'Context Image Generation');
-            renderAppearanceList();
-            return;
-        }
-
-        if (activationStale || !chatCaptureIsCurrent(captured)) {
-            renderAppearanceList();
-            toastr.info('Saved to the appearance library, but the chat changed before it could be activated.', 'Context Image Generation');
-            return;
-        }
-        const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-        const binding = getChatBinding(canon, identity.id);
-        if (binding?.isLocked) {
-            renderAppearanceList();
-            toastr.success('Saved as an alternate; your locked look was not changed.', 'Context Image Generation');
-            return;
-        }
-        const revision = `chat-canon:${crypto.randomUUID()}`;
-        const baselineFingerprint = chatCanonRevisionFingerprint(canon, identity.id);
-        const activation = await appearanceFeatureController().remember({
-            captured, identityId: identity.id, activeLookId: promoted.look.id, promoted, baselineFingerprint,
-            buildCandidate: () => ({ ...setChatBinding(canon, identity.id, { activeLookId: promoted.look.id, expectedAssetId: promoted.asset.id, isLocked: false, selectedAt: Date.now() }), revision }),
-        });
-        if (activation.status === 'confirmed') { renderAppearanceList(); toastr.success(activation.message, 'Context Image Generation'); }
-        else toastr.info(activation.message, 'Context Image Generation');
+            saveLibrary: async (library) => { settings.rp_library = library; await saveSettings(); },
+            verifyLibrary: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            deleteAppearanceFile: (url) => deleteAppearanceAssetFile(url, fetch, getRequestHeaders),
+            persistOrphanCleanup: ({ library, url }) => persistOrphanCleanupRetry(library, url),
+            setLocalLibrary: (library) => { settings.rp_library = library; },
+            scheduleLibraryReconciliation: ({ operationId, revision }) => scheduleLibraryPromotionReconciliation(operationId, revision),
+            getChatCanon: () => chat_metadata[CHAT_CANON_KEY],
+            persistChat: ({ candidate, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId }),
+            uuid: () => crypto.randomUUID(),
+            now: () => Date.now(),
         },
     });
+    renderAppearanceList();
+    if (activation.status === 'confirmed' || activation.status === 'alternate') toastr.success(activation.message, 'Context Image Generation');
+    else if (activation.status === 'confirmed-absent') toastr.warning(activation.message, 'Context Image Generation');
+    else toastr.info(activation.message, 'Context Image Generation');
 }
 
 function renderAppearanceList() {
