@@ -88,7 +88,7 @@ import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
 import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
-import { createDirectorUiController, DIRECTOR_UI_CSS, renderDirectorPanel } from './lib/rp/director-ui.js';
+import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -148,6 +148,7 @@ let cinematicRuntime = null;
 let cinematicUiController = null;
 let directorRuntime = null;
 let directorUiController = null;
+let directorFocusCapture = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1118,6 +1119,12 @@ function renderDirectorSurface() {
     const root = $(renderDirectorPanel(panel));
     const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
     if (anchor.length) anchor.after(root); else messageElement.append(root);
+}
+
+function directorFocusCaptureIsCurrent(capture) {
+    return Boolean(capture)
+        && String(getContext().chatId) === String(capture.chatId)
+        && chatLifecycleEpoch.isCurrent(capture.epoch);
 }
 
 function directorRouteReadiness(settings) {
@@ -4550,16 +4557,17 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
-    $(document).on('click', '.cig_message_director', async function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const messageElement = $(e.currentTarget).closest('.mes');
+    async function openDirectorFromTrigger(trigger) {
+        const messageElement = $(trigger).closest('.mes');
         const messageId = Number(messageElement.attr('mesid'));
-        const message = getContext().chat?.[messageId];
+        const context = getContext();
+        const chatId = context.chatId;
+        const epoch = chatLifecycleEpoch.capture();
+        const message = context.chat?.[messageId];
         if (!message || message.is_system) return;
         const sender = visibleCanonMessageSender(message);
         const captured = captureWandGenerationInput({
-            chatId: getContext().chatId,
+            chatId,
             messageId,
             message,
             messageElement: messageElement[0],
@@ -4567,19 +4575,38 @@ jQuery(async () => {
             sender,
             captureSelection: true,
         });
+        const focusCapture = { trigger, chatId, epoch, messageId };
+        directorFocusCapture = focusCapture;
         try {
             const result = await directorUiController?.open({
-                chatId: getContext().chatId,
-                epoch: chatLifecycleEpoch.capture(),
+                chatId,
+                epoch,
                 messageId,
                 message,
                 messageFingerprint: captured.target?.messageFingerprint,
                 selectionText: captured.focusText,
             });
-            if (result?.status === 'stale') toastr.info('That message is no longer current.', 'Direct this scene');
+            if (result?.status === 'open' && directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture)) {
+                focusDirectorPanel({ documentLike: document, messageId });
+            } else if (result?.status === 'stale') {
+                toastr.info('That message is no longer current.', 'Direct this scene');
+            }
         } catch (error) {
             showGenerationError(error, 'Open Director');
         }
+    }
+
+    $(document).on('click', '.cig_message_director', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        await openDirectorFromTrigger(e.currentTarget);
+    });
+
+    $(document).on('keydown', '.cig_message_director', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();
+        e.stopPropagation();
+        $(e.currentTarget).trigger('click');
     });
 
     $(document).on('change', '.cig_director_panel [data-director-field]', async function (e) {
@@ -4595,12 +4622,22 @@ jQuery(async () => {
         e.preventDefault();
         e.stopPropagation();
         const action = $(this).attr('data-director-action');
+        const panel = $(this).closest('.cig_director_panel');
+        const panelMessageId = Number(panel.attr('data-message-id'));
+        const focusCapture = directorFocusCapture;
         setBusyState(this, true, { busyTitle: action === 'generate' ? 'Generating directed image…' : 'Closing Director…' });
         try {
             const result = await directorUiController?.action(action);
             if (result?.status === 'completed') toastr.success('Directed image generated.', 'Direct this scene');
             else if (result?.status === 'stale') toastr.info(result.reason || 'This message or draft is no longer current.', 'Direct this scene');
             else if (result?.status === 'route-invalid') toastr.info(result.reason || 'Choose a ready image route first.', 'Direct this scene');
+            if (action === 'close' && result?.status === 'closed' && focusCapture?.messageId === panelMessageId
+                && directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture)) {
+                restoreDirectorTriggerFocus({
+                    trigger: focusCapture.trigger,
+                    isCurrent: () => directorFocusCapture === focusCapture && directorFocusCaptureIsCurrent(focusCapture),
+                });
+            }
         } catch (error) { showGenerationError(error, 'Director'); }
         finally { setBusyState(this, false); }
     });
@@ -4655,6 +4692,7 @@ jQuery(async () => {
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
@@ -4684,6 +4722,7 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
+        directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });

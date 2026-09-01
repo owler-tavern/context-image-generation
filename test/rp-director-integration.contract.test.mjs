@@ -64,3 +64,17 @@ test('Director trigger is one visible semantic inline action outside the host bu
     assert.doesNotMatch(mount, /directorButton\)\.after|extraButtons\.(?:after|prepend)\(directorButton\)/);
     assert.match(ui, /cig_message_director_inline[^{]*\{[^}]*min-height:\s*44px/s);
 });
+
+test('Director keyboard disclosure enters the panel and guarded close restores its exact opener', () => {
+    assert.match(index, /async function openDirectorFromTrigger\(trigger\)/);
+    assert.match(index, /const focusCapture = \{ trigger, chatId, epoch, messageId \}/);
+    assert.match(index, /focusDirectorPanel\(\{ documentLike: document, messageId \}\)/);
+    assert.match(index, /keydown', '\.cig_message_director'/);
+    assert.match(index, /e\.key !== 'Enter' && e\.key !== ' ' && e\.key !== 'Spacebar'/);
+    assert.match(index, /\$\(e\.currentTarget\)\.trigger\('click'\)/);
+    assert.match(index, /restoreDirectorTriggerFocus\(\{/);
+    assert.match(index, /directorFocusCaptureIsCurrent\(focusCapture\)/);
+    assert.match(index, /directorFocusCapture = null/);
+    assert.match(ui, /data-director-field="framing"/);
+    assert.match(ui, /data-director-action="generate".*data-director-action="close"/s);
+});
