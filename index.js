@@ -1440,7 +1440,7 @@ async function generateImageFromPrompt(prompt, sender = null, messageId = null, 
     return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe);
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null) {
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, coordinatorOverride = generationCoordinator, executionSignal = null) {
     let snapshot;
     try {
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
@@ -1519,7 +1519,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             kind: snapshot.providerRoute?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
             enabled: true,
         };
-        const execution = generationCoordinator.enqueue(dispatchedPlan, async (signal) => {
+        const executeGeneration = async (signal) => {
             const generated = await dispatchProviderRoute({
                 plan: dispatchedPlan,
                 connection,
@@ -1570,7 +1570,10 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
             return persisted?.persistence?.stale ? { ...persisted, stale: true } : persisted;
-        });
+        };
+        const execution = coordinatorOverride
+            ? coordinatorOverride.enqueue(dispatchedPlan, executeGeneration)
+            : executeGeneration(executionSignal || new AbortController().signal);
         currentGenerationRunId = execution.runId || currentGenerationRunId;
         $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
         return await execution;
@@ -2822,6 +2825,14 @@ function iterationGenerationPlan(sourceArtifact) {
     return sourceArtifact?.generationPlan || null;
 }
 
+function hasFiniteIterationQuote(value) {
+    if (!value || typeof value !== 'object' || typeof value.quoteId !== 'string' || !value.quoteId.trim()
+        || typeof value.currency !== 'string' || !value.currency.trim()
+        || typeof value.amount !== 'number' || !Number.isFinite(value.amount) || value.amount < 0) return false;
+    const expiresAt = typeof value.expiresAt === 'number' ? value.expiresAt : Date.parse(String(value.expiresAt || ''));
+    return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 function iterationArtifactForStorage(artifact, plan) {
     const stored = cloneSnapshot(artifact) || {};
     delete stored.imageData;
@@ -2889,7 +2900,7 @@ async function dispatchIterationPlan(plan, signal) {
     const artifact = plan.artifacts?.[0] || source;
     const target = source.target;
     const sourceMessage = artifact.effectivePrompt || artifact.sourcePassage?.text;
-    const generated = await generateImageFromPromptInternal(sourceMessage, source.sender || null, target?.messageId ?? null, null, target, 'wand', null, artifact);
+    const generated = await generateImageFromPromptInternal(sourceMessage, source.sender || null, target?.messageId ?? null, null, target, 'wand', null, artifact, null, signal);
     if (!generated?.imageData) throw new Error('Iteration generation returned no image.');
     return {
         status: 'completed',
@@ -2957,11 +2968,11 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
         if (iterationSurfaceMounts.has(key)) return;
         const sourceArtifact = iterationSourceArtifact(message, activeMedia);
         const generationPlan = iterationGenerationPlan(sourceArtifact);
-        const hasSingleQuote = Number.isFinite(generationPlan?.singleOutputQuote?.amount);
+        const hasSingleQuote = hasFiniteIterationQuote(generationPlan?.singleOutputQuote);
         const controller = createIterationSurfaceController({
             sourceArtifact,
             generationPlan,
-            twoUpAvailable: Boolean(generationPlan?.twoUpQuote?.amount),
+            twoUpAvailable: hasFiniteIterationQuote(generationPlan?.twoUpQuote),
             reserveInvocation: (invocationId) => { if (iterationInvocations.has(invocationId)) return false; iterationInvocations.add(invocationId); return true; },
             verifyGenerationPlan: (candidate) => candidate.planId === generationPlan?.planId && candidate.revision === generationPlan?.revision && generationPlan?.routeConfirmationAccepted === true
                 ? { status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: generationPlan.planId, routeResolved: true, capabilities: generationPlan.capabilities || {} } : { status: 'unverified' },

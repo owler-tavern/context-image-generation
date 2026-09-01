@@ -32,6 +32,15 @@ test('iteration submit is distinct from action selection and uses coordinator/pe
     assert.match(source, /cig_iteration_persistence/);
 });
 
+test('iteration dispatch reuses the outer coordinator signal instead of nesting a target run', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const dispatchStart = source.indexOf('async function dispatchIterationPlan');
+    const dispatchEnd = source.indexOf('async function persistIterationCanonicalRoles');
+    const dispatch = source.slice(dispatchStart, dispatchEnd);
+    assert.match(dispatch, /generateImageFromPromptInternal\([\s\S]*,\s*null,\s*signal\)/);
+    assert.match(source, /const execution = coordinatorOverride\s*\?\s*coordinatorOverride\.enqueue/);
+});
+
 test('iteration lifecycle is refreshed after message render, swipe navigation, chat change, and chat creation', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /renderIterationActionSurface/);
