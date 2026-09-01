@@ -252,10 +252,6 @@ test('stale favorite readback and missing continue receipt fail closed', async (
     assert.equal(blocked.status, 'error');
     assert.match(blocked.error, /receipt|requestId|artifact/u);
 
-    const authority = dependencies({ continuePlanner: async () => ({ status: 'planned', authorityToken: 'authority:story-a:v1' }) });
-    const third = createStoryMemoryController(authority.deps);
-    await third.load({ chatId: 'chat-a' });
-    assert.equal((await third.continueFromScene('story:a')).status, 'planned');
 });
 
 test('setFilters supports replacement so Clear filters removes the complete compound query', async () => {
@@ -303,4 +299,68 @@ test('mount optionally owns stylesheet installation and removal', () => {
     assert.equal(styles.length, 1);
     mounted.destroy();
     assert.equal(styles.length, 0);
+});
+
+test('load binds the requested target chat to hydration persistence and readback', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-target' });
+    assert.equal(calls.persist.at(-1).chatId, 'chat-target');
+    assert.equal(calls.readback.at(-1).chatId, 'chat-target');
+    assert.equal(controller.getState().chatId, 'chat-target');
+});
+
+test('hydration readback rejects stale changed fields and resurrected removals', async () => {
+    const changed = dependencies({
+        readbackMemory: async (request) => ({ memory: { ...request.memory, artifacts: { ...request.memory.artifacts, [request.expected.addedArtifactIds[0]]: { ...request.memory.artifacts[request.expected.addedArtifactIds[0]], url: '/images/wrong.png' } } } }),
+    });
+    const changedController = createStoryMemoryController(changed.deps);
+    const changedResult = await changedController.load({ chatId: 'chat-a', gallery: [{ id: 'changed', url: '/images/changed.png', chatId: 'chat-a', messageId: 8 }] });
+    assert.equal(changedResult.status, 'error');
+
+    const removed = dependencies({
+        hydrateGallery: async ({ memory: value }) => ({ memory: { ...value, artifacts: { 'story:a': value.artifacts['story:a'] }, collections: {} } }),
+        readbackMemory: async (request) => ({ memory: { ...request.memory, artifacts: { ...request.memory.artifacts, 'story:b': artifact({ id: 'story:b', messageId: 1 }) } } }),
+    });
+    const removedController = createStoryMemoryController(removed.deps);
+    const removedResult = await removedController.load({ chatId: 'chat-a' });
+    assert.equal(removedResult.status, 'error');
+});
+
+test('authority-token Continue receipts require injected verification bound to exact identity and request', async () => {
+    const plain = dependencies({ continuePlanner: async () => ({ status: 'planned', authorityToken: 'arbitrary' }) });
+    const plainController = createStoryMemoryController(plain.deps);
+    await plainController.load({ chatId: 'chat-a' });
+    assert.equal((await plainController.continueFromScene('story:a')).status, 'error');
+
+    const verified = dependencies({
+        continuePlanner: async (request) => ({ status: 'planned', authorityToken: 'verified-token' }),
+        verifyContinueAuthority: async ({ request, receipt }) => ({ verified: true, artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId, token: receipt.authorityToken }),
+    });
+    const verifiedController = createStoryMemoryController(verified.deps);
+    await verifiedController.load({ chatId: 'chat-a' });
+    assert.equal((await verifiedController.continueFromScene('story:a')).status, 'planned');
+});
+
+test('mounted stylesheet ownership is shared and never removes an external pre-existing style', () => {
+    const { deps } = dependencies();
+    const styles = [];
+    const documentLike = {
+        getElementById(id) { return styles.find((style) => style.id === id) || null; },
+        createElement() { return { id: '', textContent: '' }; },
+        head: { appendChild(style) { styles.push(style); }, removeChild(style) { styles.splice(styles.indexOf(style), 1); } },
+    };
+    const host = () => ({ innerHTML: '', addEventListener() {}, removeEventListener() {} });
+    const first = mountStoryMemorySurface(host(), createStoryMemoryController(deps), { documentLike, installStyles: true });
+    const second = mountStoryMemorySurface(host(), createStoryMemoryController(deps), { documentLike, installStyles: true });
+    assert.equal(styles.length, 1);
+    first.destroy();
+    assert.equal(styles.length, 1);
+    second.destroy();
+    assert.equal(styles.length, 0);
+
+    styles.push({ id: 'cig-rp-story-memory-style-p4-story-memory-ui-v1', textContent: 'external' });
+    const external = mountStoryMemorySurface(host(), createStoryMemoryController(deps), { documentLike, installStyles: true });
+    external.destroy();
+    assert.equal(styles.length, 1);
 });
