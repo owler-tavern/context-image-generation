@@ -16,6 +16,8 @@ const pendingLink = {
     identityId: 'user:persona.png',
     lookId: 'look:sam',
     epoch: 2,
+    expectedFingerprint: 'canon-v1-abc',
+    candidate: { schema: 1, revision: 'chat-canon:next', bindings: { 'user:persona.png': { activeLookId: 'look:sam', expectedAssetId: 'asset:sam', isLocked: false, selectedAt: 3 } } },
 };
 
 test('pending visible canon links survive indeterminate results and confirmed-absent read-back', () => {
@@ -75,4 +77,31 @@ test('pending reconciliation rejects a stale media target before or after save',
     let current = true;
     const switched = await reconcileVisibleCanonPendingLink(pendingLink, { isCurrent: () => current, save: async () => { current = false; }, verify: async () => ({ status: 'confirmed' }) });
     assert.equal(switched.status, 'stale');
+});
+
+test('pending operation retains the complete candidate canon needed for reload replay', () => {
+    const state = queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink);
+    assert.deepEqual(state.pending[pendingLink.artifactId].candidate, pendingLink.candidate);
+    assert.equal(state.pending[pendingLink.artifactId].expectedFingerprint, pendingLink.expectedFingerprint);
+});
+
+test('reload replay retries repeated save failures and verifies the exact candidate binding', async () => {
+    const initial = queueVisibleCanonPending(createVisibleCanonPendingState(), pendingLink);
+    let attempts = 0;
+    let persisted = null;
+    const reconcile = async (link) => reconcileVisibleCanonPendingLink(link, {
+        save: async (candidate) => {
+            attempts++;
+            if (attempts < 3) throw new Error('offline');
+            persisted = candidate;
+        },
+        verify: async (candidate) => ({ status: persisted?.candidate?.revision === candidate.candidate.revision ? 'confirmed' : 'confirmed-absent' }),
+    });
+    const first = await resumeVisibleCanonPending(initial, reconcile);
+    assert.equal(first.status, 'indeterminate');
+    const second = await resumeVisibleCanonPending(first.state, reconcile);
+    assert.equal(second.status, 'indeterminate');
+    const third = await resumeVisibleCanonPending(second.state, reconcile);
+    assert.equal(third.status, 'confirmed');
+    assert.equal(third.state.pending[pendingLink.artifactId], undefined);
 });

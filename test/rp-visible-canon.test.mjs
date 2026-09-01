@@ -196,14 +196,24 @@ test('visible canon DOM action payload binds every state-changing action to disp
 
 test('visible canon DOM controller executes button activation and keyboard Enter/Space without provider dispatch', async () => {
     const calls = [];
-    const controller = createVisibleCanonDomController({ dispatch: async (action, payload) => calls.push([action, payload]) });
+    let providerCalls = 0;
+    const providerDispatch = () => { providerCalls++; throw new Error('provider must not be called'); };
+    const controller = createVisibleCanonDomController({ dispatch: async (action, payload) => {
+        if (action === 'generate') providerDispatch();
+        calls.push([action, payload]);
+    } });
     const element = {
         classList: { contains: (name) => name === 'cig_visible_canon_lock' },
         dataset: { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' },
     };
     const keyEvent = { type: 'keydown', key: ' ', preventDefault() {}, stopPropagation() {} };
     assert.equal(await controller.activate(element, keyEvent), true);
-    assert.deepEqual(calls, [['lock', { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' }]]);
+    assert.equal(await controller.activate(element, { type: 'keydown', key: 'Enter', preventDefault() {}, stopPropagation() {} }), true);
+    assert.deepEqual(calls, [
+        ['lock', { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' }],
+        ['lock', { messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam' }],
+    ]);
+    assert.equal(providerCalls, 0);
 });
 
 test('visible canon action controller handles keyboard-equivalent actions without a provider dependency', async () => {

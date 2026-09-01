@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, verifyPersistedChatMediaLink, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedVisibleCanonPending, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
 
 test('library verification is three-state and checks exact revision', async () => {
     let method;
@@ -49,6 +49,13 @@ test('chat media verification checks exact message and artifact identity/look li
     const fetchImpl = async () => ({ ok: true, json: async () => payload });
     assert.equal((await verifyPersistedChatMediaLink({ target, fetchImpl })).status, 'confirmed');
     assert.equal((await verifyPersistedChatMediaLink({ target: { ...target, identityId: 'npc:guard' }, fetchImpl })).status, 'confirmed-absent');
+});
+
+test('visible canon pending verification confirms the complete replay candidate before chat save', async () => {
+    const pending = { artifactId: 'message:4:url:/sam.png', chatId: 'chat', messageId: 4, mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam', expectedFingerprint: 'canon-v1-a', candidate: { revision: 'chat-canon:1', bindings: { who: { activeLookId: 'look:sam' } } } };
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': { visible_canon_pending: { [pending.artifactId]: pending } } } }) });
+    assert.equal((await verifyPersistedVisibleCanonPending({ pending, fetchImpl })).status, 'confirmed');
+    assert.equal((await verifyPersistedVisibleCanonPending({ pending: { ...pending, expectedFingerprint: 'canon-v1-other' }, fetchImpl })).status, 'confirmed-absent');
 });
 
 test('chat verifier understands real single and group JSONL responses and exact request bodies', async () => {

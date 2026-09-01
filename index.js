@@ -67,7 +67,7 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
@@ -1692,7 +1692,7 @@ function setVisibleCanonMediaLink(target, link) {
     return true;
 }
 
-function visibleCanonPendingLink(captured, identityId, lookId) {
+function visibleCanonPendingLink(captured, identityId, lookId, candidate, expectedFingerprint) {
     const target = captured?.mediaTarget;
     return target && {
         ...target,
@@ -1700,6 +1700,8 @@ function visibleCanonPendingLink(captured, identityId, lookId) {
         identityId,
         lookId,
         epoch: captured.epoch,
+        expectedFingerprint,
+        candidate,
     };
 }
 
@@ -1835,17 +1837,26 @@ async function resumePendingVisibleCanonLinks() {
     const pendingState = createVisibleCanonPendingState({ pending: { ...(settings.visible_canon_pending || {}), ...(canon.visibleCanonPending || {}) } });
     if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
     const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
+        if (!link.candidate?.revision || !link.expectedFingerprint) return { status: 'confirmed' };
         if (!currentVisibleCanonMedia(link)) return { status: 'confirmed' };
+        const currentCanon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+        const currentFingerprint = chatCanonRevisionFingerprint(currentCanon, link.identityId);
+        if (currentFingerprint !== link.expectedFingerprint && currentCanon.revision !== link.candidate.revision) return { status: 'confirmed' };
+        const replayCandidate = { ...link.candidate, visibleCanonPending: pendingState.pending };
+        chat_metadata[CHAT_CANON_KEY] = replayCandidate;
         return reconcileVisibleCanonPendingLink(link, {
             save: async () => {
                 setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
-                await saveVisibleCanonChat(link);
+                await saveVisibleCanonChat();
             },
-            verify: () => verifyPersistedChatMediaLink({
-                target: capturedChatTarget(link.identityId, canon.revision, link.lookId, link),
-                fetchImpl: fetch,
-                getHeaders: getRequestHeaders,
-            }),
+            verify: async () => {
+                const target = capturedChatTarget(link.identityId, link.candidate.revision, link.lookId, link);
+                const binding = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
+                const media = await verifyPersistedChatMediaLink({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
+                return binding.status === 'confirmed' && media.status === 'confirmed'
+                    ? { status: 'confirmed', binding, media }
+                    : { status: binding.status === 'indeterminate' || media.status === 'indeterminate' ? 'indeterminate' : 'confirmed-absent', binding, media };
+            },
         });
     }, { isCurrent: (link) => getContext().chatId === link.chatId });
     if (JSON.stringify(resumed.state.pending) !== JSON.stringify(pendingState.pending)) {
@@ -1862,14 +1873,24 @@ async function persistChatCanonChange({ captured, candidate, identityId, activeL
     const operationId = `chat-canon:${crypto.randomUUID()}`;
     const expectedCurrentFingerprint = chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId);
     const linkedLookId = mediaTarget?.lookId || activeLookId;
-    const pendingLink = visibleCanonPendingLink(captured, identityId, linkedLookId);
+    const pendingLink = visibleCanonPendingLink(captured, identityId, linkedLookId, candidate, expectedCurrentFingerprint);
     const candidateWithPending = pendingLink
         ? { ...candidate, visibleCanonPending: queueVisibleCanonPending(createVisibleCanonPendingState({ pending: candidate.visibleCanonPending }), pendingLink).pending }
         : candidate;
     if (pendingLink) {
         const settings = extension_settings[extensionName];
         settings.visible_canon_pending = queueVisibleCanonPending(createVisibleCanonPendingState({ pending: settings.visible_canon_pending }), pendingLink).pending;
-        try { await saveSettings(); } catch { scheduleVisibleCanonPendingSettingsRetry(pendingLink); }
+        try {
+            await saveSettings();
+            const pendingVerification = await verifyPersistedVisibleCanonPending({ pending: pendingLink, fetchImpl: fetch, getHeaders: getRequestHeaders });
+            if (pendingVerification.status !== 'confirmed') {
+                scheduleVisibleCanonPendingSettingsRetry(pendingLink);
+                return { status: 'indeterminate', message: 'Pending canon recovery was not confirmed; chat save deferred.' };
+            }
+        } catch {
+            scheduleVisibleCanonPendingSettingsRetry(pendingLink);
+            return { status: 'indeterminate', message: 'Pending canon recovery could not be recorded; chat save deferred.' };
+        }
     }
     const previousState = () => ({ canon: chat_metadata[CHAT_CANON_KEY], mediaLink: mediaTarget ? visibleCanonMediaLinkSnapshot(mediaTarget) : null });
     return persistVerifiedChatMutation({
