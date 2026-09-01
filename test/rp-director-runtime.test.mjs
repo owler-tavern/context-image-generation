@@ -4,6 +4,7 @@ import { createDirectorRuntime } from '../lib/rp/director-runtime.js';
 
 function setup(overrides = {}) {
     const states = new Map();
+    const durable = new Map();
     const calls = { preview: 0, dispatch: 0, save: 0 };
     let chatId = 'chat-a';
     let epoch = 1;
@@ -12,12 +13,14 @@ function setup(overrides = {}) {
         getEpoch: () => epoch,
         readState: ({ chatId: requested } = {}) => states.get(requested || chatId) || {},
         writeState: (value, { chatId: requested } = {}) => states.set(requested || chatId, structuredClone(value)),
+        readDurableState: ({ chatId: requested } = {}) => durable.get(requested || chatId) || null,
+        writeDurableState: (value, { chatId: requested } = {}) => durable.set(requested || chatId, structuredClone(value)),
         saveChat: async () => { calls.save += 1; },
         buildPreview: async (input) => { calls.preview += 1; return { moment: input.focusText || input.sourceMessage, inspection: ['Location: library.'], referenceSummary: 'Ava: remembered look ready.' }; },
         dispatch: async (input) => { calls.dispatch += 1; return { status: 'completed', input }; },
         ...overrides,
     });
-    return { runtime, calls, states, switchChat(next) { chatId = next; epoch += 1; }, get chatId() { return chatId; }, get epoch() { return epoch; } };
+    return { runtime, calls, states, durable, switchChat(next) { chatId = next; epoch += 1; }, get chatId() { return chatId; }, get epoch() { return epoch; } };
 }
 
 test('Director opens with bounded story preview and captured selection without dispatching', async () => {
@@ -89,7 +92,7 @@ test('Director persistence is bounded and provider-free while retaining an execu
 
 test('Director deferred settlement remains scoped to the approved chat after switching chats', async () => {
     let resolveDispatch;
-    const { runtime, states, switchChat } = setup({
+    const { runtime, states, durable, switchChat } = setup({
         dispatch: () => new Promise((resolve) => { resolveDispatch = resolve; }),
     });
     runtime.load({ chatId: 'chat-a', epoch: 1 });
@@ -102,7 +105,7 @@ test('Director deferred settlement remains scoped to the approved chat after swi
     const result = await pending;
     assert.equal(result.status, 'completed');
     assert.equal(runtime.getState().chatId, 'chat-b');
-    assert.equal(states.get('chat-a').director.lastStatus, 'generated');
+    assert.equal(durable.get('chat-a').director.lastStatus, 'generated');
     assert.equal(runtime.getState().panel, null);
 });
 
@@ -119,4 +122,59 @@ test('Director rapid activation has one dispatch in flight', async () => {
     resolveDispatch({ status: 'completed' });
     assert.equal((await first).status, 'completed');
     assert.equal(dispatchCount, 1);
+});
+
+test('Director reload rebinds only an exact target and recovers selection without raw persistence', async () => {
+    const persisted = {
+        director: {
+            schema: 1,
+            options: { framing: 'wide', continuity: 'strong', visualDirection: 'blue hour' },
+            revision: 4,
+            panel: { messageId: 8, target: { chatId: 'chat-a', messageId: 8, messageFingerprint: 'exact', epoch: 1 }, framing: 'wide', continuity: 'strong', visualDirection: 'blue hour', focusFingerprint: 'director-fp:selection', referenceSummary: 'ready', routeSummary: 'ready', budgetSummary: 'Exact provider cost unavailable.' },
+        },
+    };
+    let epoch = 4;
+    let targetSafe = true;
+    const runtime = createDirectorRuntime({
+        getChatId: () => 'chat-a', getEpoch: () => epoch,
+        readState: () => persisted,
+        validateTarget: () => targetSafe ? { safe: true } : { safe: false, reason: 'replaced' },
+    });
+    const loaded = runtime.load({ chatId: 'chat-a', epoch });
+    assert.equal(loaded.panel.target.epoch, 4);
+    assert.equal(loaded.panel.focusText, null);
+    assert.match(loaded.panel.focusNotice, /anchored message|selection/i);
+    targetSafe = false;
+    epoch = 5;
+    const staleRuntime = createDirectorRuntime({ getChatId: () => 'chat-a', getEpoch: () => epoch, readState: () => persisted, validateTarget: () => ({ safe: false, reason: 'replaced' }) });
+    const stale = staleRuntime.load({ chatId: 'chat-a', epoch });
+    assert.equal(stale.panel.target.epoch, 1);
+    assert.match(stale.panel.previewError, /replaced|current/i);
+});
+
+test('Director settles inactive chat through durable state and keeps active chat untouched', async () => {
+    const durable = new Map();
+    let resolveDispatch;
+    let activeChat = 'chat-a';
+    let epoch = 1;
+    const runtime = createDirectorRuntime({
+        getChatId: () => activeChat, getEpoch: () => epoch,
+        readState: ({ chatId } = {}) => durable.get(chatId) || {},
+        readDurableState: ({ chatId } = {}) => durable.get(chatId) || null,
+        writeDurableState: (value, { chatId } = {}) => durable.set(chatId, structuredClone(value)),
+        saveDurableState: async () => {},
+        buildPreview: async () => ({ moment: 'A scene.' }),
+        dispatch: () => new Promise((resolve) => { resolveDispatch = resolve; }),
+    });
+    runtime.load({ chatId: 'chat-a', epoch });
+    await runtime.open({ chatId: 'chat-a', epoch, messageId: 2, message: { mes: 'A private scene.' } });
+    const pending = runtime.generate();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    activeChat = 'chat-b'; epoch = 2; runtime.load({ chatId: 'chat-b', epoch });
+    resolveDispatch({ status: 'completed' });
+    await pending;
+    const recovered = createDirectorRuntime({ getChatId: () => 'chat-a', getEpoch: () => 9, readState: () => ({}), readDurableState: ({ chatId } = {}) => durable.get(chatId) || null, validateTarget: () => ({ safe: true }) });
+    recovered.load({ chatId: 'chat-a', epoch: 9 });
+    assert.equal(recovered.getState().lastStatus, 'generated');
+    assert.equal(recovered.getState().panel.status, 'completed');
 });

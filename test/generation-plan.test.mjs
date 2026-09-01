@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import { buildReferenceMessageParts } from '../lib/rp/reference-message-parts.js';
+import { buildSceneGenerationSnapshot } from '../lib/rp/scene-generation.js';
 
 const baseInput = {
     id: 'plan-1',
@@ -40,6 +41,36 @@ test('creates an immutable plan snapshot and trims only to a known positive refe
     assert.equal(Object.isFrozen(plan), true);
     assert.equal(Object.isFrozen(plan.prompt), true);
     assert.throws(() => { plan.prompt.focusText = 'changed'; }, TypeError);
+});
+
+test('accepts Director as a first-class generation invocation', () => {
+    const plan = createGenerationPlan({ ...baseInput, id: 'director-invocation', invocation: 'director' });
+    assert.equal(plan.invocation, 'director');
+});
+
+test('Director overrides are captured in the immutable provider-facing scene plan while selection remains focus', () => {
+    const snapshot = buildSceneGenerationSnapshot({
+        selectedPassage: 'Ava raises the lantern.',
+        clickedMessage: { mes: 'Ava raises the lantern in the observatory.' },
+        recentContext: [],
+        settings: { framing_preference: 'wide', continuity_strength: 'strong', custom_visual_instruction: 'blue hour' },
+    });
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'director-overrides',
+        invocation: 'director',
+        prompt: { ...baseInput.prompt, sourceMessage: 'Ava raises the lantern in the observatory.', focusText: 'Ava raises the lantern.' },
+        scene: { sourcePassage: snapshot.sourcePassage, prompt: snapshot.prompt, state: snapshot.state, inspection: snapshot.inspection },
+        options: { ...baseInput.options, framing: 'wide', continuity: 'strong', visualDirection: 'blue hour' },
+    });
+    assert.equal(plan.scene.sourcePassage, 'Ava raises the lantern.');
+    assert.match(plan.scene.prompt, /Framing: wide\./);
+    assert.match(plan.scene.prompt, /Continuity strength: strong\./);
+    assert.match(plan.scene.prompt, /Additional visual instruction: blue hour/);
+    assert.equal(plan.prompt.focusText, 'Ava raises the lantern.');
+    assert.equal(plan.options.framing, 'wide');
+    assert.equal(plan.options.continuity, 'strong');
+    assert.equal(plan.options.visualDirection, 'blue hour');
 });
 
 test('captures an immutable complete route snapshot', () => {

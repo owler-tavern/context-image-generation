@@ -105,6 +105,7 @@ const defaultSettings = {
     custom_connection_keys: {},
     custom_connection_editor_id: '',
     cinematic_automation_sessions: { schema: 1, chats: {} },
+    director_sessions: { schema: 1, chats: {} },
     aspect_ratio: '1:1',
     image_size: '',
     thinking_level: 'auto',
@@ -1065,6 +1066,30 @@ function renderDirectorSurface() {
     if (anchor.length) anchor.after(root); else messageElement.append(root);
 }
 
+function directorRouteReadiness(settings) {
+    const providerId = settings.provider || 'makersuite';
+    const discoveryState = getProviderDiscoveryState(settings, providerId);
+    const providerUi = projectSelectedProviderUi(settings, providerId, settings.model, {
+        localEntries: getProviderModelEntries(settings, providerId),
+        discoveryEvidence: discoveryState.evidence,
+        discoveryWarning: discoveryState.warning,
+    });
+    const readiness = deriveSetupReadiness({ providerUi, providerId, modelId: settings.model, apiKey: getProviderApiKey(settings, providerId) });
+    if (readiness.state !== 'ready') return { ready: false, text: `Not ready: ${readiness.label}.` };
+    let route;
+    try { route = getSelectedModelRoute(settings); } catch { return { ready: false, text: 'Not ready: the selected provider route is unavailable.' }; }
+    if (!route.model || !route.transportId) return { ready: false, text: 'Not ready: the selected provider route is unavailable.' };
+    const preflightRoute = { providerId, modelId: settings.model, transportId: route.transportId };
+    if (modelNeedsExperimentalPreflight(route.model) && !isExperimentalPreflightAccepted(settings, preflightRoute)) return { ready: false, text: 'Not ready: confirm this model route in Advanced settings before generating.' };
+    const custom = getCustomConnection(settings, providerId);
+    if (custom) {
+        const evidence = getCustomConnectionStore(settings).evidence[custom.id];
+        if (!evidence || !['configured', 'verified'].includes(evidence.state)) return { ready: false, text: 'Not ready: test this custom connection and fetch its models first.' };
+        if (evidence.state === 'configured') return { ready: true, text: `Ready: ${providerId} / ${settings.model}; Generate will ask for the one-time route confirmation.` };
+    }
+    return { ready: true, text: `Ready: ${providerId} / ${settings.model}; route and required confirmations are current.` };
+}
+
 function directorPreview({ sourceMessage, focusText, target, options: directorOptions }) {
     const context = getContext();
     const settings = extension_settings[extensionName] || {};
@@ -1107,19 +1132,18 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     const ready = projectContinuityShelf({ identities, truths, candidates: referenceCandidates, includeDescriptions: settings.include_descriptions === true, includeAvatars: settings.use_avatars === true });
     const readyLabels = (ready.identities || []).filter((entry) => entry.sourceType && entry.sourceType !== 'none').map((entry) => `${entry.identityLabel}: ${entry.sourceType} ready`).slice(0, 6);
     const currentSettings = extension_settings[extensionName] || {};
-    const routeSummary = currentSettings.provider && currentSettings.model
-        ? `Ready: ${currentSettings.provider} / ${currentSettings.model}.`
-        : 'Not ready: choose an image provider and model in Settings.';
+    const routeSummary = directorRouteReadiness(currentSettings).text;
     return {
         moment: snapshot.sourcePassage || focusText || sourceMessage,
         inspection: snapshot.inspection?.lines || [],
         referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
         routeSummary,
-        budgetSummary: 'Exact provider cost is unavailable; Generate uses one configured image-generation slot after a completed attachment.',
+        budgetSummary: 'Exact provider cost is unavailable; one generation will be requested only when Generate is pressed.',
     };
 }
 
 function createDirectorSurface() {
+    const settings = extension_settings[extensionName];
     directorRuntime = createDirectorRuntime({
         getChatId: () => getContext().chatId,
         getEpoch: () => chatLifecycleEpoch.capture(),
@@ -1133,13 +1157,24 @@ function createDirectorSurface() {
             chat_metadata[CHAT_CANON_KEY][DIRECTOR_STATE_KEY] = value[DIRECTOR_STATE_KEY];
         },
         saveChat: () => saveChatConditional(),
+        readDurableState: ({ chatId } = {}) => settings.director_sessions?.chats?.[String(chatId)] || null,
+        writeDurableState: (value, { chatId } = {}) => {
+            if (!chatId) return;
+            const store = settings.director_sessions;
+            store.chats = store.chats && typeof store.chats === 'object' && !Array.isArray(store.chats) ? store.chats : {};
+            store.chats[String(chatId)] = value;
+            const keys = Object.keys(store.chats);
+            for (const staleKey of keys.slice(0, Math.max(0, keys.length - 24))) delete store.chats[staleKey];
+        },
+        saveDurableState: async () => { await saveSettings(); },
         buildPreview: directorPreview,
         validateTarget: ({ target }) => validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] }),
         validateRoute: async ({ target }) => {
             const targetValidation = validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] });
             if (!targetValidation.safe) return { allowed: false, status: 'stale', reason: targetValidation.reason };
             const settings = extension_settings[extensionName] || {};
-            return settings.provider && settings.model ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: 'Image provider and model are not configured.' };
+            const readiness = directorRouteReadiness(settings);
+            return readiness.ready ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: readiness.text };
         },
         dispatch: async ({ sourceMessage, focusText, target, framing, continuity, visualDirection }) => {
             const context = getContext();
@@ -1148,10 +1183,8 @@ function createDirectorSurface() {
             const element = $(`.mes[mesid="${messageId}"]`);
             if (!message || !element.length) throw new Error('The directed story message is no longer available.');
             const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
-            const base = sourceMessage || message.mes || '';
-            const direction = [framing && framing !== 'auto' ? `Framing: ${framing}.` : '', continuity ? `Continuity strength: ${continuity}.` : '', visualDirection ? `Player visual direction: ${visualDirection}` : ''].filter(Boolean).join(' ');
-            const prompt = direction ? `${base}\n\n${direction}` : base;
-            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director');
+            const prompt = sourceMessage || message.mes || '';
+            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director', { framing, continuity, visualDirection });
             if (attached !== true) return { status: 'failed', reason: 'The image was not attached to this message. Your draft is still available.' };
             return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
         },
@@ -1224,6 +1257,13 @@ async function loadSettings() {
         settingsMigrated = true;
     } else if (!cigSettings.cinematic_automation_sessions.chats || typeof cigSettings.cinematic_automation_sessions.chats !== 'object' || Array.isArray(cigSettings.cinematic_automation_sessions.chats)) {
         cigSettings.cinematic_automation_sessions.chats = {};
+        settingsMigrated = true;
+    }
+    if (!cigSettings.director_sessions || typeof cigSettings.director_sessions !== 'object' || Array.isArray(cigSettings.director_sessions)) {
+        cigSettings.director_sessions = { schema: 1, chats: {} };
+        settingsMigrated = true;
+    } else if (!cigSettings.director_sessions.chats || typeof cigSettings.director_sessions.chats !== 'object' || Array.isArray(cigSettings.director_sessions.chats)) {
+        cigSettings.director_sessions.chats = {};
         settingsMigrated = true;
     }
     const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
@@ -1585,7 +1625,7 @@ async function confirmCustomConnectionRoute(settings, invocation) {
     return { accepted: true, confirmedRevision: revision };
 }
 
-function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}, continuation = null) {
+function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}, continuation = null, generationOverrides = null) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const modelId = settings.model;
@@ -1647,6 +1687,11 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const capability = getReferenceImageCapability(providerId, modelId);
     const referenceCandidates = [];
     const settingsSnapshot = cloneSnapshot(settings) || {};
+    if (generationOverrides && typeof generationOverrides === 'object') {
+        if (typeof generationOverrides.framing === 'string') settingsSnapshot.framing_preference = generationOverrides.framing;
+        if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
+        if (typeof generationOverrides.visualDirection === 'string') settingsSnapshot.custom_visual_instruction = generationOverrides.visualDirection.slice(0, 1000);
+    }
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
     const continuationIsCurrent = continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
         && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
@@ -1740,7 +1785,11 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referencePlan: continuityReferencePlan,
         activeOutfits,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
-        options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
+        options: {
+            aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
+            thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search,
+            ...(generationOverrides ? { framing: settingsSnapshot.framing_preference, continuity: settingsSnapshot.continuity_strength, visualDirection: settingsSnapshot.custom_visual_instruction } : {}),
+        },
         policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
     };
     return Object.freeze({
@@ -1804,8 +1853,8 @@ function getGenerationKey(prompt, messageId, target = null) {
     });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null) {
-    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe);
+async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, generationOverrides = null) {
+    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe, generationCoordinator, null, generationOverrides);
 }
 
 function assertExactIterationRoute(snapshot, recipe) {
@@ -1826,12 +1875,12 @@ function assertExactIterationRoute(snapshot, recipe) {
     if (snapshot.planInput.policy?.routeConfirmationAccepted !== true) throw new Error('Saved recipe route is no longer executable because route confirmation is stale.');
 }
 
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, coordinatorOverride = generationCoordinator, executionSignal = null) {
+async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, coordinatorOverride = generationCoordinator, executionSignal = null, generationOverrides = null) {
     let snapshot;
     try {
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
-        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation, pendingStoryMemoryContinuation);
+        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation, pendingStoryMemoryContinuation, generationOverrides);
         if (snapshot.storyMemoryContinuation) pendingStoryMemoryContinuation = null;
         if (iterationRecipe && typeof iterationRecipe === 'object') {
             assertExactIterationRoute(snapshot, iterationRecipe);
@@ -3077,7 +3126,7 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
 
 // Generate an image for a message and attach it to that message's media array.
 // Shared by the wand button and the swipe-to-regenerate handler.
-async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null, invocation = 'wand') {
+async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null, invocation = 'wand', generationOverrides = null) {
     const effectiveTarget = target || captureMessageTarget({
         chatId: getContext().chatId,
         messageId,
@@ -3091,7 +3140,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         prompt,
         sender,
         focusText,
-        generate: ({ finalize } = {}) => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation, finalize),
+        generate: ({ finalize } = {}) => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation, finalize, null, generationOverrides),
         saveImage: async (imageData) => {
             const fileName = `cig_${Date.now()}`;
             const filePath = await saveBase64AsFile(imageData, extensionName, fileName, 'png');
