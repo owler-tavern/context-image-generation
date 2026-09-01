@@ -26,19 +26,27 @@ Provider breadth is necessary infrastructure, but it is not the differentiator. 
 
 ## Current implementation — v2 / extension v1.8.0
 
-The `v2` branch now contains the provider foundation and the player-facing P1-P6 flows. Deterministic acceptance is green at 700/700 tests. Real-host desktop UAT has confirmed that the extension mounts in SillyTavern, the ordinary wand remains available, the inline **Direct this scene** action is visible in an RP chat, its Director panel opens on the exact message, and opening it makes no generation request.
+The `v2` branch contains the provider foundation and deterministic implementations of the P1-P6 flows. At `a41aec8`, the expanded deterministic suite is green at **746/746**. This proves the current contracts and production wiring; it does not by itself prove the promised player outcomes.
 
-This is not yet a complete release claim. The LinkAPI character-consistency benchmark is unrun because the public pricing page does not expose a verified price for the configured image route, so the approved USD $5 ceiling cannot yet be enforced. Full 320/360/480px host UAT also remains open: the Director mounted at 360px, but the surrounding SillyTavern page showed horizontal overflow and needs a targeted panel-versus-host check.
+Real-host UAT has confirmed LinkAPI discovery with four usable models, populated Story Memory, cinematic manual retrigger/adjust/dismiss, labelled **Direct this scene** and **Visual Story** entries, provider-free Director editing, five exact-message Director attachments, and extension-owned 320/360/480px panel fit. LinkAPI's public `/api/pricing` returned `model_price: 0.09375` for `gemini-3.1-flash-image-preview` on 2026-09-01, so the USD $5 price gate is closed.
 
-| Priority | Customer feature | Current evidence | Remaining acceptance |
-| --- | --- | --- | --- |
-| P0 | Trustworthy provider/model selection and custom connections | Implemented; route, discovery, no-spend, and failure contracts covered deterministically | Live LinkAPI refresh/selection observation in the user's loaded profile; TokenReply image route deferred while unavailable |
-| P1 | Appearance truth, remembered looks, locks, outfits, and visible continuity | Implemented; focused continuity contracts accepted | Six-image LinkAPI single/two-character quality benchmark under a verified price cap |
-| P2 | Selected-passage/current-message scene interpretation | Implemented; production plan and artifact inspection accepted | Included in the quality benchmark |
-| P3 | Improve, Vary, change scene, edit, reuse, and make canonical | Implemented; production runtime accepted | Live interaction UAT on retained generated media |
-| P4 | Visual story memory, search, favorites, collections, details, and Continue | Implemented; production runtime accepted | Live interaction UAT on a populated chat |
-| P5 | Story-aware cinematic suggestions and session limits | Implemented; production runtime accepted | Live suggestion/adjust/dismiss UAT; provider remains blocked until approval |
-| P6 | Player-directed scene intent in the chat | Implemented; independent review READY; real-host desktop open/edit UAT passed with generation routes blocked | Targeted 320/360/480px overflow/focus UAT and one approved live attachment |
+This is **not yet a complete release claim**. The agreed six-image consistency benchmark produced five attached images and one failed/timed-out two-character scene; the images have not been scored. Some live interaction and focus/reload evidence also remains incomplete or conflicting.
+
+Classification used below:
+
+- **A — net-new player capability:** changes what a player can do or the story outcome they can obtain.
+- **B — improved packaging/discoverability:** makes an existing capability clearer, safer, or easier to reach.
+- **C — enabling work:** required architecture, provider, persistence, or safety work; not a customer milestone by itself.
+
+| Priority | Customer feature | Product classification | Current evidence | Remaining acceptance |
+| --- | --- | --- | --- | --- |
+| P0 | Trustworthy provider/model selection and custom connections | Mostly C; setup clarity is B | Deterministic route/discovery/no-spend contracts; live LinkAPI refresh returned four models with no generation request | Exercise distinct live LinkAPI route selection; live-test one custom OpenAI and one custom Gemini connection; TokenReply Nano route remains deferred |
+| P1 | Appearance truth, remembered looks, locks, outfits, and visible continuity | A for chat canon, locks, outfits, multi-character/reference planning; B for pre-existing avatar/description/remember controls | Deterministic continuity contracts; three single-character and two two-character LinkAPI images attached | Score the five images; obtain and score the missing third two-character scene; live-test lock persistence and reference explanation |
+| P2 | Selected-passage/current-message scene interpretation | A for state delta, cast resolution, and artifact inspection; B for pre-existing selected-text/clicked-message/default controls | Deterministic plan/artifact contracts; exact-message Director attachments exercise scene planning | Direct live selected-passage UAT and comparative evidence that selection improves subject accuracy |
+| P3 | Improve, Vary, change scene, edit, reuse, and make canonical | A for edit/reuse/repaired-prompt/canonical-role/two-up flows; B for pre-existing overswipe variation and previous-image reuse | Deterministic runtime; Improve actions were retained on five live images | Click and verify retained-media Improve/Vary/Reuse/Canonical flows; usability observation; optional paid two-up remains untested live |
+| P4 | Visual story memory, search, favorites, collections, details, and Continue | A for timeline/search/favorites/collections/details; mixed B/A for exact-scene Continue | Deterministic runtime; populated timeline and selected Details opened live; 320px surface fit | Live search/favorite/collection/Continue actions and a conclusive chat-switch isolation run |
+| P5 | Story-aware cinematic suggestions and session limits | A for suggestion/mode/retrigger player loop; C for queues/settlement/recovery | Deterministic runtime; manual card, Next explanation, Adjust, Dismiss, closed drawer, and zero provider requests proved live | Live automatic story-change trigger, enable/disable flow, and one approved settlement/budget update |
+| P6 | Player-directed scene intent and cast correction | A for exact-message direction and Auto/Include/Focus/Exclude cast correction; B for readiness display; C for lifecycle/no-spend safeguards | Deterministic integration and independent review READY; live panel, 320px cast controls, zero-request edits, and five exact-message attachments | Resolve misleading Auto label and conflicting live focus-return evidence; live-test reload recovery and a corrected cast through an attached result |
 
 ## Priority 0 — Trustworthy provider and model selection
 
@@ -225,6 +233,7 @@ The player can deliberately shape the image for one exact story moment without t
 | **Visible chat entry** | One always-visible, labelled **Direct this scene** button appears immediately after each eligible RP message; it is not hidden in SillyTavern's hover-only message toolbar |
 | **Exact story target** | The panel names the anchored message and preserves selected-text precedence for the current invocation |
 | **Player direction** | Choose framing and continuity strength and add a bounded optional visual direction |
+| **Cast correction** | Review current-chat identities for this exact message and leave them on Auto or explicitly Include, Focus, or Exclude them before the first paid image |
 | **Reference readiness** | See which character avatar/remembered look/description is ready before generating |
 | **Honest route and cost state** | See whether the selected provider/model route is executable and whether exact cost is unavailable |
 | **Explicit spend boundary** | Opening, editing, closing, switching chats, and recovering drafts are local; only **Generate directed image** may enter the generation coordinator |
@@ -233,11 +242,13 @@ The player can deliberately shape the image for one exact story moment without t
 ### Acceptance evidence
 
 - `director` is a first-class shared generation invocation.
-- Framing, continuity, and visual direction are immutable per-invocation P2 overrides; highlighted text remains the story focus.
+- Framing, continuity, visual direction, and cast correction are immutable per-invocation P2 overrides; highlighted text remains the story focus.
+- Auto preserves normal inference. Include can add a known identity missed by inference, Focus gives one identity composition/reference priority, and Exclude removes its references and adds an explicit omission instruction.
 - Exact target, chat lifecycle, route readiness, draft revision, and single-flight state are revalidated before dispatch.
 - Stale, failed, cancelled, and gallery-only outcomes retain a recoverable draft and cannot falsely settle success.
-- Independent deterministic review found no remaining P0/P1 issue after `96cebdd`; full suite is 700/700.
-- Real-host desktop UAT opened the inline panel on message 6 with LinkAPI route readiness and avatar-ready references; the network recorder captured no generation request before Generate.
+- Independent deterministic review found no remaining P0/P1 issue through `a41aec8`; the current expanded suite is 746/746.
+- Real-host UAT opened the inline panel with LinkAPI route readiness and avatar-ready references; the network recorder captured no generation request during open or cast editing. Cast controls fit at 320px with 44px targets.
+- Five live Director generations attached to their exact messages and retained Improve and Story Memory actions. The sixth agreed benchmark scene failed/timed out, so this is attachment evidence rather than complete consistency acceptance.
 
 ## Later creator and ecosystem opportunities
 
@@ -288,10 +299,12 @@ Operational measures such as cancellation success, duplicate requests, and provi
 
 ## Next acceptance steps
 
-1. **Verify the LinkAPI price before spending.** Obtain the exact per-image or maximum request price for the configured Nano Banana image route from the authenticated LinkAPI pricing view. Do not infer it from model naming.
-2. **Run the agreed quality benchmark once the cap is enforceable.** Use Nano Banana 2-equivalent route, 16:9, the same model throughout, one single-character three-scene sequence and one two-character three-scene sequence. Score character consistency first and scene continuity second. Stop before USD $5.
-3. **Complete targeted live UAT.** At 320/360/480px distinguish extension-panel overflow from SillyTavern host overflow; verify focus order, Enter/Space, close/focus return, chat switching, and draft recovery. Exercise Improve, Story Memory, and cinematic adjust/dismiss without provider calls.
-4. **Run one approved live Director attachment.** After the price gate, generate from an exact message and prove the image attaches to that message, records the Director overrides, retains Improve/continuity/story-memory actions, and settles only after persistence.
-5. **Prepare release-facing documentation only after those gates.** Keep this roadmap as the internal evidence ledger; make README changes separately and deliberately so public setup and feature copy stay concise.
+1. **Finish and score the agreed quality benchmark.** Pricing is verified at USD $0.09375 for the selected LinkAPI model. Preserve the same Nano Banana 2-equivalent route and 16:9 setup, visually score the three attached single-character scenes and two attached two-character scenes, then obtain one replacement third two-character result. Character identity is primary; identity separation and scene continuity are secondary. Remain below USD $5.
+2. **Complete player-action UAT on retained media and memory.** Exercise Improve/Vary, Reuse, Canonical, Story Memory search/favorite/collection/Continue, and explain which references were used. Presence of a button is not acceptance of its action.
+3. **Close live lifecycle gaps.** Re-run 320/360/480px focus order and close/focus return with post-rerender locators; distinguish host document overflow from extension overflow; verify Director draft reload and Visual Story chat-switch isolation.
+4. **Exercise automatic cinematic behavior.** Trigger a card from a real accepted story-state change, verify enable/disable and Next-state explanation, and approve one suggestion to prove settlement and budget movement.
+5. **Validate cast correction as an outcome.** Correct a known character that inference missed, attach the resulting image, and verify the saved inspection and reference plan reflect Include/Focus/Exclude. Correct the misleading live `Auto (inferred)` label for non-inferred identities before release acceptance.
+6. **Finish P0 live configuration evidence.** Select distinct LinkAPI routes in the loaded profile and test one custom OpenAI Images-compatible and one custom Gemini-compatible connection without generation spend. TokenReply Nano remains deferred until authoritative route/service evidence exists.
+7. **Prepare release-facing documentation only after those gates.** Keep this roadmap as the internal evidence ledger; make README changes separately and deliberately so public setup and feature copy stay concise.
 
 The roadmap's first bet remains **make the same character remain recognizably the same across the story**. The visible product layer now also lets the player direct a specific moment without giving up immediate one-click generation.
