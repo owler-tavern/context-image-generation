@@ -87,3 +87,84 @@ test('future or malformed inputs do not trigger network/provider calls', () => {
     assert.equal(result.focusPassage.confidence, 'low');
     assert.deepEqual(result.cast, []);
 });
+
+test('preserves segment speaker and role while excluding GM and narrator assertions', () => {
+    const result = interpretScene({
+        clickedMessage: { name: 'GM', role: 'gm', mes: 'Ava is at the library.' },
+        recentContext: [{ name: 'Narrator', role: 'narrator', mes: 'Sam enters the station.' }],
+        identities,
+    });
+
+    assert.deepEqual(result.cast, []);
+    assert.equal(result.location.status, 'unknown');
+
+    const character = interpretScene({
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava waits.' },
+        identities,
+    });
+    assert.deepEqual(character.cast[0].evidence[0], {
+        source: 'clicked-message', text: 'Ava waits.', speaker: 'Ava', role: 'character',
+    });
+});
+
+test('higher-rank selected absence suppresses lower-rank presence and predicate negation does not negate identity', () => {
+    const absent = interpretScene({
+        selectedPassage: 'Sam is absent.',
+        clickedMessage: { name: 'Sam', role: 'character', mes: 'Sam enters the library.' },
+        identities,
+    });
+    assert.equal(absent.cast.some((entry) => entry.identityId === 'user:sam'), false);
+    assert.ok(absent.excluded.some((entry) => entry.identityId === 'user:sam' && entry.reason === 'absent'));
+
+    const predicate = interpretScene({
+        selectedPassage: 'Ava is not holding a map.',
+        identities,
+    });
+    assert.equal(predicate.cast[0].identityId, 'character:ava');
+    assert.deepEqual(predicate.objects, []);
+});
+
+test('quoted identity mentions remain unresolved and clothing is not a location', () => {
+    const result = interpretScene({
+        selectedPassage: 'Ava says, "Sam is here." Ava is in a red coat.',
+        identities,
+    });
+    assert.deepEqual(result.cast.map((entry) => entry.identityId), ['character:ava']);
+    assert.ok(result.ambiguities.some((entry) => entry.alias === 'Sam' && entry.reason === 'quoted'));
+    assert.equal(result.location.status, 'unknown');
+});
+
+test('explicit departure is carried as high-confidence state evidence', () => {
+    const result = interpretScene({
+        clickedMessage: { name: 'Ava', mes: 'Ava leaves the station.' },
+        priorStoryState: { sceneFacts: { location: 'station' } },
+        identities,
+    });
+    assert.equal(result.location.status, 'unknown');
+    assert.equal(result.sceneSignals.location.clear, true);
+    assert.equal(result.sceneSignals.location.confidence, 'high');
+    assert.equal(result.storyStateDelta.nextState.sceneFacts.location, undefined);
+    assert.equal(result.storyStateDelta.removedSceneFacts.location, 'station');
+});
+
+test('explicit object removal clears only the obsolete object fact', () => {
+    const result = interpretScene({
+        clickedMessage: { name: 'Ava', mes: 'Ava drops the map.' },
+        priorStoryState: { sceneFacts: { objects: [{ value: 'map' }], outfits: [{ identityId: 'character:ava', value: 'red coat' }] } },
+        identities,
+    });
+    assert.equal(result.sceneSignals.objects.clear, true);
+    assert.equal(result.storyStateDelta.nextState.sceneFacts.objects, undefined);
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'red coat' }]);
+});
+
+test('low-confidence recent departure is evidence but does not clear prior location', () => {
+    const result = interpretScene({
+        recentContext: [{ name: 'Ava', role: 'character', mes: 'Ava leaves the station.' }],
+        priorStoryState: { sceneFacts: { location: 'station' } },
+        identities,
+    });
+    assert.equal(result.sceneSignals.location.confidence, 'medium');
+    assert.equal(result.storyStateDelta.nextState.sceneFacts.location, 'station');
+    assert.deepEqual(result.storyStateDelta.removedSceneFacts, {});
+});
