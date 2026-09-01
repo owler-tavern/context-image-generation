@@ -415,6 +415,52 @@
     flex: 0 0 auto;
 }
 
+.cig_visible_canon {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 8px 0 4px;
+    padding: 8px;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 4px;
+    background: var(--SmartThemeBlurTintColor);
+}
+
+.cig_visible_canon_status {
+    flex: 1 1 100%;
+    color: var(--SmartThemeBodyColor);
+    font-size: 0.9em;
+}
+
+.cig_visible_canon button,
+.cig_visible_canon select {
+    min-width: 44px;
+    min-height: 44px;
+}
+
+.cig_visible_canon_select_label {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 44px;
+}
+
+.cig_visible_canon button:focus-visible,
+.cig_visible_canon select:focus-visible {
+    outline: 2px solid var(--SmartThemeQuoteColor);
+    outline-offset: 2px;
+}
+
+@media (max-width: 600px) {
+    .cig_visible_canon > button,
+    .cig_visible_canon_select_label,
+    .cig_visible_canon_select {
+        flex: 1 1 100%;
+        width: 100%;
+    }
+}
+
 @media (hover: none) {
     .cig_gallery_item_overlay {
         opacity: 1;
