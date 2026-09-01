@@ -3,7 +3,10 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
+    buildVisibleCanonActionPayload,
+    buildVisibleCanonMediaArtifactId,
     createVisibleCanonActionController,
+    linkVisibleCanonMediaArtifact,
     linkVisibleCanonGalleryArtifact,
     projectVisibleCanon,
     resolveVisibleCanonIdentityId,
@@ -159,6 +162,35 @@ test('active media identity link changes with swipe-selected media', () => {
     ];
     assert.equal(resolveVisibleCanonIdentityId({ fallbackIdentityId: 'character:ava.png', media: media[0], messageId: 9, gallery }), 'character:ava.png');
     assert.equal(resolveVisibleCanonIdentityId({ fallbackIdentityId: 'character:ava.png', media: media[1], messageId: 9, gallery }), 'npc:chat:guard');
+});
+
+test('chat-owned media identity link wins over Gallery fallback and survives media reload shape', () => {
+    const media = linkVisibleCanonMediaArtifact({ url: '/sam.png', cig_owner: 'context-image-generation' }, {
+        messageId: 4,
+        identityId: 'user:persona.png',
+        lookId: 'look:sam',
+    });
+    assert.equal(buildVisibleCanonMediaArtifactId({ messageId: 4, media }), 'message:4:url:/sam.png');
+    assert.deepEqual(media.cig_visible_canon, {
+        artifactId: 'message:4:url:/sam.png',
+        identityId: 'user:persona.png',
+        lookId: 'look:sam',
+    });
+    assert.equal(resolveVisibleCanonIdentityId({
+        fallbackIdentityId: 'character:ava.png', messageId: 4, media,
+        gallery: [{ url: '/sam.png', messageId: 4, cig_identity_id: 'npc:guard' }],
+    }), 'user:persona.png');
+});
+
+test('visible canon DOM action payload binds every state-changing action to displayed identity', () => {
+    const dataset = {
+        messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam',
+    };
+    for (const action of ['change', 'lock', 'stop']) {
+        assert.deepEqual(buildVisibleCanonActionPayload({ dataset, action, lookId: 'look:chosen' }), {
+            messageId: '4', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:chosen',
+        });
+    }
 });
 
 test('visible canon action controller handles keyboard-equivalent actions without a provider dependency', async () => {

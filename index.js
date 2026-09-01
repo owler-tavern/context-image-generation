@@ -8,6 +8,7 @@
 import {
     saveSettingsDebounced,
     saveSettings,
+    saveChat,
     chat_metadata,
     getRequestHeaders,
     appendMediaToMessage,
@@ -67,12 +68,13 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
-import { createVisibleCanonActionController, linkVisibleCanonGalleryArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
+import { buildVisibleCanonActionPayload, buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
+import { createVisibleCanonPendingState, queueVisibleCanonPending, resumeVisibleCanonPending } from './lib/rp/visible-canon-persistence.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -894,6 +896,7 @@ async function loadSettings() {
     }
 
     await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
+    await resumePendingVisibleCanonLinks();
 
 
     $('#cig_provider').val(extension_settings[extensionName].provider);
@@ -1644,30 +1647,89 @@ async function chooseAppearanceIdentity(defaultLabel = '') {
     return identity ? { identity, label: lookInput.value.trim() || defaultLabel || 'Saved appearance' } : null;
 }
 
-function capturedChatTarget(identityId, expectedRevision, activeLookId) {
+function capturedChatTarget(identityId, expectedRevision, activeLookId, mediaTarget = null) {
     const context = getContext();
     const groupId = context.groupId || null;
     const requestBody = groupId
         ? { id: context.chatId }
         : { avatar_url: context.characters?.[context.characterId]?.avatar, file_name: context.chatId };
-    return { chatId: context.chatId, groupId, identityId, expectedRevision, activeLookId, requestBody };
+    return { chatId: context.chatId, groupId, identityId, expectedRevision, activeLookId, requestBody, ...(mediaTarget ? mediaTarget : {}), ...(mediaTarget && !mediaTarget.lookId && activeLookId ? { lookId: activeLookId } : {}) };
 }
 
 function chatCaptureIsCurrent(captured) {
     return getContext().chatId === captured.chatId && chatLifecycleEpoch.isCurrent(captured.epoch);
 }
 
-function scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint }) {
-    setTimeout(() => {
+function currentVisibleCanonMedia(target) {
+    const message = getContext().chat?.[Number(target?.messageId)];
+    const media = message?.extra?.media;
+    if (!Array.isArray(media)) return null;
+    return media.find((entry) => buildVisibleCanonMediaArtifactId({ messageId: target.messageId, media: entry }) === target.artifactId && entry.url === target.mediaUrl) || null;
+}
+
+function visibleCanonCaptureIsCurrent(captured) {
+    if (!chatCaptureIsCurrent(captured)) return false;
+    return !captured.mediaTarget || Boolean(currentVisibleCanonMedia(captured.mediaTarget));
+}
+
+function visibleCanonMediaLinkSnapshot(target) {
+    return currentVisibleCanonMedia(target)?.cig_visible_canon || null;
+}
+
+function setVisibleCanonMediaLink(target, link) {
+    const message = getContext().chat?.[Number(target?.messageId)];
+    const media = message?.extra?.media;
+    if (!Array.isArray(media)) return false;
+    const index = media.findIndex((entry) => buildVisibleCanonMediaArtifactId({ messageId: target.messageId, media: entry }) === target.artifactId && entry.url === target.mediaUrl);
+    if (index < 0) return false;
+    if (link) media[index] = linkVisibleCanonMediaArtifact(media[index], { messageId: target.messageId, identityId: link.identityId, lookId: link.lookId });
+    else {
+        const next = { ...media[index] };
+        delete next.cig_visible_canon;
+        delete next.cig_artifact_id;
+        media[index] = next;
+    }
+    return true;
+}
+
+function visibleCanonPendingLink(captured, identityId, lookId) {
+    const target = captured?.mediaTarget;
+    return target && {
+        ...target,
+        chatId: captured.chatId,
+        identityId,
+        lookId,
+        epoch: captured.epoch,
+    };
+}
+
+function saveVisibleCanonChat(mediaTarget = null) {
+    const context = getContext();
+    return context.groupId ? context.saveMetadata() : saveChat({ mesId: mediaTarget?.messageId });
+}
+
+function scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint, mediaTarget = null }) {
+    const retry = () => {
         void reconcilePendingOperation(operationId, async () => {
-            const verification = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
-            if (verification.status === 'confirmed' && chatCaptureIsCurrent(captured) && chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId) === expectedCurrentFingerprint) {
+            const bindingVerification = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
+            const mediaVerification = mediaTarget
+                ? await verifyPersistedChatMediaLink({ target: { ...target, ...mediaTarget }, fetchImpl: fetch, getHeaders: getRequestHeaders })
+                : { status: 'confirmed' };
+            const verification = bindingVerification.status === 'confirmed' && mediaVerification.status === 'confirmed'
+                ? { status: 'confirmed', bindingVerification, mediaVerification }
+                : { status: bindingVerification.status === 'indeterminate' || mediaVerification.status === 'indeterminate' ? 'indeterminate' : 'confirmed-absent', bindingVerification, mediaVerification };
+            if (verification.status === 'confirmed' && visibleCanonCaptureIsCurrent(captured) && chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId) === expectedCurrentFingerprint) {
                 chat_metadata[CHAT_CANON_KEY] = candidate;
+                if (mediaTarget) setVisibleCanonMediaLink(mediaTarget, { identityId, lookId: mediaTarget.lookId });
                 renderAppearanceList();
+                refreshVisibleCanonControls();
             }
             return verification;
+        }).then((result) => {
+            if (result?.status !== 'confirmed') setTimeout(retry, 1500);
         });
-    }, 1500);
+    };
+    setTimeout(retry, 1500);
 }
 
 async function resumePendingAppearanceOperations() {
@@ -1754,19 +1816,57 @@ function scheduleLibraryPromotionReconciliation(operationId, _expectedRevision) 
     }, 1500);
 }
 
-async function persistChatCanonChange({ captured, candidate, identityId, activeLookId }) {
-    const target = capturedChatTarget(identityId, candidate.revision, activeLookId);
+async function resumePendingVisibleCanonLinks() {
+    const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+    const pendingState = createVisibleCanonPendingState(canon.visibleCanonPending);
+    if (Object.keys(pendingState.pending).length === 0) return { status: 'nothing-to-do' };
+    const resumed = await resumeVisibleCanonPending(pendingState, async (link) => {
+        if (getContext().chatId !== link.chatId || !currentVisibleCanonMedia(link)) return { status: 'confirmed' };
+        setVisibleCanonMediaLink(link, { identityId: link.identityId, lookId: link.lookId });
+        await saveVisibleCanonChat(link);
+        return verifyPersistedChatMediaLink({
+            target: capturedChatTarget(link.identityId, canon.revision, link.lookId, link),
+            fetchImpl: fetch,
+            getHeaders: getRequestHeaders,
+        });
+    });
+    if (JSON.stringify(resumed.state.pending) !== JSON.stringify(pendingState.pending)) {
+        chat_metadata[CHAT_CANON_KEY] = { ...canon, visibleCanonPending: resumed.state.pending };
+        await getContext().saveMetadata();
+    }
+    return resumed;
+}
+
+async function persistChatCanonChange({ captured, candidate, identityId, activeLookId, mediaTarget = null }) {
+    const target = capturedChatTarget(identityId, candidate.revision, activeLookId, mediaTarget);
     const operationId = `chat-canon:${crypto.randomUUID()}`;
     const expectedCurrentFingerprint = chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId);
+    const linkedLookId = mediaTarget?.lookId || activeLookId;
+    const pendingLink = visibleCanonPendingLink(captured, identityId, linkedLookId);
+    const candidateWithPending = pendingLink
+        ? { ...candidate, visibleCanonPending: queueVisibleCanonPending(createVisibleCanonPendingState(candidate.visibleCanonPending), pendingLink).pending }
+        : candidate;
+    const previousState = () => ({ canon: chat_metadata[CHAT_CANON_KEY], mediaLink: mediaTarget ? visibleCanonMediaLinkSnapshot(mediaTarget) : null });
     return persistVerifiedChatMutation({
         captured,
-        isCurrent: chatCaptureIsCurrent,
-        getState: () => chat_metadata[CHAT_CANON_KEY],
-        setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value; },
-        nextState: candidate,
-        saveMetadata: () => getContext().saveMetadata(),
-        verify: () => verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders }),
-        scheduleReconcile: () => scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint }),
+        isCurrent: visibleCanonCaptureIsCurrent,
+        getState: previousState,
+        setState: (value) => {
+            chat_metadata[CHAT_CANON_KEY] = value.canon;
+            if (mediaTarget) setVisibleCanonMediaLink(mediaTarget, value.mediaLink);
+        },
+        nextState: { canon: candidateWithPending, mediaLink: pendingLink ? { artifactId: pendingLink.artifactId, identityId, lookId: linkedLookId } : previousState().mediaLink },
+        getRevision: (value) => value?.canon?.revision,
+        saveMetadata: () => saveVisibleCanonChat(mediaTarget),
+        verify: async () => {
+            const bindingVerification = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
+            const mediaVerification = mediaTarget
+                ? await verifyPersistedChatMediaLink({ target, fetchImpl: fetch, getHeaders: getRequestHeaders })
+                : { status: 'confirmed' };
+            if (bindingVerification.status === 'confirmed' && mediaVerification.status === 'confirmed') return { status: 'confirmed', bindingVerification, mediaVerification };
+            return { status: bindingVerification.status === 'indeterminate' || mediaVerification.status === 'indeterminate' ? 'indeterminate' : 'confirmed-absent', bindingVerification, mediaVerification };
+        },
+        scheduleReconcile: () => scheduleChatCanonReconciliation({ operationId, captured, target, candidate: candidateWithPending, identityId, expectedCurrentFingerprint, mediaTarget: pendingLink || mediaTarget }),
     });
 }
 
@@ -1774,7 +1874,7 @@ function appearanceFeatureController() {
     return createAppearanceFeatureController({
         isCurrent: chatCaptureIsCurrent,
         getFingerprint: (identityId) => chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId),
-        persistChat: ({ captured, candidate, identityId, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId, activeLookId }),
+        persistChat: ({ captured, candidate, identityId, activeLookId, mediaTarget }) => persistChatCanonChange({ captured, candidate, identityId, activeLookId, mediaTarget }),
         promoteLook: async ({ promoted }) => promoted,
         persistLibrary: async () => ({ status: 'confirmed' }),
     });
@@ -1826,11 +1926,12 @@ async function persistVisibleCanonGalleryLink({ artifactId, identityId, lookId, 
     }
 }
 
-async function rememberGalleryAppearance(index) {
+async function rememberGalleryAppearance(index, mediaTarget = null) {
     const settings = extension_settings[extensionName];
     const item = settings.gallery?.[index];
     if (!item) return;
-    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+    if (!mediaTarget && item.messageId !== null && item.messageId !== undefined) mediaTarget = visibleCanonMediaTarget(item.messageId, item.url);
+    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), ...(mediaTarget ? { mediaTarget } : {}) };
     const selection = await chooseAppearanceIdentity(item.prompt || 'Saved appearance');
     if (!selection) return;
     const { identity, label } = selection;
@@ -1842,7 +1943,7 @@ async function rememberGalleryAppearance(index) {
     const activation = await runRememberAppearance({
         captured, identity, label, item,
         io: {
-            isCurrent: chatCaptureIsCurrent,
+            isCurrent: visibleCanonCaptureIsCurrent,
             runExclusive: (operation) => enqueueLibraryMutation(operation),
             readLibrary: async () => {
                 const authoritative = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
@@ -1866,12 +1967,12 @@ async function rememberGalleryAppearance(index) {
             setLocalLibrary: (library) => { settings.rp_library = library; },
             scheduleLibraryReconciliation: ({ operationId, revision }) => scheduleLibraryPromotionReconciliation(operationId, revision),
             getChatCanon: () => chat_metadata[CHAT_CANON_KEY],
-            persistChat: ({ candidate, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId }),
+            persistChat: ({ candidate, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId, mediaTarget: captured.mediaTarget }),
             uuid: () => crypto.randomUUID(),
             now: () => Date.now(),
         },
     });
-    if (activation.promoted?.look?.id && ['confirmed', 'alternate'].includes(activation.status)) {
+    if (!mediaTarget && activation.promoted?.look?.id && ['confirmed', 'alternate'].includes(activation.status)) {
         const artifactId = galleryArtifactKey(item);
         await persistVisibleCanonGalleryLink({ artifactId, identityId: identity.id, lookId: activation.promoted.look.id });
     }
@@ -2439,6 +2540,7 @@ function renderVisibleCanonControls(messageElement, messageOverride = null) {
         label.append(select).appendTo(root);
         createVisibleCanonButton('cig_visible_canon_change', 'Change look', {
             'data-message-id': String(messageId),
+            'data-media-url': activeMedia.item.url || '',
             'data-identity-id': projection.identityId,
         }).appendTo(root);
     }
@@ -2446,12 +2548,14 @@ function renderVisibleCanonControls(messageElement, messageOverride = null) {
     if (projection.active) {
         createVisibleCanonButton('cig_visible_canon_lock', projection.locked ? 'Unlock look' : 'Lock look', {
             'data-message-id': String(messageId),
+            'data-media-url': activeMedia.item.url || '',
             'data-identity-id': projection.identityId,
             'data-look-id': projection.activeLookId,
             'aria-pressed': projection.locked ? 'true' : 'false',
         }).appendTo(root);
         createVisibleCanonButton('cig_visible_canon_stop', 'Stop using look', {
             'data-message-id': String(messageId),
+            'data-media-url': activeMedia.item.url || '',
             'data-identity-id': projection.identityId,
             'data-look-id': projection.activeLookId,
         }).appendTo(root);
@@ -2558,7 +2662,7 @@ async function deleteGalleryImage(index) {
     renderAppearanceList();
 }
 
-async function useAppearanceLook(identityId, lookId) {
+async function useAppearanceLook(identityId, lookId, mediaTarget = null) {
     const settings = extension_settings[extensionName];
     const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
     const look = identity?.looks.find((entry) => entry.id === lookId);
@@ -2568,7 +2672,7 @@ async function useAppearanceLook(identityId, lookId) {
         return;
     }
     const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), fingerprint: chatCanonRevisionFingerprint(canon, identityId) };
+    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), fingerprint: chatCanonRevisionFingerprint(canon, identityId), ...(mediaTarget ? { mediaTarget } : {}) };
     const current = getChatBinding(canon, identityId);
     let confirmed = false;
     if (current?.isLocked && current.activeLookId !== lookId) {
@@ -2576,7 +2680,7 @@ async function useAppearanceLook(identityId, lookId) {
         if (!confirmed) return;
     }
     const action = await appearanceFeatureController().use({
-        captured, identityId, activeLookId: look.id, baselineFingerprint: captured.fingerprint,
+        captured, identityId, activeLookId: look.id, baselineFingerprint: captured.fingerprint, mediaTarget,
         buildCandidate: () => {
             const selected = selectLookForChat(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, selectedAt: Date.now(), confirmed, expectedLookId: current?.activeLookId });
             return selected.status === 'selected' ? { ...selected.state, revision: `chat-canon:${crypto.randomUUID()}` } : null;
@@ -2589,7 +2693,7 @@ async function useAppearanceLook(identityId, lookId) {
     } else toastr.info(action.message, 'Context Image Generation');
 }
 
-async function toggleAppearanceLookLock(identityId, lookId) {
+async function toggleAppearanceLookLock(identityId, lookId, mediaTarget = null) {
     const settings = extension_settings[extensionName];
     const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
     const look = identity?.looks.find((entry) => entry.id === lookId);
@@ -2599,11 +2703,11 @@ async function toggleAppearanceLookLock(identityId, lookId) {
         return;
     }
     const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), fingerprint: chatCanonRevisionFingerprint(canon, identityId) };
+    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), fingerprint: chatCanonRevisionFingerprint(canon, identityId), ...(mediaTarget ? { mediaTarget } : {}) };
     const binding = getChatBinding(canon, identityId);
     const actionName = binding?.isLocked ? 'unlock' : 'lock';
     const action = await appearanceFeatureController()[actionName]({
-        captured, identityId, activeLookId: look.id, baselineFingerprint: captured.fingerprint,
+        captured, identityId, activeLookId: look.id, baselineFingerprint: captured.fingerprint, mediaTarget,
         buildCandidate: () => ({ ...(binding ? setChatLock(canon, identityId, !binding.isLocked) : setChatBinding(canon, identityId, { activeLookId: look.id, expectedAssetId: look.assetId, isLocked: true, selectedAt: Date.now() })), revision: `chat-canon:${crypto.randomUUID()}` }),
     });
     if (action.status === 'confirmed') {
@@ -2613,7 +2717,7 @@ async function toggleAppearanceLookLock(identityId, lookId) {
     } else toastr.info(action.message, 'Context Image Generation');
 }
 
-async function stopAppearanceLook(identityId, lookId) {
+async function stopAppearanceLook(identityId, lookId, mediaTarget = null) {
     const settings = extension_settings[extensionName];
     const identity = migrateAppearanceLibrary(settings.rp_library).identities[identityId];
     const look = identity?.looks.find((entry) => entry.id === lookId);
@@ -2623,12 +2727,12 @@ async function stopAppearanceLook(identityId, lookId) {
         return;
     }
     const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+    const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture(), ...(mediaTarget ? { mediaTarget } : {}) };
     const result = await runStopUsingInChat({
         captured, identityId, canon,
         io: {
             isCurrent: chatCaptureIsCurrent,
-            persistChat: ({ candidate }) => persistChatCanonChange({ captured, candidate, identityId, activeLookId: null }),
+            persistChat: ({ candidate }) => persistChatCanonChange({ captured, candidate, identityId, activeLookId: null, mediaTarget }),
             uuid: () => crypto.randomUUID(),
         },
     });
@@ -2646,17 +2750,26 @@ async function rememberVisibleCanonImage(messageId, mediaUrl) {
         toastr.info('This image is not available in the Gallery yet.', 'Context Image Generation');
         return;
     }
-    await rememberGalleryAppearance(index);
+    await rememberGalleryAppearance(index, visibleCanonMediaTarget(messageId, mediaUrl));
     refreshVisibleCanonControls();
+}
+
+function visibleCanonMediaTarget(messageId, mediaUrl) {
+    const message = getContext().chat?.[Number(messageId)];
+    const media = message?.extra?.media;
+    if (!Array.isArray(media)) return null;
+    const item = media.find((entry) => entry?.url === mediaUrl);
+    if (!item) return null;
+    return { messageId: Number(messageId), mediaUrl, artifactId: buildVisibleCanonMediaArtifactId({ messageId, media: item }) };
 }
 
 function visibleCanonActionController() {
     return createVisibleCanonActionController({
         actions: {
             remember: ({ messageId, mediaUrl }) => rememberVisibleCanonImage(messageId, mediaUrl),
-            change: ({ identityId, lookId }) => useAppearanceLook(identityId, lookId),
-            lock: ({ identityId, lookId }) => toggleAppearanceLookLock(identityId, lookId),
-            stop: ({ identityId, lookId }) => stopAppearanceLook(identityId, lookId),
+            change: ({ identityId, lookId, messageId, mediaUrl }) => useAppearanceLook(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
+            lock: ({ identityId, lookId, messageId, mediaUrl }) => toggleAppearanceLookLock(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
+            stop: ({ identityId, lookId, messageId, mediaUrl }) => stopAppearanceLook(identityId, lookId, visibleCanonMediaTarget(messageId, mediaUrl) && { ...visibleCanonMediaTarget(messageId, mediaUrl), lookId }),
         },
         refresh: refreshVisibleCanonControls,
     });
@@ -2949,10 +3062,7 @@ jQuery(async () => {
     $(document).on('click', '.cig_visible_canon_remember', async function (e) {
         e.stopPropagation();
         try {
-            await visibleCanonActionController().run('remember', {
-                messageId: $(this).attr('data-message-id'),
-                mediaUrl: $(this).attr('data-media-url'),
-            });
+            await visibleCanonActionController().run('remember', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'remember' }));
         } catch (error) {
             showGenerationError(error, 'Remember character look');
         }
@@ -2962,17 +3072,17 @@ jQuery(async () => {
         e.stopPropagation();
         const root = $(this).closest('.cig_visible_canon');
         const lookId = root.find('.cig_visible_canon_select').val();
-        if (lookId) await visibleCanonActionController().run('change', { identityId: $(this).attr('data-identity-id'), lookId });
+        if (lookId) await visibleCanonActionController().run('change', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'change', lookId }));
     });
 
     $(document).on('click', '.cig_visible_canon_lock', async function (e) {
         e.stopPropagation();
-        await visibleCanonActionController().run('lock', { identityId: $(this).attr('data-identity-id'), lookId: $(this).attr('data-look-id') });
+        await visibleCanonActionController().run('lock', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'lock' }));
     });
 
     $(document).on('click', '.cig_visible_canon_stop', async function (e) {
         e.stopPropagation();
-        await visibleCanonActionController().run('stop', { identityId: $(this).attr('data-identity-id'), lookId: $(this).attr('data-look-id') });
+        await visibleCanonActionController().run('stop', buildVisibleCanonActionPayload({ dataset: this.dataset, action: 'stop' }));
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {
@@ -3008,6 +3118,7 @@ jQuery(async () => {
         setTimeout(() => {
             injectAllMessageButtons();
             configureAllCigImageArrows();
+            void resumePendingVisibleCanonLinks();
         }, 100);
     });
 

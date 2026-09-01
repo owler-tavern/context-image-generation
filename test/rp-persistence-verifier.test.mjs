@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, verifyPersistedChatMediaLink, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
 
 test('library verification is three-state and checks exact revision', async () => {
     let method;
@@ -37,6 +37,18 @@ test('chat verification checks the captured target binding and revision', async 
 test('chat verification confirms an explicit Stop when the captured binding is absent', async () => {
     const result = await verifyPersistedChatBinding({ target: { chatId: 'a', identityId: 'character:ava', expectedRevision: 'r2', activeLookId: null }, fetchImpl: async () => ({ ok: true, json: async () => ({ chat_metadata: { contextImageGeneration: { revision: 'r2', bindings: {} } } }) }) });
     assert.equal(result.status, 'confirmed');
+});
+
+test('chat media verification checks exact message and artifact identity/look link', async () => {
+    const target = { messageId: 4, artifactId: 'message:4:url:/sam.png', mediaUrl: '/sam.png', identityId: 'user:persona.png', lookId: 'look:sam', requestBody: { file_name: 'chat' } };
+    const payload = [
+        { chat_metadata: {} },
+        ...Array.from({ length: 4 }, () => ({})),
+        { extra: { media: [{ url: '/sam.png', cig_visible_canon: { artifactId: target.artifactId, identityId: target.identityId, lookId: target.lookId } }] } },
+    ];
+    const fetchImpl = async () => ({ ok: true, json: async () => payload });
+    assert.equal((await verifyPersistedChatMediaLink({ target, fetchImpl })).status, 'confirmed');
+    assert.equal((await verifyPersistedChatMediaLink({ target: { ...target, identityId: 'npc:guard' }, fetchImpl })).status, 'confirmed-absent');
 });
 
 test('chat verifier understands real single and group JSONL responses and exact request bodies', async () => {
