@@ -19,6 +19,7 @@ test('appearance memory exposes distinct local stop and explicit global deletion
 test('production Gallery clear uses verified legacy migration and every look action rechecks tombstone availability', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /runClearGalleryPreservingLooks\(\{ gallery: settings\.gallery/);
+    assert.match(source, /\['pending-migration', 'pending-clear'\]/);
     assert.ok((source.match(/projectAppearanceLookActionState\(/g) || []).length >= 5);
     assert.match(source, /Saved look deletion in progress/);
 });

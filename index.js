@@ -1673,7 +1673,7 @@ async function resumePendingAppearanceOperations() {
     const settings = extension_settings[extensionName];
     const library = migrateAppearanceLibrary(settings?.rp_library);
     if (!Object.keys(library.operations || {}).length) return { status: 'nothing-to-do', library };
-    if (Object.values(library.operations || {}).some((operation) => operation?.status === 'pending-migration')) {
+    if (Object.values(library.operations || {}).some((operation) => ['pending-migration', 'pending-clear'].includes(operation?.status))) {
         return runClearGalleryPreservingLooks({ gallery: settings.gallery || [], io: appearanceMigrationIo(), withinExclusive: true });
     }
     const result = await reconcileAppearanceOperations({
