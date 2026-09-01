@@ -16,6 +16,7 @@ import {
     planContinueFromScene,
     removeStoryCollectionMember,
     resolveArtifactIdAlias,
+    resolveArtifactIdAliasStatus,
     searchStoryArtifacts,
     STORY_MEMORY_SCHEMA,
     toggleStoryFavorite,
@@ -147,6 +148,39 @@ test('migrates collection aliases and rejects unknown or ambiguous alias resolut
     };
     assert.equal(resolveArtifactIdAlias(cyclic, 'first'), null);
     assert.equal(resolveArtifactIdAlias(cyclic, 'second'), null);
+});
+
+test('reports alias resolution status and rejects conflicted IDs before artifact mutation', () => {
+    const ambiguous = {
+        artifacts: {
+            first: { ...generated({ id: 'first' }), aliases: ['shared-alias'] },
+            second: { ...generated({ id: 'second' }), aliases: ['shared-alias'] },
+        },
+    };
+    assert.deepEqual(resolveArtifactIdAliasStatus(ambiguous, 'first'), { status: 'resolved', canonicalId: 'first' });
+    assert.deepEqual(resolveArtifactIdAliasStatus(ambiguous, 'shared-alias'), { status: 'ambiguous', canonicalId: null });
+    assert.deepEqual(resolveArtifactIdAliasStatus(ambiguous, 'missing-alias'), { status: 'missing', canonicalId: null });
+    assert.throws(() => addStoryArtifact(ambiguous, { ...generated({ id: 'shared-alias' }), url: '/same.png' }), /ambiguous/i);
+    assert.equal(ambiguous.artifacts['shared-alias'], undefined);
+
+    const canonicalCollision = {
+        artifacts: {
+            first: { ...generated({ id: 'first' }) },
+            second: { ...generated({ id: 'second' }), aliases: ['first'] },
+        },
+    };
+    assert.deepEqual(resolveArtifactIdAliasStatus(canonicalCollision, 'first'), { status: 'ambiguous', canonicalId: null });
+    assert.throws(() => addStoryArtifact(canonicalCollision, { ...generated({ id: 'first' }), url: '/same.png' }), /ambiguous/i);
+
+    const cyclic = {
+        artifacts: {
+            first: { ...generated({ id: 'first' }), aliases: ['second'] },
+            second: { ...generated({ id: 'second' }), aliases: ['first'] },
+        },
+    };
+    assert.deepEqual(resolveArtifactIdAliasStatus(cyclic, 'first'), { status: 'cycle', canonicalId: null });
+    assert.throws(() => addStoryArtifact(cyclic, { ...generated({ id: 'first' }), url: '/same.png' }), /cycle/i);
+    assert.equal(cyclic.artifacts.first.prompt, 'prompt 1');
 });
 
 test('artifact IDs are unambiguous for delimiter-heavy chat/source values', () => {
