@@ -66,7 +66,7 @@ function dependencies(overrides = {}) {
         },
         continuePlanner: async (request) => {
             calls.continue.push(request);
-            return { status: 'planned', sourceArtifactId: request.sourceArtifactId, sourceArtifactVersion: request.sourceArtifactVersion };
+            return { status: 'planned', artifactId: request.artifactId, artifactVersion: request.artifactVersion, requestId: request.requestId };
         },
         ...overrides,
     };
@@ -207,5 +207,95 @@ test('stylesheet install and uninstall are idempotent and scoped', () => {
     assert.equal(installStoryMemoryStyles(documentLike).id, styles[0].id);
     assert.equal(styles.length, 1);
     uninstallStoryMemoryStyles(documentLike);
+    assert.equal(styles.length, 0);
+});
+
+test('Gallery hydration persists the exact migrated delta and confirms readback before ready', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createStoryMemoryController(deps);
+    const loaded = await controller.load({ chatId: 'chat-a', gallery: [{ id: 'hydrate-me', url: '/images/hydrate-me.png', chatId: 'chat-a', messageId: 9 }] });
+    assert.equal(loaded.status, 'ready');
+    const persist = calls.persist.find((entry) => entry.operation === 'hydrate-gallery');
+    assert.ok(persist);
+    assert.deepEqual(persist.delta.addedArtifactIds, ['story:v1:6:chat-a:10:hydrate-me']);
+    assert.equal(calls.readback.at(-1).operation, 'hydrate-gallery');
+    assert.equal(calls.readback.at(-1).expected.addedArtifactIds[0], persist.delta.addedArtifactIds[0]);
+});
+
+test('every mutation sends an exact expected operation state to persistence and readback', async () => {
+    const { deps, calls } = dependencies();
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    await controller.toggleFavorite('story:a', true);
+    assert.deepEqual(calls.persist.at(-1).expected, { operation: 'toggle-favorite', artifactId: 'story:a', artifactVersion: 1, favorite: true });
+    await controller.createCollection({ collectionId: 'mood', kind: 'location', label: 'Mood' });
+    assert.deepEqual(calls.persist.at(-1).expected, { operation: 'create-collection', collectionId: 'mood', label: 'Mood', kind: 'location' });
+    await controller.addCollectionMember('mood', 'story:a');
+    assert.deepEqual(calls.persist.at(-1).expected, { operation: 'add-member', collectionId: 'mood', artifactId: 'story:a', artifactVersion: 1, memberIds: ['story:a'] });
+    await controller.removeCollectionMember('mood', 'story:a');
+    assert.deepEqual(calls.readback.at(-1).expected, { operation: 'remove-member', collectionId: 'mood', artifactId: 'story:a', artifactVersion: 1, memberIds: [] });
+});
+
+test('stale favorite readback and missing continue receipt fail closed', async () => {
+    const { deps } = dependencies({
+        readbackMemory: async () => ({ memory: { ...memory(), artifacts: { ...memory().artifacts, 'story:a': artifact({ id: 'story:a', messageId: 2, favorite: false }) } } }),
+    });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    const stale = await controller.toggleFavorite('story:a', true);
+    assert.equal(stale.status, 'error');
+
+    const receiptMissing = dependencies({ continuePlanner: async () => ({ status: 'planned' }) });
+    const second = createStoryMemoryController(receiptMissing.deps);
+    await second.load({ chatId: 'chat-a' });
+    const blocked = await second.continueFromScene('story:a');
+    assert.equal(blocked.status, 'error');
+    assert.match(blocked.error, /receipt|requestId|artifact/u);
+});
+
+test('setFilters supports replacement so Clear filters removes the complete compound query', async () => {
+    const { deps } = dependencies();
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    controller.setFilters({ prompt: 'garden', favorite: true });
+    const cleared = controller.setFilters({}, { replace: true });
+    assert.deepEqual(cleared.filters, {});
+    assert.equal(cleared.timeline.length, 2);
+});
+
+test('filter input keeps draft focus and does not replace the host until Apply', async () => {
+    const { deps } = dependencies();
+    const controller = createStoryMemoryController(deps);
+    let renders = 0;
+    const listeners = new Map();
+    const host = {
+        innerHTML: '',
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        removeEventListener(type, listener) { if (listeners.get(type) === listener) listeners.delete(type); },
+        querySelector(selector) { return { value: selector.includes('prompt') ? 'draft' : '', checked: false }; },
+    };
+    const mounted = mountStoryMemorySurface(host, controller);
+    const originalRender = mounted.render;
+    mounted.render = () => { renders += 1; return originalRender(); };
+    const before = host.innerHTML;
+    listeners.get('input')({ target: { name: 'prompt', value: 'draft', closest: () => ({}) } });
+    assert.equal(host.innerHTML, before);
+    assert.equal(controller.getState().filters.prompt, undefined);
+    mounted.destroy();
+});
+
+test('mount optionally owns stylesheet installation and removal', () => {
+    const { deps } = dependencies();
+    const styles = [];
+    const documentLike = {
+        getElementById(id) { return styles.find((style) => style.id === id) || null; },
+        createElement() { return { id: '', textContent: '' }; },
+        head: { appendChild(style) { styles.push(style); }, removeChild(style) { styles.splice(styles.indexOf(style), 1); } },
+    };
+    const controller = createStoryMemoryController(deps);
+    const host = { innerHTML: '', addEventListener() {}, removeEventListener() {} };
+    const mounted = mountStoryMemorySurface(host, controller, { documentLike, installStyles: true });
+    assert.equal(styles.length, 1);
+    mounted.destroy();
     assert.equal(styles.length, 0);
 });
