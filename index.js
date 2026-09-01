@@ -37,7 +37,7 @@ import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
-import { buildGenerationKey, captureMessageTarget, validateMessageTarget } from './lib/rp-target.js';
+import { buildGenerationKey, captureMessageTarget, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { bindAppearanceLifecycle, createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
@@ -84,6 +84,8 @@ import { createIterationSurfaceController, mountIterationSurface, installIterati
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
+import { createCinematicRuntime, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
+import { createCinematicUiController, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -121,6 +123,7 @@ const defaultSettings = {
     rp_outfits: { schema: 1, outfits: [] },
     outfit_pending: { schema: 1, pending: {} },
     scene_state_pending: { schema: 1, pending: {} },
+    cinematic_automation: { schema: 1, enabled: false, mode: 'balanced', budgetType: 'generations', generationLimit: 5, costCeiling: null },
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -134,6 +137,8 @@ const iterationInvocations = new Set();
 let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
 let pendingStoryMemoryContinuation = null;
+let cinematicRuntime = null;
+let cinematicUiController = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -872,6 +877,7 @@ function createStoryMemorySurface() {
         settings,
         getChat: () => getContext().chat || [],
         getChatId: () => getContext().chatId,
+        getChat: () => getContext().chat || [],
         isCurrent: ({ chatId, epoch }) => String(getContext().chatId) === String(chatId) && chatLifecycleEpoch.isCurrent(epoch),
         saveSettings,
         fetchImpl: fetch,
@@ -933,6 +939,113 @@ function openStoryMemoryArtifact(messageId) {
     document.getElementById('cig_story_memory_surface')?.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
 }
 
+function cinematicRuntimeSettings() {
+    const settings = extension_settings[extensionName] || {};
+    const configured = settings.cinematic_automation || {};
+    return {
+        ...configured,
+        enabled: configured.enabled === true,
+        mode: configured.enabled === true ? configured.mode : 'off',
+        generationLimit: configured.budgetType === 'cost' ? null : configured.generationLimit,
+        costCeiling: configured.budgetType === 'cost' ? configured.costCeiling : null,
+    };
+}
+
+function renderCinematicSuggestion(suggestion = cinematicRuntime?.getState()?.suggestion) {
+    $('.cig_cinematic_suggestion').remove();
+    if (!suggestion?.suggestionId || suggestion.target?.messageId === null || suggestion.target?.messageId === undefined) return;
+    const messageElement = $(`.mes[mesid="${Number(suggestion.target.messageId)}"]`);
+    if (!messageElement.length) return;
+    const root = $(renderCinematicSuggestionCard(suggestion));
+    const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
+    if (anchor.length) anchor.after(root); else messageElement.append(root);
+}
+
+function refreshCinematicSurface() {
+    renderCinematicSuggestion();
+    const state = cinematicRuntime?.getState();
+    const settings = extension_settings[extensionName]?.cinematic_automation || {};
+    $('#cig_cinematic_status').text(state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
+    $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
+}
+
+function createCinematicSurface() {
+    const settings = extension_settings[extensionName];
+    const runtimeSettings = cinematicRuntimeSettings();
+    cinematicRuntime = createCinematicRuntime({
+        settings: runtimeSettings,
+        getChatId: () => getContext().chatId,
+        getEpoch: () => chatLifecycleEpoch.capture(),
+        readState: () => ({
+            cinematicAutomation: chat_metadata?.[CHAT_CANON_KEY]?.[CINEMATIC_AUTOMATION_KEY],
+            storyState: chat_metadata?.[SCENE_STATE_METADATA_KEY],
+        }),
+        writeState: (value) => {
+            if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
+            chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = value.cinematicAutomation;
+            chat_metadata[SCENE_STATE_METADATA_KEY] = value.storyState;
+        },
+        saveChat: () => saveChatConditional(),
+        fingerprint: getMessageFingerprint,
+        routeKey: () => {
+            const currentSettings = extension_settings[extensionName] || {};
+            return { provider: currentSettings.provider || '', model: currentSettings.model || '', connection: currentSettings.custom_connection_editor_id || '' };
+        },
+        interpret: ({ message, messageId, priorStoryState }) => {
+            const context = getContext();
+            const recentContext = (context.chat || []).slice(Math.max(0, Number(messageId) - 11), Number(messageId));
+            return buildSceneGenerationSnapshot({
+                clickedMessage: message,
+                recentContext,
+                identities: getAppearanceIdentityChoices(),
+                priorStoryState,
+                settings,
+            });
+        },
+        validateRoute: async ({ target }) => {
+            const context = getContext();
+            const valid = validateMessageTarget({ target, currentChatId: context.chatId, currentChat: context.chat });
+            if (!valid.safe) return { allowed: false, status: 'stale', reason: valid.reason };
+            const currentSettings = extension_settings[extensionName] || {};
+            return currentSettings.provider && currentSettings.model ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: 'Image provider and model are not configured.' };
+        },
+        dispatch: async ({ suggestion, target }) => {
+            const context = getContext();
+            const messageId = Number(target.messageId);
+            const message = context.chat?.[messageId];
+            const element = $(`.mes[mesid="${messageId}"]`);
+            if (!message || !element.length) throw new Error('The suggested story message is no longer available.');
+            const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
+            const shot = suggestion.adjustments?.prompt || suggestion.proposedShot || '';
+            const prompt = shot ? `${message.mes}\n\nCinematic shot direction: ${shot}` : message.mes;
+            const result = await attachGeneratedImage(message, element, prompt, sender, messageId, null, target, 'cinematic-automation');
+            return { status: 'completed', receipt: result?.receipt || result };
+        },
+    });
+    cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+    cinematicUiController = createCinematicUiController({
+        getSuggestion: () => cinematicRuntime?.getState()?.suggestion,
+        approve: (id) => cinematicRuntime.approve(id).then((result) => { refreshCinematicSurface(); return result; }),
+        adjust: (id, adjustments) => cinematicRuntime.adjust(id, adjustments).then((result) => { refreshCinematicSurface(); return result; }),
+        dismiss: (id) => cinematicRuntime.dismiss(id).then((result) => { refreshCinematicSurface(); return result; }),
+    });
+    installCinematicStyles(document);
+    refreshCinematicSurface();
+}
+
+async function observeCinematicMessage(messageId) {
+    const context = getContext();
+    const message = context.chat?.[Number(messageId)];
+    if (!message || !message.mes || message.is_system || !cinematicRuntime) return;
+    const result = await cinematicRuntime.observe({
+        chatId: context.chatId,
+        epoch: chatLifecycleEpoch.capture(),
+        messageId: Number(messageId),
+        message,
+    });
+    if (result.status !== 'stale') refreshCinematicSurface();
+}
+
 async function loadSettings() {
     extension_settings[extensionName] = extension_settings[extensionName] || {};
     let settingsMigrated = false;
@@ -953,6 +1066,19 @@ async function loadSettings() {
         settingsMigrated = true;
     }
     const cigSettings = extension_settings[extensionName];
+    if (!cigSettings.cinematic_automation || typeof cigSettings.cinematic_automation !== 'object' || Array.isArray(cigSettings.cinematic_automation)) {
+        cigSettings.cinematic_automation = { ...defaultSettings.cinematic_automation };
+        settingsMigrated = true;
+    } else {
+        const cinematic = cigSettings.cinematic_automation;
+        if (!['conservative', 'balanced', 'frequent', 'off'].includes(cinematic.mode)) { cinematic.mode = 'balanced'; settingsMigrated = true; }
+        if (!['generations', 'cost'].includes(cinematic.budgetType)) { cinematic.budgetType = 'generations'; settingsMigrated = true; }
+        cinematic.enabled = cinematic.enabled === true;
+        const limit = Number.parseInt(cinematic.generationLimit, 10);
+        if (!Number.isInteger(limit) || limit < 1) { cinematic.generationLimit = 5; settingsMigrated = true; } else cinematic.generationLimit = Math.min(limit, 100);
+        const ceiling = Number(cinematic.costCeiling);
+        if (cinematic.costCeiling !== null && (!Number.isFinite(ceiling) || ceiling < 0)) { cinematic.costCeiling = null; settingsMigrated = true; }
+    }
     const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
     if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
         cigSettings.rp_library = migratedAppearanceLibrary;
@@ -1019,6 +1145,14 @@ async function loadSettings() {
     $('#cig_continuity_strength').val(extension_settings[extensionName].continuity_strength);
     $('#cig_custom_visual_instruction').val(extension_settings[extensionName].custom_visual_instruction);
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
+    const cinematicSettings = extension_settings[extensionName].cinematic_automation;
+    $('#cig_cinematic_enabled').prop('checked', cinematicSettings.enabled === true);
+    $('#cig_cinematic_mode').val(cinematicSettings.mode || 'balanced');
+    $('#cig_cinematic_budget_type').val(cinematicSettings.budgetType || 'generations');
+    $('#cig_cinematic_generation_limit').val(cinematicSettings.generationLimit ?? 5);
+    $('#cig_cinematic_cost_ceiling').val(cinematicSettings.costCeiling ?? '');
+    $('#cig_cinematic_generation_budget').prop('hidden', cinematicSettings.budgetType === 'cost');
+    $('#cig_cinematic_cost_budget').prop('hidden', cinematicSettings.budgetType !== 'cost');
 
     toggleImageSizeVisibility();
     toggleProviderSpecificSettings();
@@ -1028,6 +1162,7 @@ async function loadSettings() {
     renderGallery();
     renderAppearanceList();
     createStoryMemorySurface();
+    createCinematicSurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -3953,6 +4088,36 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
+    $('#cig_cinematic_enabled, #cig_cinematic_mode, #cig_cinematic_budget_type, #cig_cinematic_generation_limit, #cig_cinematic_cost_ceiling').on('change input', function () {
+        const settings = extension_settings[extensionName];
+        const cinematic = settings.cinematic_automation || (settings.cinematic_automation = {});
+        cinematic.enabled = $('#cig_cinematic_enabled').prop('checked');
+        cinematic.mode = $('#cig_cinematic_mode').val() || 'balanced';
+        cinematic.budgetType = $('#cig_cinematic_budget_type').val() || 'generations';
+        const limit = Number.parseInt($('#cig_cinematic_generation_limit').val(), 10);
+        cinematic.generationLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 5;
+        const ceiling = Number.parseFloat($('#cig_cinematic_cost_ceiling').val());
+        cinematic.costCeiling = Number.isFinite(ceiling) && ceiling >= 0 ? ceiling : null;
+        $('#cig_cinematic_generation_limit').val(cinematic.generationLimit);
+        $('#cig_cinematic_generation_budget').prop('hidden', cinematic.budgetType === 'cost');
+        $('#cig_cinematic_cost_budget').prop('hidden', cinematic.budgetType !== 'cost');
+        cinematicRuntime?.updateSettings(cinematicRuntimeSettings());
+        saveSettingsDebounced();
+        refreshCinematicSurface();
+    });
+
+    $('#cig_cinematic_retrigger').on('click', async function () {
+        const beat = String($('#cig_cinematic_retrigger_beat').val() || '').trim() || 'missed story beat';
+        try {
+            const result = await cinematicRuntime?.retrigger(beat, `manual:${Date.now()}`, 'missed or failed beat');
+            refreshCinematicSurface();
+            if (result?.status === 'suggested') toastr.info('A manual cinematic suggestion is ready. No chat event was replayed.', 'Context Image Generation');
+            else if (result?.status === 'pending-suppressed') toastr.info('Finish the current suggestion before adding another.', 'Context Image Generation');
+        } catch (error) {
+            showGenerationError(error, 'Manual cinematic retrigger');
+        }
+    });
+
     $('#cig_message_depth').on('change', function () {
         let value = parseInt($(this).val(), 10);
         if (isNaN(value) || value < 1) value = 1;
@@ -4117,6 +4282,23 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
+    $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = $(this).attr('data-cig-cinematic-action');
+        const input = $(this).closest('.cig_cinematic_suggestion').find('[data-cig-cinematic-adjust-input]').val();
+        setBusyState(this, true, { busyTitle: 'Updating cinematic suggestion…' });
+        try {
+            const result = await cinematicUiController?.action(action, input);
+            if (result?.status === 'failed' || result?.status === 'stale') toastr.info(result.reason || 'This suggestion is no longer current.', 'Context Image Generation');
+            else if (result?.status === 'completed') toastr.success('Cinematic image generated.', 'Context Image Generation');
+        } catch (error) {
+            showGenerationError(error, 'Cinematic suggestion');
+        } finally {
+            setBusyState(this, false);
+        }
+    });
+
     document.addEventListener('swiped-left', onCigImageGesture, true);
     document.addEventListener('swiped-right', onCigImageGesture, true);
     document.addEventListener('click', onCigImageArrowClick, true);
@@ -4143,9 +4325,12 @@ jQuery(async () => {
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
         });
+        void observeCinematicMessage(messageId);
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
+        cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        refreshCinematicSurface();
         destroyIterationSurfaceMounts();
         refreshStoryMemorySurface();
         setTimeout(() => {
@@ -4171,6 +4356,8 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
+        cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        refreshCinematicSurface();
         destroyIterationSurfaceMounts();
         refreshStoryMemorySurface();
         setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);

@@ -680,3 +680,21 @@
 #cig_settings_tab_setup[data-cig-status="issue"] .cig-setup-tab-status {
     font-weight: 600;
 }
+
+.cig-cinematic-settings { border-top: 1px solid var(--SmartThemeBorderColor); margin-top: 10px; padding-top: 10px; }
+.cig-cinematic-settings h3 { margin: 0 0 4px; }
+.cig_cinematic_suggestion { border: 1px solid var(--SmartThemeBorderColor); border-radius: 6px; padding: 10px; margin-top: 8px; background: var(--SmartThemeBlurTintColor); overflow-wrap: anywhere; }
+.cig_cinematic_suggestion :is(button, input, textarea) { min-height: 44px; }
+.cig_cinematic_suggestion_actions { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.cig_cinematic_suggestion_actions button { flex: 1 1 120px; }
+.cig_cinematic_suggestion_adjust { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 8px; }
+.cig_cinematic_suggestion_adjust input { flex: 1 1 220px; min-width: 0; }
+.cig-cinematic-retrigger-row { display: flex; gap: 6px; flex-wrap: wrap; }
+.cig-cinematic-retrigger-row input { flex: 1 1 180px; min-width: 0; }
+.cig-cinematic-retrigger-row button { min-height: 44px; }
+@media (max-width: 480px) {
+    .cig_cinematic_suggestion_actions button,
+    .cig_cinematic_suggestion_adjust input { width: 100%; flex-basis: 100%; }
+    .cig-cinematic-retrigger-row input,
+    .cig-cinematic-retrigger-row button { width: 100%; flex-basis: 100%; }
+}
