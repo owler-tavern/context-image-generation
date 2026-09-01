@@ -10,6 +10,7 @@ import {
     adjustCinematicSuggestion,
     retriggerCinematicBeat,
     resetCinematicSession,
+    settleCinematicPlan,
 } from '../lib/rp/cinematic-automation.js';
 
 const delta = (overrides = {}) => ({
@@ -73,7 +74,7 @@ test('duplicate accepted events are idempotently suppressed after the first sugg
     const duplicate = evaluateCinematicAutomation({ session: first.session, acceptedSceneDelta: structuredClone(delta()) });
     assert.equal(first.status, 'suggested');
     assert.equal(duplicate.status, 'duplicate-suppressed');
-    assert.equal(duplicate.suggestion, null);
+    assert.deepEqual(duplicate.suggestion, first.suggestion);
     assert.deepEqual(duplicate.session, first.session);
 });
 
@@ -87,8 +88,10 @@ test('approval, adjustment, and dismissal are explicit suggestion card states', 
     assert.equal(dismissed.state, 'dismissed');
     const approved = approveCinematicSuggestion(suggested.session, suggested.suggestion, { estimatedCost: 0.25 });
     assert.equal(approved.status, 'approved');
-    assert.equal(approved.session.generationCount, 1);
-    assert.equal(approved.session.costSpent, 0.25);
+    assert.equal(approved.session.generationCount, 0);
+    assert.equal(approved.session.costSpent, 0);
+    assert.equal(approved.session.reservedGenerationCount, 1);
+    assert.equal(approved.session.reservedCost, 0.25);
     assert.equal(approved.plan.dispatch.allowed, false);
     assert.equal(approved.plan.dispatch.network, false);
     assert.equal(approved.plan.dispatch.reason, 'approval-plan-only');
@@ -125,4 +128,96 @@ test('session reset clears counters and seen events while preserving determinist
     assert.equal(reset.costSpent, 0);
     assert.deepEqual(reset.seenEventIds, []);
     assert.equal(reset.mode, 'frequent');
+});
+
+test('approval reserves budget without charging, and settlement is idempotent with exact refund or release', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 0.25 });
+    const suggested = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
+    const approved = approveCinematicSuggestion(suggested.session, suggested.suggestion, { estimatedCost: 0.2 });
+    assert.equal(approved.status, 'approved');
+    assert.equal(approved.session.generationCount, 0);
+    assert.equal(approved.session.costSpent, 0);
+    assert.equal(approved.session.reservedGenerationCount, 1);
+    assert.equal(approved.session.reservedCost, 0.2);
+
+    const dispatched = settleCinematicPlan(approved.session, approved.plan, 'dispatched');
+    assert.equal(dispatched.status, 'dispatched');
+    assert.equal(dispatched.session.costSpent, 0);
+    const completed = settleCinematicPlan(dispatched.session, approved.plan, 'completed', { actualCost: 0.15 });
+    assert.equal(completed.status, 'completed');
+    assert.equal(completed.session.generationCount, 1);
+    assert.equal(completed.session.costSpent, 0.15);
+    assert.equal(completed.session.reservedGenerationCount, 0);
+    assert.equal(completed.session.reservedCost, 0);
+    assert.deepEqual(settleCinematicPlan(completed.session, approved.plan, 'completed', { actualCost: 0.15 }), completed);
+
+    const second = evaluateCinematicAutomation({ session: completed.session, acceptedSceneDelta: delta({ revision: 'scene:13' }) });
+    const secondApproval = approveCinematicSuggestion(second.session, second.suggestion, { estimatedCost: 0.1 });
+    const cancelled = settleCinematicPlan(secondApproval.session, secondApproval.plan, 'cancelled');
+    assert.equal(cancelled.session.costSpent, 0.15);
+    assert.equal(cancelled.session.generationCount, 1);
+    assert.equal(cancelled.session.reservedCost, 0);
+    assert.deepEqual(settleCinematicPlan(cancelled.session, secondApproval.plan, 'cancelled'), cancelled);
+});
+
+test('settlement failure releases reservation and unknown or over-ceiling actual cost fails closed', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 0.2 });
+    const suggested = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
+    const approved = approveCinematicSuggestion(suggested.session, suggested.suggestion, { estimatedCost: 0.2 });
+    assert.equal(settleCinematicPlan(approved.session, approved.plan, 'completed').status, 'unknown-cost');
+    assert.equal(settleCinematicPlan(approved.session, approved.plan, 'completed', { actualCost: 0.2001 }).status, 'cost-ceiling');
+    const failed = settleCinematicPlan(approved.session, approved.plan, 'failed', { actualCost: 0.2 });
+    assert.equal(failed.status, 'failed');
+    assert.equal(failed.session.costSpent, 0);
+    assert.equal(failed.session.reservedCost, 0);
+});
+
+test('approval accepts only a pending suggestion from the same session and event registry', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const suggested = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
+    const forged = { ...suggested.suggestion, whyFired: { text: 'forged' } };
+    assert.equal(approveCinematicSuggestion(suggested.session, forged, { estimatedCost: 0.1 }).status, 'invalid-suggestion');
+    const other = createCinematicSession({ sessionId: 'other', mode: 'frequent', costCeiling: 1 });
+    assert.equal(approveCinematicSuggestion(other, suggested.suggestion, { estimatedCost: 0.1 }).status, 'invalid-suggestion');
+    const approved = approveCinematicSuggestion(suggested.session, suggested.suggestion, { estimatedCost: 0.1 });
+    assert.equal(approveCinematicSuggestion(approved.session, suggested.suggestion, { estimatedCost: 0.1 }).status, 'already-approved');
+    assert.equal(approveCinematicSuggestion(approved.session, { ...suggested.suggestion, whyFired: { text: 'forged after approval' } }, { estimatedCost: 0.1 }).status, 'invalid-suggestion');
+});
+
+test('set-like event arrays have order-independent IDs and cards expose only sanitized event changes', () => {
+    const first = deriveCinematicEvents(delta({
+        revision: 'scene:set',
+        updatedSceneFacts: { cast: { added: [{ identityId: 'a', label: 'A' }, { identityId: 'b', label: 'B' }], removed: [] } },
+        evidence: [{ text: 'ignore me' }],
+    }));
+    const second = deriveCinematicEvents(delta({
+        revision: 'scene:set',
+        updatedSceneFacts: { cast: { added: [{ identityId: 'b', label: 'B' }, { identityId: 'a', label: 'A' }], removed: [] } },
+        evidence: [{ text: 'different evidence' }],
+    }));
+    assert.equal(first[0].eventId, second[0].eventId);
+    const result = evaluateCinematicAutomation({ session: createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 }), acceptedSceneDelta: delta({
+        updatedSceneFacts: { location: { from: 'station', to: 'library', prompt: 'drop me' } },
+        prompt: 'drop me',
+    }) });
+    assert.deepEqual(result.suggestion.change, { from: 'station', to: 'library' });
+});
+
+test('conservative and balanced thresholds accumulate accepted unconsumed beats, and dismissal consumes idempotently', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'conservative', costCeiling: 1 });
+    const outfit = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta({ revision: 'scene:o', updatedSceneFacts: { outfits: [{ identityId: 'a', from: 'red', to: 'blue' }] } }) });
+    assert.equal(outfit.status, 'below-threshold');
+    const cast = evaluateCinematicAutomation({ session: outfit.session, acceptedSceneDelta: delta({ revision: 'scene:c', updatedSceneFacts: { cast: { added: [{ identityId: 'b' }], removed: [] } } }) });
+    assert.equal(cast.status, 'suggested');
+    assert.match(cast.nextTrigger.explanation, /outfit|cast/i);
+    const dismissed = dismissCinematicSuggestion(cast.session, cast.suggestion);
+    assert.equal(dismissed.status, 'dismissed');
+    assert.equal(dismissed.session.consumedEventIds.length, 2);
+    assert.deepEqual(dismissCinematicSuggestion(dismissed.session, cast.suggestion), dismissed);
+});
+
+test('any nested ambiguity in an accepted delta suppresses the entire automation decision', () => {
+    assert.deepEqual(deriveCinematicEvents(delta({
+        updatedSceneFacts: { location: { from: 'station', to: 'library', status: 'confirmed' }, outfits: { ambiguous: true, added: [{ identityId: 'a' }] } },
+    })), []);
 });
