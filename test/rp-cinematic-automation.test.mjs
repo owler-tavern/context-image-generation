@@ -11,6 +11,7 @@ import {
     retriggerCinematicBeat,
     resetCinematicSession,
     settleCinematicPlan,
+    projectNextCinematicSuggestion,
 } from '../lib/rp/cinematic-automation.js';
 
 const delta = (overrides = {}) => ({
@@ -264,4 +265,28 @@ test('manual retrigger respects the single pending-card invariant', () => {
     assert.equal(retry.status, 'pending-suppressed');
     assert.deepEqual(retry.suggestion, first.suggestion);
     assert.equal(Object.keys(retry.session.pendingSuggestions).length, 1);
+});
+
+test('queued events drain into the next card exactly once after the current card is used or dismissed', () => {
+    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
+    const first = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta({ revision: 'scene:first' }) });
+    const queued = evaluateCinematicAutomation({ session: first.session, acceptedSceneDelta: delta({
+        revision: 'scene:queued', updatedSceneFacts: {}, emotionalBeat: { id: 'beat:queued', label: 'queued beat' },
+    }) });
+    assert.equal(queued.status, 'pending-suppressed');
+    const dismissed = dismissCinematicSuggestion(queued.session, first.suggestion);
+    const next = projectNextCinematicSuggestion({ session: dismissed.session });
+    assert.equal(next.status, 'suggested');
+    assert.equal(next.suggestion.eventId, queued.events[0].eventId);
+    assert.equal(next.session.consumedEventIds.includes(queued.events[0].eventId), false);
+    const repeated = projectNextCinematicSuggestion({ session: next.session });
+    assert.equal(repeated.status, 'duplicate-suppressed');
+    assert.deepEqual(repeated.suggestion, next.suggestion);
+
+    const queuedForApproval = evaluateCinematicAutomation({ session: first.session, acceptedSceneDelta: delta({
+        revision: 'scene:queued-approval', updatedSceneFacts: {}, emotionalBeat: { id: 'beat:queued-approval', label: 'queued beat' },
+    }) });
+    const approvedFirst = approveCinematicSuggestion(queuedForApproval.session, first.suggestion, { estimatedCost: 0.1 });
+    const afterApproval = projectNextCinematicSuggestion({ session: approvedFirst.session });
+    assert.equal(afterApproval.status, 'suggested');
 });
