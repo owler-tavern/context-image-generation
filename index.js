@@ -2,7 +2,7 @@
  * Context Image Generation 🍌
  * Gemini-powered image generation with avatar references and character context
  * Uses SillyTavern's backend to handle Google AI authentication
- * Version 1.3.3
+ * Version 1.8.0
  */
 
 import {
@@ -86,6 +86,8 @@ import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SE
 import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
 import { createCinematicUiController, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
+import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
+import { createDirectorUiController, DIRECTOR_UI_CSS, renderDirectorPanel } from './lib/rp/director-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -140,6 +142,8 @@ let storyMemorySurfaceMount = null;
 let pendingStoryMemoryContinuation = null;
 let cinematicRuntime = null;
 let cinematicUiController = null;
+let directorRuntime = null;
+let directorUiController = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1050,6 +1054,125 @@ function createCinematicSurface() {
     refreshCinematicSurface();
 }
 
+function renderDirectorSurface() {
+    $('.cig_director_panel').remove();
+    const panel = directorRuntime?.getState()?.panel;
+    if (!panel?.target?.messageId && panel?.messageId === undefined) return;
+    const messageElement = $(`.mes[mesid="${Number(panel.target?.messageId ?? panel.messageId)}"]`);
+    if (!messageElement.length) return;
+    const root = $(renderDirectorPanel(panel));
+    const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
+    if (anchor.length) anchor.after(root); else messageElement.append(root);
+}
+
+function directorPreview({ sourceMessage, focusText, target, options: directorOptions }) {
+    const context = getContext();
+    const settings = extension_settings[extensionName] || {};
+    const identities = getAppearanceIdentityChoices();
+    const recentContext = (context.chat || []).slice(Math.max(0, Number(target?.messageId) - 11), Number(target?.messageId));
+    const snapshot = buildSceneGenerationSnapshot({
+        selectedPassage: focusText || sourceMessage,
+        focusText,
+        clickedMessage: context.chat?.[Number(target?.messageId)] || { mes: sourceMessage },
+        recentContext,
+        identities,
+        priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
+        settings: {
+            framing_preference: directorOptions?.framing,
+            continuity_strength: directorOptions?.continuity,
+            custom_visual_instruction: directorOptions?.visualDirection,
+        },
+    });
+    const truths = continuityTruths(identities);
+    const activeCharacter = context.characters?.[context.characterId];
+    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
+    const groupCharacterAvatars = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar)?.avatar || avatar);
+    const capability = getReferenceImageCapability(settings.provider || 'makersuite', settings.model);
+    const avatarReferences = capability && settings.use_avatars === true
+        ? resolveHostAvatarIdentityReferences({
+            identities,
+            activeCharacterAvatar: activeCharacter?.avatar,
+            personaAvatar: user_avatar,
+            groupCharacterAvatars,
+        })
+        : [];
+    const referenceCandidates = buildContinuityReferenceCandidates({
+        identities,
+        truths,
+        remembered: chat_metadata[CHAT_CANON_KEY]?.references || [],
+        avatarReferences,
+        includeDescriptions: settings.include_descriptions === true,
+        includeAvatars: settings.use_avatars === true,
+    });
+    const ready = projectContinuityShelf({ identities, truths, candidates: referenceCandidates, includeDescriptions: settings.include_descriptions === true, includeAvatars: settings.use_avatars === true });
+    const readyLabels = (ready.identities || []).filter((entry) => entry.sourceType && entry.sourceType !== 'none').map((entry) => `${entry.identityLabel}: ${entry.sourceType} ready`).slice(0, 6);
+    const currentSettings = extension_settings[extensionName] || {};
+    const routeSummary = currentSettings.provider && currentSettings.model
+        ? `Ready: ${currentSettings.provider} / ${currentSettings.model}.`
+        : 'Not ready: choose an image provider and model in Settings.';
+    return {
+        moment: snapshot.sourcePassage || focusText || sourceMessage,
+        inspection: snapshot.inspection?.lines || [],
+        referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
+        routeSummary,
+        budgetSummary: 'Exact provider cost is unavailable; Generate uses one configured image-generation slot after a completed attachment.',
+    };
+}
+
+function createDirectorSurface() {
+    directorRuntime = createDirectorRuntime({
+        getChatId: () => getContext().chatId,
+        getEpoch: () => chatLifecycleEpoch.capture(),
+        readState: ({ chatId } = {}) => {
+            if (chatId && String(chatId) !== String(getContext().chatId)) return {};
+            return chat_metadata?.[CHAT_CANON_KEY]?.[DIRECTOR_STATE_KEY] || {};
+        },
+        writeState: (value, { chatId } = {}) => {
+            if (chatId && String(chatId) !== String(getContext().chatId)) return;
+            if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
+            chat_metadata[CHAT_CANON_KEY][DIRECTOR_STATE_KEY] = value[DIRECTOR_STATE_KEY];
+        },
+        saveChat: () => saveChatConditional(),
+        buildPreview: directorPreview,
+        validateTarget: ({ target }) => validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] }),
+        validateRoute: async ({ target }) => {
+            const targetValidation = validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] });
+            if (!targetValidation.safe) return { allowed: false, status: 'stale', reason: targetValidation.reason };
+            const settings = extension_settings[extensionName] || {};
+            return settings.provider && settings.model ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: 'Image provider and model are not configured.' };
+        },
+        dispatch: async ({ sourceMessage, focusText, target, framing, continuity, visualDirection }) => {
+            const context = getContext();
+            const messageId = Number(target.messageId);
+            const message = context.chat?.[messageId];
+            const element = $(`.mes[mesid="${messageId}"]`);
+            if (!message || !element.length) throw new Error('The directed story message is no longer available.');
+            const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
+            const base = sourceMessage || message.mes || '';
+            const direction = [framing && framing !== 'auto' ? `Framing: ${framing}.` : '', continuity ? `Continuity strength: ${continuity}.` : '', visualDirection ? `Player visual direction: ${visualDirection}` : ''].filter(Boolean).join(' ');
+            const prompt = direction ? `${base}\n\n${direction}` : base;
+            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director');
+            if (attached !== true) return { status: 'failed', reason: 'The image was not attached to this message. Your draft is still available.' };
+            return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
+        },
+    });
+    directorRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+    directorUiController = createDirectorUiController({
+        open: (payload) => directorRuntime.open(payload),
+        update: (payload) => directorRuntime.update(payload),
+        close: () => directorRuntime.close(),
+        generate: () => directorRuntime.generate(),
+        render: renderDirectorSurface,
+    });
+    if (typeof document !== 'undefined' && !document.getElementById('cig_director_styles')) {
+        const style = document.createElement('style');
+        style.id = 'cig_director_styles';
+        style.textContent = DIRECTOR_UI_CSS;
+        document.head.appendChild(style);
+    }
+    renderDirectorSurface();
+}
+
 async function observeCinematicMessage(messageId) {
     const context = getContext();
     const message = context.chat?.[Number(messageId)];
@@ -1187,6 +1310,7 @@ async function loadSettings() {
     renderAppearanceList();
     createStoryMemorySurface();
     createCinematicSurface();
+    createDirectorSurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -1443,7 +1567,7 @@ async function confirmCustomConnectionRoute(settings, invocation) {
         throw new Error('Test and fetch models before generating through this custom connection.');
     }
     if (evidence.state === 'verified') return { accepted: true, confirmedRevision: revision };
-    if (!['settings', 'wand', 'slash'].includes(invocation)) {
+    if (!['settings', 'wand', 'slash', 'director'].includes(invocation)) {
         throw new Error('Configured custom connections cannot run from automation, swipe, or background generation.');
     }
     const projection = projectCustomConnectionEditor(connection, {
@@ -3499,21 +3623,27 @@ function injectMessageButton(messageId) {
     const extraButtons = messageElement.find('.extraMesButtons');
     if (extraButtons.length === 0) return;
 
-    if (extraButtons.find('.cig_message_gen').length > 0) return;
-
-    const cigButton = $(`
+    if (extraButtons.find('.cig_message_gen').length === 0) {
+        const cigButton = $(`
         <div title="Generate with Gemini 🍌" 
              class="mes_button cig_message_gen fa-solid fa-wand-magic-sparkles" 
              data-i18n="[title]Generate with Gemini 🍌">
         </div>
-    `);
+        `);
 
-    const sdButton = extraButtons.find('.sd_message_gen');
-    if (sdButton.length) {
-        sdButton.after(cigButton);
-    } else {
-        extraButtons.prepend(cigButton);
+        const sdButton = extraButtons.find('.sd_message_gen');
+        if (sdButton.length) {
+            sdButton.after(cigButton);
+        } else {
+            extraButtons.prepend(cigButton);
+        }
     }
+    const message = getContext().chat?.[Number(messageId)];
+    if (message?.is_system || extraButtons.find('.cig_message_director').length > 0) return;
+    const directorButton = $('<button type="button" class="mes_button cig_message_director">Direct this scene</button>')
+        .attr({ title: 'Direct this scene', 'aria-label': 'Direct this scene' });
+    const wandButton = extraButtons.find('.cig_message_gen');
+    if (wandButton.length) wandButton.after(directorButton); else extraButtons.prepend(directorButton);
 }
 
 function visibleCanonMessageSender(message) {
@@ -4306,6 +4436,61 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
+    $(document).on('click', '.cig_message_director', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const messageElement = $(e.currentTarget).closest('.mes');
+        const messageId = Number(messageElement.attr('mesid'));
+        const message = getContext().chat?.[messageId];
+        if (!message || message.is_system) return;
+        const sender = visibleCanonMessageSender(message);
+        const captured = captureWandGenerationInput({
+            chatId: getContext().chatId,
+            messageId,
+            message,
+            messageElement: messageElement[0],
+            selection: document.getSelection?.(),
+            sender,
+            captureSelection: true,
+        });
+        try {
+            const result = await directorUiController?.open({
+                chatId: getContext().chatId,
+                epoch: chatLifecycleEpoch.capture(),
+                messageId,
+                message,
+                messageFingerprint: captured.target?.messageFingerprint,
+                selectionText: captured.focusText,
+            });
+            if (result?.status === 'stale') toastr.info('That message is no longer current.', 'Direct this scene');
+        } catch (error) {
+            showGenerationError(error, 'Open Director');
+        }
+    });
+
+    $(document).on('change', '.cig_director_panel [data-director-field]', async function (e) {
+        e.preventDefault();
+        const panel = $(this).closest('.cig_director_panel');
+        const values = {};
+        panel.find('[data-director-field]').each(function () { values[$(this).attr('data-director-field')] = $(this).val(); });
+        try { await directorUiController?.update(values); }
+        catch (error) { showGenerationError(error, 'Update Director'); }
+    });
+
+    $(document).on('click', '.cig_director_panel [data-director-action]', async function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = $(this).attr('data-director-action');
+        setBusyState(this, true, { busyTitle: action === 'generate' ? 'Generating directed image…' : 'Closing Director…' });
+        try {
+            const result = await directorUiController?.action(action);
+            if (result?.status === 'completed') toastr.success('Directed image generated.', 'Direct this scene');
+            else if (result?.status === 'stale') toastr.info(result.reason || 'This message or draft is no longer current.', 'Direct this scene');
+            else if (result?.status === 'route-invalid') toastr.info(result.reason || 'Choose a ready image route first.', 'Direct this scene');
+        } catch (error) { showGenerationError(error, 'Director'); }
+        finally { setBusyState(this, false); }
+    });
+
     $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -4349,12 +4534,15 @@ jQuery(async () => {
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
         });
+        renderDirectorSurface();
         void observeCinematicMessage(messageId);
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
+        directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        renderDirectorSurface();
         destroyIterationSurfaceMounts();
         refreshStoryMemorySurface();
         setTimeout(() => {
@@ -4382,6 +4570,8 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CREATED, () => {
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
+        directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        renderDirectorSurface();
         destroyIterationSurfaceMounts();
         refreshStoryMemorySurface();
         setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
