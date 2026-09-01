@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint, clearChatBinding, getChatAppearanceSource, getChatWandPreferences, setChatAppearanceSource, setChatWandPreferences, clearChatAppearanceSource } from '../lib/rp/chat-canon.js';
+import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint, clearChatBinding, getChatAppearanceSource, getChatWandPreferences, setChatAppearanceSource, setChatWandPreferences, clearChatAppearanceSource, getChatIdentityPin, setChatIdentityPin, clearChatIdentityPin } from '../lib/rp/chat-canon.js';
 
 test('chat canon contains only schema and bindings', () => {
     const state = migrateChatCanon({ bindings: {} });
@@ -63,7 +63,7 @@ test('chat canon stores bounded appearance source choices as stable identity dat
     assert.deepEqual(getChatAppearanceSource(state, 'user:persona-a.png'), {
         identityId: 'user:persona-a.png', sourceType: 'avatar', role: 'persona', sourceId: 'user:persona-a.png', selectedAt: 1,
     });
-    assert.equal(getChatAppearanceSource(state, 'user:persona-b.png', 'persona').identityId, 'user:persona-a.png');
+    assert.equal(getChatAppearanceSource(state, 'user:persona-b.png', 'persona'), null);
     const changed = setChatAppearanceSource(state, 'user:persona-b.png', { identityId: 'user:persona-b.png', sourceType: 'description', role: 'persona', sourceId: 'user:persona-b.png', selectedAt: 2 });
     assert.equal(getChatAppearanceSource(changed, 'user:persona-b.png', 'persona').sourceType, 'description');
     assert.equal('unsafe' in changed.appearanceSources, false);
@@ -81,4 +81,20 @@ test('wand framing, continuity, and direction are isolated per chat and bounded'
     assert.equal(getChatWandPreferences(changed).continuity, 'strong');
     assert.ok(getChatWandPreferences(changed).visualDirection.length <= 1000);
     assert.equal(getChatWandPreferences(setChatWandPreferences({}, { framing: 'bad', continuity: 'bad' })).framing, 'auto');
+});
+
+test('Auto source preference is separate from deliberate identity pinning', () => {
+    const auto = setChatAppearanceSource({}, 'user:persona-a', { sourceType: 'auto', sourceId: 'user:persona-a', role: 'persona' });
+    assert.equal(getChatIdentityPin(auto, 'user:persona-a', 'persona'), null);
+    const pinned = setChatIdentityPin(auto, 'user:persona-a', { sourceId: 'user:persona-a', role: 'persona' });
+    assert.deepEqual(getChatIdentityPin(pinned, 'user:persona-a', 'persona'), { identityId: 'user:persona-a', sourceId: 'user:persona-a', role: 'persona' });
+    const unpinned = clearChatIdentityPin(pinned, 'user:persona-a');
+    assert.equal(getChatIdentityPin(unpinned, 'user:persona-a', 'persona'), null);
+    assert.equal(getChatAppearanceSource(unpinned, 'user:persona-a', 'persona').sourceType, 'auto');
+});
+
+test('wand preferences retain a bounded staged cinematic shot without provider data', () => {
+    const state = setChatWandPreferences({}, { stagedSuggestion: { suggestionId: 'suggestion:one', shot: 'Wide lakeside scene', kind: 'location' } });
+    assert.deepEqual(getChatWandPreferences(state).stagedSuggestion, { suggestionId: 'suggestion:one', shot: 'Wide lakeside scene', kind: 'location' });
+    assert.equal(JSON.stringify(state).includes('api'), false);
 });

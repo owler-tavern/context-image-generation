@@ -151,8 +151,9 @@ test('production index imports and mounts the story memory surface in Images & C
     assert.match(index, /story-memory-runtime\.js/u);
     assert.match(index, /mountStoryMemorySurface/u);
     assert.match(index, /storyMemoryController/u);
-    assert.match(settings, /Visual story memory/u);
+    assert.match(settings, /Story Memory/u);
     assert.match(settings, /cig_story_memory_surface/u);
+    assert.match(index, /extraStoryToolEnabled\('storyMemory'\)/u);
 });
 
 test('production initializes the shared chat epoch before the first scoped story memory load', async () => {
@@ -166,21 +167,11 @@ test('production story memory mount disables the unscoped auto-load before expli
     assert.match(index, /void loadStoryMemoryForCurrentChat\(\)/u);
 });
 
-test('production story memory opener reveals host and extension drawers before selecting and focusing the entry', async () => {
-    const [index, entry] = await Promise.all([
-        readFile(new URL('../index.js', import.meta.url), 'utf8'),
-        readFile(new URL('../lib/rp/story-memory-entry.js', import.meta.url), 'utf8'),
-    ]);
-    assert.match(index, /revealStoryMemoryEntry\(/u);
-    assert.match(entry, /#rm_extensions_block/u);
-    assert.match(entry, /#extensions-settings-button > \.drawer-toggle/u);
-    assert.match(entry, /\.inline-drawer-content/u);
-    assert.match(index, /activateTab: \(tab\) => activateSettingsTab\(tab\)/u);
-    assert.match(index, /selectStoryMemoryEntryWhenReady\(/u);
-    assert.match(index, /storyMemoryController\?\.setSelectedArtifact\(artifactId\)/u);
-    assert.match(index, /focusStoryMemoryArtifact\(\{ documentLike: document, artifactId: entry\.id \}\)/u);
-    assert.match(index, /chatCaptureIsCurrent\(captured\)/u);
-    assert.match(entry, /scrollIntoView/u);
+test('production keeps Story Memory inside opt-in settings without a chat opener', async () => {
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.doesNotMatch(index, /revealStoryMemoryEntry\(/u);
+    assert.doesNotMatch(index, /selectStoryMemoryEntryWhenReady\(/u);
+    assert.match(index, /if \(!extraStoryToolEnabled\('storyMemory'\)\) return/u);
 });
 
 test('real P2 scene state becomes bounded valid story facts on CIG media', () => {

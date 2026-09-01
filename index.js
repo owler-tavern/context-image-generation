@@ -67,7 +67,7 @@ import {
     projectAppearanceLookActionState,
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
-import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatAppearanceSource, getChatBinding, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
+import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, clearChatIdentityPin, getChatAppearanceSource, getChatBinding, getChatIdentityPin, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatIdentityPin, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedIterationArtifact, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
@@ -82,7 +82,6 @@ import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, pers
 import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
 import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
-import { focusStoryMemoryArtifact, revealStoryMemoryEntry, selectStoryMemoryEntryWhenReady } from './lib/rp/story-memory-entry.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
 import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
@@ -90,10 +89,33 @@ import { createCinematicUiController, focusCinematicSuggestionCard, installCinem
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
 import { inferDirectorCast } from './lib/rp/director-cast.js';
-import { createVisualStoryFocusController, renderVisualStorySurface, revealVisualStorySurface as revealVisualStorySurfaceUi, VISUAL_STORY_UI_CSS } from './lib/rp/visual-story-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const DEFAULT_EXTRA_STORY_TOOLS = Object.freeze({ schema: 1, enabled: false, storyMemory: false, appearanceMemory: false, cinematic: false, iteration: false, gallery: false });
+
+function normalizeExtraStoryTools(value) {
+    const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+    return {
+        ...DEFAULT_EXTRA_STORY_TOOLS,
+        enabled: source.enabled === true,
+        storyMemory: source.storyMemory === true,
+        appearanceMemory: source.appearanceMemory === true,
+        cinematic: source.cinematic === true,
+        iteration: source.iteration === true,
+        gallery: source.gallery === true,
+    };
+}
+
+function extraStoryTools() {
+    const settings = extension_settings[extensionName] || {};
+    return normalizeExtraStoryTools(settings.extra_story_tools);
+}
+
+function extraStoryToolEnabled(name) {
+    const extras = extraStoryTools();
+    return extras.enabled === true && extras[name] === true;
+}
 
 const defaultSettings = {
     provider: 'makersuite',
@@ -107,8 +129,8 @@ const defaultSettings = {
     custom_connections: { schema: 1, connections: {}, models: {}, evidence: {}, modelEvidence: {}, confirmations: {} },
     custom_connection_keys: {},
     custom_connection_editor_id: '',
+    extra_story_tools: { schema: 1, enabled: false, storyMemory: false, appearanceMemory: false, cinematic: false, iteration: false, gallery: false },
     cinematic_automation_sessions: { schema: 1, chats: {} },
-    director_sessions: { schema: 1, chats: {} },
     aspect_ratio: '1:1',
     image_size: '',
     thinking_level: 'auto',
@@ -145,14 +167,12 @@ let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
 let storyMemoryLoadPromise = null;
 let storyMemoryLoadCapture = null;
-let visualStoryMemoryUnsubscribe = null;
 let pendingStoryMemoryContinuation = null;
 let cinematicRuntime = null;
 let cinematicUiController = null;
 let directorRuntime = null;
 let directorUiController = null;
 let directorFocusCapture = null;
-let visualStoryFocusController = null;
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -885,6 +905,7 @@ function selectInitialSettingsTab(settings) {
 }
 
 function createStoryMemorySurface() {
+    if (!extraStoryToolEnabled('storyMemory')) return;
     const settings = extension_settings[extensionName];
     const runtime = createStoryMemoryRuntime({
         extensionName,
@@ -930,8 +951,6 @@ function createStoryMemorySurface() {
         },
     };
     storyMemoryController = createStoryMemoryController(dependencies);
-    visualStoryMemoryUnsubscribe?.();
-    visualStoryMemoryUnsubscribe = storyMemoryController.subscribe?.(() => renderVisualStoryOverview()) || null;
     storyMemoryLoadPromise = null;
     storyMemoryLoadCapture = null;
     const host = document.getElementById('cig_story_memory_surface');
@@ -939,53 +958,6 @@ function createStoryMemorySurface() {
     storyMemorySurfaceMount?.destroy?.();
     storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
     void loadStoryMemoryForCurrentChat();
-}
-
-function visualStoryAppearanceSummary() {
-    const identities = getAppearanceIdentityChoices();
-    const truths = continuityTruths(identities);
-    const ready = truths.filter((truth) => truth.sourceType === 'avatar' || truth.sourceType === 'description').length;
-    if (!identities.length) return 'No current character or persona is available for continuity yet. Open appearance controls to add one.';
-    return `${ready} of ${identities.length} current character or persona identities have appearance readiness. Open appearance controls to review avatar, description, and active look choices.`;
-}
-
-function renderVisualStoryOverview() {
-    const host = document.getElementById('cig_visual_story_surface');
-    if (!host) return;
-    const cinematic = cinematicRuntimeSettings();
-    host.innerHTML = renderVisualStorySurface({
-        memoryState: storyMemoryController?.getState?.() || {},
-        currentChatId: getContext().chatId,
-        appearanceSummary: visualStoryAppearanceSummary(),
-        cinematicEnabled: cinematic.enabled === true && cinematic.mode !== 'off',
-    });
-}
-
-function createVisualStorySurface() {
-    if (typeof document === 'undefined') return;
-    if (!document.getElementById('cig_visual_story_styles')) {
-        const style = document.createElement('style');
-        style.id = 'cig_visual_story_styles';
-        style.textContent = VISUAL_STORY_UI_CSS;
-        document.head.appendChild(style);
-    }
-    renderVisualStoryOverview();
-}
-
-function revealVisualStorySurface(tab = 'images-cast') {
-    visualStoryFocusController?.cancel?.();
-    const capture = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
-    visualStoryFocusController = createVisualStoryFocusController({
-        documentLike: document,
-        isCurrent: () => chatCaptureIsCurrent(capture),
-    });
-    return revealVisualStorySurfaceUi({
-        documentLike: document,
-        activateTab: (tabId) => activateSettingsTab(tabId),
-        focusController: visualStoryFocusController,
-        focusOrigin: document.activeElement,
-        tab,
-    });
 }
 
 function loadStoryMemoryForCurrentChat(captured = null) {
@@ -999,40 +971,9 @@ function loadStoryMemoryForCurrentChat(captured = null) {
 }
 
 function refreshStoryMemorySurface() {
-    if (!storyMemoryController) return;
+    if (!extraStoryToolEnabled('storyMemory') || !storyMemoryController) return;
     pendingStoryMemoryContinuation = null;
     void loadStoryMemoryForCurrentChat();
-    renderVisualStoryOverview();
-}
-
-function openStoryMemoryArtifact(messageId) {
-    const context = getContext();
-    const captured = { chatId: context.chatId, epoch: chatLifecycleEpoch.capture() };
-    const message = context.chat?.[Number(messageId)];
-    const activeMedia = activeMediaForMessage(message);
-    const media = isCigOwnedMedia(activeMedia?.item) ? activeMedia.item : null;
-    revealStoryMemoryEntry({
-        documentLike: document,
-        activateTab: (tab) => activateSettingsTab(tab),
-        messageId,
-    });
-    const sameLoad = storyMemoryLoadPromise
-        && storyMemoryLoadCapture
-        && String(storyMemoryLoadCapture.chatId) === String(captured.chatId)
-        && storyMemoryLoadCapture.epoch === captured.epoch;
-    const loadPromise = sameLoad ? storyMemoryLoadPromise : loadStoryMemoryForCurrentChat(captured);
-    void selectStoryMemoryEntryWhenReady({
-        loadPromise,
-        isCurrent: () => chatCaptureIsCurrent(captured),
-        getTimeline: () => storyMemoryController?.getState().timeline || [],
-        messageId: Number(messageId),
-        mediaUrl: media?.url,
-        selectArtifact: (artifactId) => storyMemoryController?.setSelectedArtifact(artifactId),
-        focusSelected: (entry) => focusStoryMemoryArtifact({ documentLike: document, artifactId: entry.id }),
-    }).then((result) => {
-        if (result.status === 'stale') toastr.info(result.reason, 'Story Memory');
-        else if (result.status === 'unavailable' || result.status === 'error') toastr.info(result.reason, 'Story Memory');
-    });
 }
 
 function cinematicRuntimeSettings() {
@@ -1066,10 +1007,10 @@ function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
     const status = statusOverride || (state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
     $('#cig_cinematic_status').text(status);
     $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
-    renderVisualStoryOverview();
 }
 
 function createCinematicSurface() {
+    if (!extraStoryToolEnabled('cinematic')) return;
     const settings = extension_settings[extensionName];
     const runtimeSettings = cinematicRuntimeSettings();
     cinematicRuntime = createCinematicRuntime({
@@ -1142,9 +1083,20 @@ function createCinematicSurface() {
     cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
     cinematicUiController = createCinematicUiController({
         getSuggestion: () => cinematicRuntime?.getState()?.suggestion,
-        approve: (id) => {
+        stage: (id) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
-            return cinematicRuntime.approve(id).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+            return cinematicRuntime.stage(id).then((result) => {
+                if (result?.status === 'staged' && chatCaptureIsCurrent(captured)) {
+                    const suggestion = result.suggestion || {};
+                    const shot = suggestion.adjustments?.prompt || suggestion.proposedShot || '';
+                    chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], {
+                        stagedSuggestion: { suggestionId: id, shot, kind: suggestion.kind || '' },
+                    });
+                    void saveChatConditional();
+                    refreshCinematicSurface(null, 'Shot staged for the next wand. No image was made.');
+                } else if (chatCaptureIsCurrent(captured)) refreshCinematicSurface();
+                return result;
+            });
         },
         adjust: (id, adjustments) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
@@ -1341,6 +1293,7 @@ function createDirectorSurface() {
 }
 
 async function observeCinematicMessage(messageId) {
+    if (!extraStoryToolEnabled('cinematic')) return;
     const context = getContext();
     const message = context.chat?.[Number(messageId)];
     if (!message || !message.mes || message.is_system || !cinematicRuntime) return;
@@ -1373,6 +1326,17 @@ async function loadSettings() {
         settingsMigrated = true;
     }
     const cigSettings = extension_settings[extensionName];
+    const normalizedExtras = normalizeExtraStoryTools(cigSettings.extra_story_tools);
+    if (JSON.stringify(cigSettings.extra_story_tools) !== JSON.stringify(normalizedExtras)) {
+        cigSettings.extra_story_tools = normalizedExtras;
+        settingsMigrated = true;
+    }
+    // Director drafts belonged to the retired per-message entry point. Do not
+    // surface or replay them after the settings-only product boundary.
+    if (Object.prototype.hasOwnProperty.call(cigSettings, 'director_sessions')) {
+        delete cigSettings.director_sessions;
+        settingsMigrated = true;
+    }
     if (!cigSettings.cinematic_automation || typeof cigSettings.cinematic_automation !== 'object' || Array.isArray(cigSettings.cinematic_automation)) {
         cigSettings.cinematic_automation = { ...defaultSettings.cinematic_automation };
         settingsMigrated = true;
@@ -1478,12 +1442,12 @@ async function loadSettings() {
     renderModelManager();
     renderSetupReadiness(cigSettings);
     renderSetupRuntimeIssue();
+    renderExtraStoryTools();
     renderGallery();
     renderAppearanceList();
     renderChatAppearanceSources();
-    createStoryMemorySurface();
-    createCinematicSurface();
-    createVisualStorySurface();
+    if (extraStoryToolEnabled('storyMemory')) createStoryMemorySurface();
+    if (extraStoryToolEnabled('cinematic')) createCinematicSurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -1825,20 +1789,30 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     if (chatPreferences.framing) settingsSnapshot.framing_preference = chatPreferences.framing;
     if (chatPreferences.continuity) settingsSnapshot.continuity_strength = chatPreferences.continuity;
     if (chatPreferences.visualDirection != null) settingsSnapshot.custom_visual_instruction = chatPreferences.visualDirection;
+    if (invocation === 'wand' && chatPreferences.stagedSuggestion?.shot) {
+        const existingDirection = String(settingsSnapshot.custom_visual_instruction || '').trim();
+        settingsSnapshot.custom_visual_instruction = [existingDirection, `Cinematic shot: ${chatPreferences.stagedSuggestion.shot}`]
+            .filter(Boolean).join('\n').slice(0, 1000);
+        chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { stagedSuggestion: null });
+        void saveChatConditional();
+    }
     if (generationOverrides && typeof generationOverrides === 'object') {
         if (typeof generationOverrides.framing === 'string') settingsSnapshot.framing_preference = generationOverrides.framing;
         if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
         if (typeof generationOverrides.visualDirection === 'string') settingsSnapshot.custom_visual_instruction = generationOverrides.visualDirection.slice(0, 1000);
     }
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
-    const continuationIsCurrent = continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
+    const previousImageEnabled = settingsSnapshot.use_previous_image === true;
+    const continuationIsCurrent = previousImageEnabled && continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
         && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
-    const continuationGallery = continuationIsCurrent
-        ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }, ...gallerySnapshot]
-        : gallerySnapshot;
+    const continuationGallery = previousImageEnabled
+        ? (continuationIsCurrent
+            ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }, ...gallerySnapshot]
+            : gallerySnapshot)
+        : [];
     const appearanceIdentities = getAppearanceIdentityChoices();
     const sourcePreferences = appearanceSourcePreferences();
-    if (capability && (settingsSnapshot.use_previous_image || continuationIsCurrent) && continuationGallery.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: continuationIsCurrent ? 'selected story scene' : 'previous image' });
+    if (capability && previousImageEnabled && continuationGallery.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:previous', label: continuationIsCurrent ? 'selected story scene' : 'previous image' });
     // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
     // the captured capability/setting snapshot below is the authority.
     if (capability && settingsSnapshot.use_avatars) {
@@ -1860,7 +1834,6 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         references: referenceCandidates,
     });
     const appearanceTruthEntries = continuityTruths(appearanceIdentities);
-    persistAppearanceSourcePins(appearanceIdentities, appearanceTruthEntries);
     const continuityCandidates = buildContinuityReferenceCandidates({
         identities: appearanceIdentities,
         truths: appearanceTruthEntries,
@@ -1958,7 +1931,7 @@ async function materializeSnapshotAssets(snapshot) {
     };
     if (snapshot.referenceCandidates.some((reference) => reference.id === 'legacy:previous')) {
         const dataUrl = await galleryItemToDataUrl(snapshot.gallerySnapshot[0]);
-        if (dataUrl) assets['asset:legacy-previous'] = { url: dataUrl, mimeType: 'image/png' };
+        if (dataUrl) assets['asset:previous'] = { url: dataUrl, mimeType: 'image/png' };
     }
     return assets;
 }
@@ -2072,7 +2045,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             capabilities: cloneSnapshot(dispatchedPlan.resolved.capabilities || {}),
             generationPlan: cloneSnapshot(dispatchedPlan),
         };
-        const capturedIterationArtifact = {
+        const capturedIterationArtifact = extraStoryToolEnabled('iteration') ? {
             ...createIterationArtifact({
                 artifactId: `artifact:${dispatchedPlan.id}`,
                 sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId, userVisible: true },
@@ -2086,7 +2059,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             generationPlan: capturedIterationPlan,
             target: cloneSnapshot(target),
             sender: sender || '',
-        };
+        } : null;
         const continuitySurface = cloneSnapshot({
             schema: 1,
             invocation,
@@ -2159,7 +2132,14 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene), __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state), __cigStoryMemoryFacts: buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state), __cigIterationArtifact: capturedIterationArtifact }
+                ? {
+                    ...generated,
+                    __cigContinuitySnapshot: continuitySurface,
+                    __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene),
+                    __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state),
+                    ...(extraStoryToolEnabled('storyMemory') ? { __cigStoryMemoryFacts: buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state) } : {}),
+                    ...(capturedIterationArtifact ? { __cigIterationArtifact: capturedIterationArtifact } : {}),
+                }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -2203,6 +2183,7 @@ async function galleryItemToDataUrl(item) {
 }
 
 async function addToGallery(imageData, prompt, messageId = null, existingPath = null, sourceMetadata = undefined) {
+    if (!extraStoryToolEnabled('gallery')) return;
     const settings = extension_settings[extensionName];
 
     if (!settings.gallery) {
@@ -2240,6 +2221,9 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
 }
 
 function renderGallery() {
+    const visible = extraStoryToolEnabled('gallery');
+    $('#cig_gallery').prop('hidden', !visible);
+    if (!visible) return;
     const settings = extension_settings[extensionName];
     const gallery = settings.gallery || [];
     const container = $('#cig_gallery_container');
@@ -2301,7 +2285,7 @@ function getAppearanceIdentityChoices() {
     // catalogue until the player deliberately replaces it.
     const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
     const currentPersonaId = user_avatar ? `user:${user_avatar}` : 'user:display';
-    const pinnedPersona = getChatAppearanceSource(canon, currentPersonaId, 'persona');
+    const pinnedPersona = Object.values(canon.identityPins || {}).find((pin) => pin?.role === 'persona') || null;
     if (pinnedPersona && pinnedPersona.identityId !== currentPersonaId && !choices.some((identity) => identity.id === pinnedPersona.identityId)) {
         const pinnedHostKey = String(pinnedPersona.sourceId || pinnedPersona.identityId).replace(/^user:/u, '');
         const currentIndex = choices.findIndex((identity) => identity.kind === 'user');
@@ -2329,10 +2313,11 @@ function identityHostRecord(identity) {
     const hostKey = String(identity?.hostKey || id.replace(/^(?:character|user):/u, '')).trim();
     const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
     const source = getChatAppearanceSource(canon, id, identity?.kind === 'user' ? 'persona' : '');
-    const pinnedHostKey = source?.sourceType === 'avatar' && source.sourceId === id ? String(source.sourceId).replace(/^(?:character|user):/u, '') : '';
+    const pin = getChatIdentityPin(canon, id, identity?.kind === 'user' ? 'persona' : identity?.kind);
+    const pinnedHostKey = pin?.sourceId === id ? String(pin.sourceId).replace(/^(?:character|user):/u, '') : '';
     const current = continuityHostSources().find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey);
     if (current) return current;
-    if (source?.identityId === id) return pinnedHostKey ? { avatar: pinnedHostKey } : null;
+    if (pin?.identityId === id) return pinnedHostKey ? { avatar: pinnedHostKey } : null;
     return identity?.kind === 'user' ? { description: power_user.persona_description || '' } : null;
 }
 
@@ -2365,23 +2350,6 @@ function setChatWandPreference(name, value) {
     void saveChatConditional();
 }
 
-function persistAppearanceSourcePins(identities, truths) {
-    let next = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
-    let changed = false;
-    for (const truth of Array.isArray(truths) ? truths : []) {
-        const identity = identities.find((entry) => entry.id === truth.identityId);
-        if (!identity || !['character', 'user'].includes(identity.kind) || !['avatar', 'description'].includes(truth.sourceType)) continue;
-        const role = identity.kind === 'user' ? 'persona' : 'character';
-        if (getChatAppearanceSource(next, identity.id, role)) continue;
-        next = setChatAppearanceSource(next, identity.id, { identityId: identity.id, sourceId: identity.id, sourceType: truth.sourceType, role });
-        changed = true;
-    }
-    if (!changed) return false;
-    chat_metadata[CHAT_CANON_KEY] = next;
-    void saveChatConditional();
-    return true;
-}
-
 function chooseAppearanceSource(identityId, sourceType) {
     const context = getContext();
     const identity = getAppearanceIdentityChoices().find((entry) => entry.id === identityId)
@@ -2395,6 +2363,24 @@ function chooseAppearanceSource(identityId, sourceType) {
     renderContinuityShelves();
     renderChatAppearanceSources();
     return { status: 'selected', identityId: identity.id, sourceType };
+}
+
+function chooseIdentityPin(identityId, action = 'pin') {
+    const identity = getAppearanceIdentityChoices().find((entry) => entry.id === identityId);
+    if (!identity) return { status: 'unavailable' };
+    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+    const role = identity.kind === 'user' ? 'persona' : identity.kind;
+    const currentPin = Object.values(canon.identityPins || {}).find((pin) => pin?.role === role) || getChatIdentityPin(canon, identity.id, role);
+    if (action === 'unpin') {
+        chat_metadata[CHAT_CANON_KEY] = clearChatIdentityPin(canon, currentPin?.identityId || identity.id);
+    } else {
+        if (currentPin && currentPin.identityId !== identity.id && typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Replace the pinned identity for this chat?')) return { status: 'cancelled' };
+        chat_metadata[CHAT_CANON_KEY] = setChatIdentityPin(canon, identity.id, { sourceId: identity.id, role });
+    }
+    void saveChatConditional();
+    renderContinuityShelves();
+    renderChatAppearanceSources();
+    return { status: action === 'unpin' ? 'unpinned' : 'pinned', identityId: identity.id };
 }
 
 function presentContinuityIdentities(message = null) {
@@ -3198,6 +3184,10 @@ function renderChatAppearanceSources() {
         return;
     }
     const currentPersonaId = `user:${user_avatar || 'display'}`;
+    const pinnedPersona = Object.values(canon.identityPins || {}).find((entry) => entry?.role === 'persona');
+    if (pinnedPersona && pinnedPersona.identityId !== currentPersonaId && !identities.some((identity) => identity.id === currentPersonaId)) {
+        identities.push({ id: currentPersonaId, kind: 'user', label: name1 || 'User', hostKey: user_avatar || 'display', durable: true });
+    }
     for (const identity of identities) {
         const source = getChatAppearanceSource(canon, identity.id, identity.kind === 'user' ? 'persona' : identity.kind);
         const truth = continuityTruths([identity])[0];
@@ -3205,15 +3195,52 @@ function renderChatAppearanceSources() {
         const row = $('<div class="cig_chat_appearance_row"></div>').attr('data-identity-id', identity.id);
         const controlId = `cig_chat_source_${identity.id.replace(/[^A-Za-z0-9_-]/g, '_')}`;
         const label = $('<label>').attr('for', controlId).text(identity.label || identity.id);
-        $('<small>').text(`${truth?.sourceType === 'none' ? 'Not ready' : `${truth?.sourceType || 'auto'} ready`}${source ? ' · Pinned in this chat.' : ' · Follows this chat identity.'}`).appendTo(label);
+        const pin = Object.values(canon.identityPins || {}).find((entry) => entry?.role === (identity.kind === 'user' ? 'persona' : identity.kind)) || getChatIdentityPin(canon, identity.id, identity.kind === 'user' ? 'persona' : identity.kind);
+        $('<small>').text(`${truth?.sourceType === 'none' ? 'Not ready' : `${truth?.sourceType || 'auto'} ready`}${pin?.identityId === identity.id ? ' · Pinned in this chat.' : ' · Follows this chat identity.'}`).appendTo(label);
         const select = $('<select class="cig-setting cig_chat_appearance_select"></select>').attr({ id: controlId, 'aria-label': `Appearance source for ${identity.label || identity.id}`, 'data-cig-chat-appearance-source': identity.id });
         for (const option of [['auto', 'Auto (recommended)'], ['avatar', 'Avatar'], ['description', 'Description']]) $('<option>').val(option[0]).text(option[1]).prop('selected', selected === option[0]).appendTo(select);
         row.append(label, select);
-        if (identity.kind === 'user' && source && source.identityId !== currentPersonaId) {
-            $('<button type="button" class="menu_button cig_chat_appearance_replace">Replace pinned identity</button>').attr({ 'data-cig-chat-appearance-replace': currentPersonaId, 'data-cig-chat-appearance-old': source.identityId, 'aria-label': 'Replace pinned persona appearance for this chat' }).appendTo(row);
-        }
+        if (pin?.identityId === identity.id) $('<button type="button" class="menu_button cig_chat_appearance_pin">Unpin</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'unpin', 'aria-label': `Unpin ${identity.label || identity.id} for this chat` }).appendTo(row);
+        else if (pin && pin.role === (identity.kind === 'user' ? 'persona' : identity.kind)) $('<button type="button" class="menu_button cig_chat_appearance_pin">Replace pinned identity</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'pin', 'aria-label': `Replace pinned identity with ${identity.label || identity.id}` }).appendTo(row);
+        else $('<button type="button" class="menu_button cig_chat_appearance_pin">Pin this identity</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'pin', 'aria-label': `Pin ${identity.label || identity.id} for this chat` }).appendTo(row);
         list.append(row);
     }
+}
+
+function renderExtraStoryTools() {
+    const extras = extraStoryTools();
+    $('#cig_extra_story_tools_enabled').prop('checked', extras.enabled);
+    $('#cig_extra_story_tools_options').prop('hidden', !extras.enabled);
+    for (const [id, key] of [['cig_extra_story_memory', 'storyMemory'], ['cig_extra_appearance_memory', 'appearanceMemory'], ['cig_extra_cinematic', 'cinematic'], ['cig_extra_iteration', 'iteration'], ['cig_extra_gallery', 'gallery']]) {
+        $(`#${id}`).prop('checked', extras[key] === true);
+    }
+    $('#cig_story_memory').prop('hidden', !extraStoryToolEnabled('storyMemory'));
+    $('#cig_appearances').prop('hidden', !extraStoryToolEnabled('appearanceMemory'));
+    $('#cig_gallery').prop('hidden', !extraStoryToolEnabled('gallery'));
+    $('#cig_cinematic_automation').prop('hidden', !extraStoryToolEnabled('cinematic'));
+    $('#cig_extra_story_tools_status').text(extras.enabled ? 'Choose the individual tools you want below.' : 'Extra story tools are off. The wand, visual style, and current chat characters remain available.');
+}
+
+function setExtraStoryTools(patch = {}) {
+    const current = extraStoryTools();
+    const next = normalizeExtraStoryTools({ ...current, ...patch });
+    extension_settings[extensionName].extra_story_tools = next;
+    saveSettingsDebounced();
+    renderExtraStoryTools();
+    if (extraStoryToolEnabled('storyMemory')) createStoryMemorySurface();
+    else {
+        storyMemorySurfaceMount?.destroy?.(); storyMemorySurfaceMount = null; storyMemoryController = null; pendingStoryMemoryContinuation = null;
+    }
+    if (extraStoryToolEnabled('cinematic')) createCinematicSurface();
+    else { cinematicRuntime?.destroy?.(); cinematicRuntime = null; cinematicUiController = null; $('.cig_cinematic_suggestion').remove(); }
+    if (!extraStoryToolEnabled('iteration')) { destroyIterationSurfaceMounts(); $('.cig_iteration_entry').remove(); }
+    if (!extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
+    if (!extraStoryToolEnabled('gallery')) renderGallery();
+    if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
+    if (extraStoryToolEnabled('gallery')) renderGallery();
+    if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
+    if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
+    if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
 }
 
 function syncChatWandPreferenceControls() {
@@ -3225,6 +3252,9 @@ function syncChatWandPreferenceControls() {
 }
 
 function renderAppearanceList(lifecycleView = null) {
+    const visible = extraStoryToolEnabled('appearanceMemory');
+    $('#cig_appearances').prop('hidden', !visible);
+    if (!visible) return;
     const settings = extension_settings[extensionName] || {};
     const list = $('#cig_appearance_list').empty();
     const empty = $('#cig_appearance_empty');
@@ -3283,7 +3313,6 @@ function renderAppearanceList(lifecycleView = null) {
         row.prepend(text);
         list.append(row);
     }
-    renderVisualStoryOverview();
 }
 
 async function cigMessageButton($icon, { captureSelection = true, generationInput = null, invocation = 'wand' } = {}) {
@@ -3495,6 +3524,7 @@ function iterationArtifactForStorage(artifact, plan) {
 }
 
 async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
+    if (!extraStoryToolEnabled('iteration')) return { status: 'disabled', reason: 'Post-image Improve tools are off.' };
     const target = originalArtifact?.target || artifact?.target;
     const currentContext = getContext();
     const messageId = Number(target?.messageId);
@@ -3628,6 +3658,8 @@ async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, p
 
 function renderIterationActionSurface(messageElement, messageOverride = null) {
     if (!messageElement?.length) return;
+    messageElement.find('.cig_iteration_entry').remove();
+    if (!extraStoryToolEnabled('iteration')) return;
     const messageId = Number(messageElement.attr('mesid'));
     const message = messageOverride || getContext().chat?.[messageId];
     const activeMedia = activeMediaForMessage(message);
@@ -3635,7 +3667,6 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
     const previous = iterationSurfaceMounts.get(key);
     previous?.destroy?.();
     iterationSurfaceMounts.delete(key);
-    messageElement.find('.cig_iteration_entry').remove();
     if (!activeMedia || !isCigOwnedMedia(activeMedia.item)) return;
     const root = $('<section class="cig_iteration_entry" aria-label="Improve generated image"></section>');
     const button = $('<button type="button" class="menu_button cig_iteration_improve" data-cig-iteration-open="true" data-cig-iteration-improve="true" style="min-height:44px"></button>')
@@ -3819,7 +3850,7 @@ function configureAllCigImageArrows() {
 
 async function autoGenerateForMessage(messageId) {
     const settings = extension_settings[extensionName];
-    if (settings.auto_generate === 'off') return;
+    if (settings.auto_generate === 'off' || !extraStoryToolEnabled('cinematic')) return;
 
     const context = getContext();
     const autoInput = captureAutoGenerationInput({ context, messageId });
@@ -4484,7 +4515,30 @@ jQuery(async () => {
 
     $('#cig_use_previous_image').on('change', function () {
         extension_settings[extensionName].use_previous_image = $(this).prop('checked');
+        if (!extension_settings[extensionName].use_previous_image) {
+            // A staged Story Memory continuation is a reference candidate, so
+            // turning the opt-in off must remove it from the next wand plan
+            // immediately. Persisted Story Memory history remains untouched.
+            pendingStoryMemoryContinuation = null;
+        }
         saveSettingsDebounced();
+    });
+
+    $('#cig_extra_story_tools_enabled').on('change', function () {
+        setExtraStoryTools({ enabled: $(this).prop('checked') });
+    });
+    const extraToolControls = {
+        '#cig_extra_story_memory': 'storyMemory',
+        '#cig_extra_appearance_memory': 'appearanceMemory',
+        '#cig_extra_cinematic': 'cinematic',
+        '#cig_extra_iteration': 'iteration',
+        '#cig_extra_gallery': 'gallery',
+    };
+    for (const [selector, key] of Object.entries(extraToolControls)) {
+        $(selector).on('change', function () { setExtraStoryTools({ [key]: $(this).prop('checked') }); });
+    }
+    $('#cig_extra_story_tools_disable_all').on('click', function () {
+        setExtraStoryTools({ enabled: false });
     });
 
     $('#cig_auto_generate').on('change', function () {
@@ -4554,20 +4608,10 @@ jQuery(async () => {
         catch (error) { showGenerationError(error, 'Update chat appearance source'); }
     });
 
-    $(document).on('click', '[data-cig-chat-appearance-replace]', function (e) {
+    $(document).on('click', '[data-cig-chat-appearance-pin]', function (e) {
         e.preventDefault();
-        const nextIdentityId = $(this).attr('data-cig-chat-appearance-replace');
-        const oldIdentityId = $(this).attr('data-cig-chat-appearance-old');
-        if (typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Replace the pinned appearance for this chat with the current identity?')) return;
-        try {
-            chooseAppearanceSource(nextIdentityId, 'auto');
-            const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
-            const sources = { ...(canon.appearanceSources || {}) };
-            delete sources[oldIdentityId];
-            chat_metadata[CHAT_CANON_KEY] = { ...canon, appearanceSources: sources };
-            void saveChatConditional();
-            renderChatAppearanceSources();
-        } catch (error) { showGenerationError(error, 'Replace chat appearance'); }
+        try { chooseIdentityPin($(this).attr('data-cig-chat-appearance-pin'), $(this).attr('data-cig-chat-appearance-pin-action') || 'pin'); }
+        catch (error) { showGenerationError(error, 'Update pinned identity'); }
     });
 
     $('#cig_system_instruction').on('input', function () {
@@ -4704,35 +4748,6 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
-    function focusVisualStoryTarget(selector) {
-        const target = document.querySelector(selector);
-        if (!target) return false;
-        target.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
-        const heading = target.querySelector?.('h2, h3') || target;
-        heading.setAttribute?.('tabindex', '-1');
-        heading.focus?.({ preventScroll: true });
-        return true;
-    }
-
-    $(document).on('click', '[data-cig-visual-story-action]', function (e) {
-        e.preventDefault();
-        e.stopPropagation();
-        const action = $(e.currentTarget).attr('data-cig-visual-story-action');
-        if (action === 'open-memory') {
-            revealStoryMemoryEntry({ documentLike: document, activateTab: (tab) => activateSettingsTab(tab) });
-        } else if (action === 'open-appearance') {
-            revealVisualStorySurface();
-            focusVisualStoryTarget('#cig_appearances');
-        } else if (action === 'configure-cinematic') {
-            const cinematic = extension_settings[extensionName]?.cinematic_automation || {};
-            revealVisualStorySurface('preferences');
-            if (cinematic.enabled !== true || cinematic.mode === 'off') {
-                $('#cig_cinematic_enabled').prop('checked', true).trigger('change');
-            }
-            focusVisualStoryTarget('#cig_cinematic_automation');
-        }
-    });
-
     $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -4773,20 +4788,18 @@ jQuery(async () => {
         const messageElement = $(`.mes[mesid="${messageId}"]`);
         renderContinuityShelf(messageElement);
         renderSceneInspection(messageElement);
-        renderIterationActionSurface(messageElement);
+        if (extraStoryToolEnabled('iteration')) renderIterationActionSurface(messageElement);
         scheduleImageArrowConfiguration({
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
         });
-        void observeCinematicMessage(messageId);
+        if (extraStoryToolEnabled('cinematic')) void observeCinematicMessage(messageId);
     }
 
     eventSource.on(event_types.CHAT_CHANGED, () => {
-        visualStoryFocusController?.cancel?.();
-        visualStoryFocusController = null;
-        cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        refreshStoryMemorySurface();
-        refreshCinematicSurface();
+        if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
+        if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
         setTimeout(() => {
             injectAllMessageButtons();
@@ -4794,7 +4807,7 @@ jQuery(async () => {
             renderChatAppearanceSources();
             renderContinuityShelves();
             $('.mes').each(function () { renderSceneInspection($(this)); });
-            $('.mes').each(function () { renderIterationActionSurface($(this)); });
+            if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
             void resumePendingOutfitState();
@@ -4813,20 +4826,18 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        visualStoryFocusController?.cancel?.();
-        visualStoryFocusController = null;
-        cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        refreshStoryMemorySurface();
-        refreshCinematicSurface();
+        if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
+        if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); syncChatWandPreferenceControls(); renderChatAppearanceSources(); renderContinuityShelves(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
     });
 
     setTimeout(() => {
         injectAllMessageButtons();
         renderContinuityShelves();
         $('.mes').each(function () { renderSceneInspection($(this)); });
-        $('.mes').each(function () { renderIterationActionSurface($(this)); });
+        if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
         configureAllCigImageArrows();
     }, 500);
 

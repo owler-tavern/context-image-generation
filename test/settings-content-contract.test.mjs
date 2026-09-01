@@ -68,10 +68,10 @@ test('overswipe generation setting explains the image boundary and retains one p
     assert.doesNotMatch(settings, /id="cig_regenerate_on_swipe"[\s\S]*?id="cig_regenerate_on_swipe"/);
 });
 
-test('Images and Cast leads with Gallery and then a visible Appearance memory section', () => {
+test('Images and Cast leads with current chat characters and progressively discloses extras', () => {
     const imagesCast = panelMarkup('cig_settings_panel_images_cast');
-    assert.ok(imagesCast.indexOf('id="cig_gallery"') < imagesCast.indexOf('id="cig_appearances"'));
-    assert.match(imagesCast, /id="cig_gallery"[\s\S]*?<h2>Gallery<\/h2>/);
+    assert.ok(imagesCast.indexOf('id="cig_chat_appearance_sources"') < imagesCast.indexOf('id="cig_extra_story_tools"'));
+    assert.match(imagesCast, /id="cig_gallery"[^>]*>[\s\S]*?<h2>Gallery<\/h2>/);
     assert.match(imagesCast, /id="cig_appearances"[\s\S]*?<h2>Appearance memory<\/h2>/);
     assert.equal((imagesCast.match(/<details\b/g) || []).length, 0, 'Images and Cast has no nested details');
     assert.match(imagesCast, /Use the wand on any RP message to generate an image\./);
@@ -102,8 +102,24 @@ test('everyday settings use plain task groups and keep advanced/provider languag
     const imagesCast = panelMarkup('cig_settings_panel_images_cast');
     assert.match(preferences, /<h2>Visual style<\/h2>/);
     assert.match(preferences, /<h2>Automation<\/h2>/);
-    assert.match(imagesCast, /<h2>Current chat characters<\/h2>[\s\S]*?<h2>Story Memory<\/h2>/);
+    assert.match(imagesCast, /<h2>Current chat characters<\/h2>/);
+    assert.match(imagesCast, /id="cig_extra_story_tools"[\s\S]*?Story Memory/);
     assert.doesNotMatch(`${preferences}${imagesCast}`, /canon|reference plan|revision|cast override|route contract/i);
+    assert.match(preferences, /Framing, continuity, and custom visual direction are saved for the current chat/);
+    assert.match(preferences, /Message depth and system instruction apply to every chat/);
+});
+
+test('story extras are opt-in, grouped once, and keep the ordinary view core-only by default', () => {
+    const imagesCast = panelMarkup('cig_settings_panel_images_cast');
+    assert.match(imagesCast, /id="cig_extra_story_tools"/);
+    assert.match(imagesCast, /id="cig_extra_story_tools_enabled"[^>]*type="checkbox"/);
+    for (const id of ['cig_extra_story_memory', 'cig_extra_appearance_memory', 'cig_extra_cinematic', 'cig_extra_iteration', 'cig_extra_gallery']) {
+        assert.equal(countId(id), 1, `${id} appears exactly once`);
+        assert.match(imagesCast, new RegExp(`id="${id}"`));
+    }
+    assert.match(imagesCast, /Turn off all extras/);
+    assert.match(imagesCast, /Nothing is deleted/);
+    assert.ok(imagesCast.indexOf('id="cig_chat_appearance_sources"') < imagesCast.indexOf('id="cig_extra_story_tools"'));
 });
 
 test('gallery preview and appearance actions are semantic and identify their outcome', () => {
