@@ -21,6 +21,8 @@ import {
     finalizeLegacyArtifactMigration,
     projectAppearanceLookActionState,
 } from '../lib/rp/appearance-library.js';
+import { resolveCanonReferenceSnapshot } from '../lib/rp/canon-reference-resolver.js';
+import { buildReferenceMessageParts } from '../lib/rp/reference-message-parts.js';
 
 test('clearing Gallery preserves promoted saved looks and independently materializable assets', () => {
     const id = '11111111-1111-4111-8111-111111111111';
@@ -219,6 +221,41 @@ test('identity choices include current hosts, group members, and named chat NPCs
     assert.deepEqual(choices.map((choice) => choice.id), [
         'character:ava.png', 'user:sam.png', 'character:leo.png', 'npc:guard',
     ]);
+});
+
+test('new chats do not inherit unrelated durable library character or persona identities', () => {
+    const library = {
+        identities: {
+            'character:old.png': { id: 'character:old.png', kind: 'character', label: 'Old Character', hostKey: 'old.png', activeLookId: 'look:old', looks: [{ id: 'look:old', assetId: 'asset:old' }] },
+            'user:old.png': { id: 'user:old.png', kind: 'user', label: 'Old Persona', hostKey: 'old.png', activeLookId: 'look:old-persona', looks: [{ id: 'look:old-persona', assetId: 'asset:old-persona' }] },
+            'npc:chat-a:old': { id: 'npc:chat-a:old', kind: 'npc', chatId: 'chat-a', label: 'Old NPC', activeLookId: 'look:old-npc', looks: [{ id: 'look:old-npc', assetId: 'asset:old-npc' }] },
+        },
+        assets: {
+            'asset:old': { id: 'asset:old', kind: 'appearance', url: '/old.png' },
+            'asset:old-persona': { id: 'asset:old-persona', kind: 'appearance', url: '/old-persona.png' },
+            'asset:old-npc': { id: 'asset:old-npc', kind: 'appearance', url: '/old-npc.png' },
+        },
+    };
+    const choices = listAppearanceIdentityChoices({
+        activeCharacter: { avatar: 'new.png', name: 'New Character' },
+        persona: { avatar: 'new-user.png', name: 'New Persona' },
+        currentChatId: 'chat-b',
+        library,
+        chatState: { schema: 1, bindings: {} },
+    });
+    assert.deepEqual(choices.map((choice) => choice.id), ['character:new.png', 'user:new-user.png']);
+    assert.deepEqual(buildAppearanceReferenceCandidates(library, [
+        { id: 'old', url: '/old.png' }, { id: 'old-persona', url: '/old-persona.png' }, { id: 'old-npc', url: '/old-npc.png' },
+    ], { currentChatId: 'chat-b', allowedIdentityIds: choices.map((choice) => choice.id) }), []);
+    const snapshot = resolveCanonReferenceSnapshot({
+        library,
+        gallery: [{ id: 'old', url: '/old.png' }, { id: 'old-persona', url: '/old-persona.png' }, { id: 'old-npc', url: '/old-npc.png' }],
+        chatState: { schema: 1, bindings: {} },
+        identities: choices,
+    });
+    assert.deepEqual(snapshot.references, []);
+    assert.deepEqual(snapshot.assets, {});
+    assert.deepEqual(buildReferenceMessageParts({ references: snapshot.references }, snapshot.assets), []);
 });
 
 test('removing a saved look leaves the identity record valid and removes only that look', () => {

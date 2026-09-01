@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import { buildReferenceMessageParts } from '../lib/rp/reference-message-parts.js';
 import { buildSceneGenerationSnapshot } from '../lib/rp/scene-generation.js';
+import { projectReferenceReceipt } from '../lib/rp/reference-receipt.js';
 
 const baseInput = {
     id: 'plan-1',
@@ -146,6 +147,21 @@ test('plan creation ranks candidates before applying the provider cap', () => {
     assert.deepEqual(plan.referenceOmissions.map((item) => [item.candidate.id, item.reason]), [
         ['scene:old', 'provider-cap'],
     ]);
+});
+
+test('final plan rebuild preserves cap omission provenance for the receipt', () => {
+    const provisional = createGenerationPlan({ ...baseInput, id: 'provisional-receipt' });
+    const final = createGenerationPlan({
+        ...baseInput,
+        id: 'final-receipt',
+        references: provisional.references,
+        availableReferenceIds: provisional.references.map((reference) => reference.id),
+        referenceOmissions: provisional.referenceOmissions,
+    });
+    const receipt = projectReferenceReceipt(final);
+    assert.deepEqual(receipt.used.map((entry) => entry.label), ['Ava', 'Ava']);
+    assert.deepEqual(receipt.omitted, [{ label: 'Selected source', source: 'previous image', reason: 'this model accepts 2 image references' }]);
+    assert.equal(receipt.modelMax, 2);
 });
 
 test('zero-capability routes receive no references and retain provider-agnostic plan fields', () => {

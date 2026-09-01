@@ -5,6 +5,7 @@ import { readFile } from 'node:fs/promises';
 const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
 const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
+const referenceReadiness = await readFile(new URL('../lib/rp/reference-readiness.js', import.meta.url), 'utf8');
 
 function panelMarkup(id) {
     const opening = settings.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>`));
@@ -95,6 +96,23 @@ test('Images and Cast exposes current-chat appearance source configuration witho
     assert.match(imagesCast, /<h2>Current chat characters<\/h2>/);
     assert.match(imagesCast, /Auto, Avatar, or Description/);
     assert.doesNotMatch(imagesCast, /Generate image from the last message/);
+});
+
+test('Current chat characters includes one collapsed provider-free reference readiness summary', () => {
+    const imagesCast = panelMarkup('cig_settings_panel_images_cast');
+    assert.match(imagesCast, /id="cig_reference_readiness"[^>]*hidden/);
+    assert.match(index, /projectReferenceReadiness\(/u);
+    assert.match(index, /renderReferenceReadiness\(/u);
+    assert.match(referenceReadiness, /Reference readiness for this chat/u);
+    assert.match(index, /modelMax: capability\?\.maxCount/u);
+    assert.doesNotMatch(index, /projectReferenceReadiness\([\s\S]{0,1200}(?:fetch|dispatchProviderRoute|generateImage|saveSettings)/u);
+    assert.match(index, /REFERENCE_READINESS_CSS/);
+    assert.match(index, /allowAvatars: currentSettings\.use_avatars === true/u);
+    assert.match(index, /allowDescriptions: currentSettings\.include_descriptions === true/u);
+    assert.match(index, /sourcePreferences: appearanceSourcePreferences\(\)/u);
+    assert.match(index, /#cig_use_avatars[\s\S]{0,180}renderChatAppearanceSources\(\)/u);
+    assert.match(index, /#cig_include_descriptions[\s\S]{0,180}renderChatAppearanceSources\(\)/u);
+    assert.match(index, /#cig_use_previous_image[\s\S]{0,700}renderChatAppearanceSources\(\)/u);
 });
 
 test('everyday settings use plain task groups and keep advanced/provider language out of them', () => {

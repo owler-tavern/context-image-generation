@@ -21,6 +21,26 @@ test('merges solo character and group membership without duplicate identities', 
     assert.equal(catalogue[0].aliases.includes('ava stone'), true);
 });
 
+test('keeps legacy library inclusion when no library scope allowlist is supplied', () => {
+    const catalogue = buildIdentityCatalogue({
+        activeCharacter: { avatar: 'current.png', name: 'Current' },
+        persona: { avatar: 'current-user.png', name: 'Current user' },
+        library: {
+            identities: {
+                'character:legacy.png': { id: 'character:legacy.png', kind: 'character', label: 'Legacy character' },
+                'user:legacy.png': { id: 'user:legacy.png', kind: 'user', label: 'Legacy persona' },
+            },
+        },
+    });
+
+    assert.deepEqual(catalogue.map((identity) => identity.id), [
+        'character:current.png',
+        'user:current-user.png',
+        'character:legacy.png',
+        'user:legacy.png',
+    ]);
+});
+
 test('ambiguous aliases resolve to no identity while unique Unicode phrase matches resolve', () => {
     const identities = [
         { id: 'npc:one', kind: 'npc', label: 'Alex', aliases: ['Alex'] },

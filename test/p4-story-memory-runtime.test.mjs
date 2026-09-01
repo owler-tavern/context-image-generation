@@ -11,6 +11,7 @@ import {
     STORY_MEMORY_SETTINGS_KEY,
 } from '../lib/rp/story-memory-runtime.js';
 import { createStoryMemoryController, renderStoryMemorySurface } from '../lib/rp/story-memory-ui.js';
+import { sanitizeIterationArtifactForStorage } from '../lib/rp/iteration-domain.js';
 
 const extensionName = 'context-image-generation';
 
@@ -42,6 +43,30 @@ test('collects only current-chat CIG media with source moment and generation pro
     assert.equal(entries[0].generation.model, 'image-model');
     assert.equal(entries[0].generation.effectivePrompt, 'Ava at a quiet station');
     assert.equal(entries[0].provenance.source, 'chat-media');
+});
+
+test('Story Memory provenance uses the final dispatched reference receipt without exposing assets', () => {
+    const entries = collectStoryMemoryMedia({
+        chatId: 'chat-a',
+        chat: [{ name: 'Ava', mes: 'Ava enters.', extra: { media: [media('/images/receipt.png', {
+            cig_continuity_snapshot: {
+                referenceReceipt: {
+                    schema: 1,
+                    used: [{ label: 'Ava', source: 'saved look' }],
+                    omitted: [{ label: 'Sam', source: 'avatar', reason: 'this model accepts 2 image references' }],
+                    modelMax: 2,
+                },
+            },
+        })] } }],
+        gallery: [],
+        extensionName,
+    });
+    const receipt = entries[0].generation.referenceReceipt;
+    assert.deepEqual(receipt.used, [{ label: 'Ava', source: 'saved look' }]);
+    assert.deepEqual(receipt.omitted, [{ label: 'Sam', source: 'avatar', reason: 'this model accepts 2 image references' }]);
+    assert.doesNotMatch(JSON.stringify(receipt), /https?:|asset:|PRIVATE|base64/u);
+    const persisted = compactStoryMemory({ schema: 2, artifacts: { one: entries[0] }, collections: {} }, { chatId: 'chat-a' });
+    assert.deepEqual(persisted.artifacts[Object.keys(persisted.artifacts)[0]].generation.referenceReceipt, receipt);
 });
 
 test('runtime hydrates inline media and retained Gallery without duplicating files', async () => {
@@ -254,13 +279,40 @@ test('P3 iteration output keeps scene facts on saved media and story hydration',
             url: '/images/iteration.png',
             cig_owner: extensionName,
             cig_iteration_artifact: { artifactId: 'artifact:iteration', taskId: 'task-iteration' },
+            cig_continuity_snapshot: { referenceReceipt: {
+                used: [{ label: 'Ava', source: 'saved look' }],
+                omitted: [{ label: 'Sam', source: 'avatar', reason: 'provider-cap' }],
+                modelMax: 1,
+            } },
             cig_story_memory_facts: iterationOutput.__cigStoryMemoryFacts,
         }] } }],
     });
     assert.equal(entries.length, 1);
     assert.ok(entries[0].facts.length > 0);
     assert.match(entries[0].facts.map((fact) => fact.text).join(' '), /Ava|station/u);
+    assert.deepEqual(entries[0].generation.referenceReceipt.used, [{ label: 'Ava', source: 'saved look' }]);
     assert.doesNotMatch(JSON.stringify(entries[0]), /provider-bytes-never-persisted/u);
+});
+
+test('iteration artifact storage carries only the compact final receipt into Story Memory', () => {
+    const stored = sanitizeIterationArtifactForStorage({
+        artifactId: 'artifact:improve',
+        sourcePassage: { text: 'Ava waits.', userVisible: true },
+        effectivePrompt: 'Ava waits.',
+        referenceReceipt: {
+            used: [{ label: 'Ava', source: 'saved look' }],
+            omitted: [{ label: 'Sam', source: 'avatar', reason: 'provider-cap' }],
+            modelMax: 1,
+        },
+        generationPlan: { planId: 'plan:improve', revision: 'r1' },
+    });
+    assert.deepEqual(stored.referenceReceipt, {
+        schema: 1,
+        used: [{ label: 'Ava', source: 'saved look' }],
+        omitted: [{ label: 'Sam', source: 'avatar', reason: 'provider-cap' }],
+        modelMax: 1,
+    });
+    assert.doesNotMatch(JSON.stringify(stored), /prompt-secret|https?:|imageData|asset:private/u);
 });
 
 test('stale persistence compensates a remote write after chat switches mid-save', async () => {

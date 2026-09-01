@@ -91,6 +91,8 @@ import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-run
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
 import { inferDirectorCast } from './lib/rp/director-cast.js';
 import { renderCastCorrectionControls, CAST_CORRECTION_SETTINGS_CSS } from './lib/rp/cast-settings-ui.js';
+import { projectReferenceReadiness, renderReferenceReadiness, REFERENCE_READINESS_CSS } from './lib/rp/reference-readiness.js';
+import { compactReferenceReceipt, REFERENCE_RECEIPT_CSS } from './lib/rp/reference-receipt.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -2103,14 +2105,17 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             // message parts, and asset map cannot drift back to omitted identities.
             references: selectedProjection.references,
             referencePlan: policyPlanInput.referencePlan && typeof policyPlanInput.referencePlan === 'object'
-                ? { ...policyPlanInput.referencePlan, selected: selectedProjection.references, omitted: [] }
+                ? { ...policyPlanInput.referencePlan, selected: selectedProjection.references, omitted: cloneSnapshot(plan.referencePlan?.omitted || policyPlanInput.referencePlan.omitted || []) }
                 : { selected: selectedProjection.references, omitted: [] },
         };
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, selectedProjection.assets);
         const dispatchedPlan = createGenerationPlan({
             ...dispatchPlanInput,
             availableReferenceIds: selectedProjection.references.map((reference) => reference.id),
-            referenceOmissions: [],
+            // Keep the exact first-plan omissions (provider cap, unavailable
+            // asset, and policy decisions) attached to the final provider
+            // plan; provisional candidates/assets are still projected out.
+            referenceOmissions: cloneSnapshot(plan.referenceOmissions || []),
             messages,
         });
         const capturedIterationPlan = {
@@ -2133,6 +2138,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 canonSnapshot: dispatchedPlan.canonSnapshot,
             }),
             generationPlan: capturedIterationPlan,
+            referenceReceipt: compactReferenceReceipt(dispatchedPlan),
             target: cloneSnapshot(target),
             sender: sender || '',
         } : null;
@@ -2146,6 +2152,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             },
             identities: dispatchedPlan.identities,
             referencePlan: dispatchedPlan.referencePlan,
+            referenceReceipt: compactReferenceReceipt(dispatchedPlan),
             activeOutfits: dispatchedPlan.activeOutfits,
             scene: createSceneArtifactMetadata(dispatchedPlan.scene),
         });
@@ -2355,6 +2362,7 @@ function getAppearanceIdentityChoices() {
         chatIdentities,
         library,
         currentChatId: context.chatId,
+        chatState: chat_metadata?.[CHAT_CANON_KEY],
     });
     // A persona avatar key is part of the stable identity ID. If this chat
     // already pinned a prior persona, keep that exact identity in the active
@@ -3268,6 +3276,7 @@ function renderChatAppearanceSources() {
     if (!identities.length) {
         $('<p>').text('No current character or persona identity is available.').appendTo(list);
         castHost.html(renderCastCorrectionControls({ identities: [], overrides: chatCastPreferences() }));
+        $('#cig_reference_readiness').empty().prop('hidden', true);
         renderChatOutfitControls([]);
         return;
     }
@@ -3293,6 +3302,45 @@ function renderChatAppearanceSources() {
         else $('<button type="button" class="menu_button cig_chat_appearance_pin">Pin this identity</button>').attr({ 'data-cig-chat-appearance-pin': identity.id, 'data-cig-chat-appearance-pin-action': 'pin', 'aria-label': `Pin ${identity.label || identity.id} for this chat` }).appendTo(row);
         list.append(row);
     }
+    const currentSettings = extension_settings[extensionName] || {};
+    const truths = continuityTruths(identities);
+    const context = getContext();
+    const activeCharacter = context.characters?.[context.characterId] || null;
+    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
+    const avatarReferences = currentSettings.use_avatars === true
+        ? resolveHostAvatarIdentityReferences({
+            identities,
+            activeCharacterAvatar: activeCharacter?.avatar,
+            personaAvatar: user_avatar,
+            groupCharacterAvatars: group?.members || [],
+            sourcePreferences: appearanceSourcePreferences(),
+        })
+        : [];
+    const candidates = buildContinuityReferenceCandidates({
+        identities,
+        truths,
+        remembered: canon.references || [],
+        avatarReferences,
+        includeDescriptions: currentSettings.include_descriptions === true,
+    });
+    const capability = getReferenceImageCapability(currentSettings.provider || 'makersuite', currentSettings.model);
+    const staged = pendingStoryMemoryContinuation
+        && String(pendingStoryMemoryContinuation.chatId || '') === String(context.chatId || '')
+        && chatLifecycleEpoch.isCurrent(pendingStoryMemoryContinuation.epoch)
+        ? { artifactId: pendingStoryMemoryContinuation.artifactId, title: 'Selected Story Memory scene' }
+        : null;
+    const readiness = projectReferenceReadiness({
+        identities,
+        truths,
+        candidates,
+        modelMax: capability?.maxCount,
+        stagedPreviousImage: staged,
+        previousImageEnabled: currentSettings.use_previous_image === true,
+        allowAvatars: currentSettings.use_avatars === true,
+        allowDescriptions: currentSettings.include_descriptions === true,
+        sourcePreferences: appearanceSourcePreferences(),
+    });
+    $('#cig_reference_readiness').html(renderReferenceReadiness(readiness)).prop('hidden', !readiness);
     castHost.html(renderCastCorrectionControls({ identities, overrides: chatCastPreferences() }));
     renderChatOutfitControls(identities);
 }
@@ -3669,6 +3717,9 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
         source: MEDIA_SOURCE.GENERATED,
         cig_owner: extensionName,
         ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
+        ...((Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.used) || Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.omitted) || Array.isArray(artifact.referenceReceipt?.used) || Array.isArray(artifact.referenceReceipt?.omitted))
+            ? { cig_continuity_snapshot: { schema: 1, referenceReceipt: compactReferenceReceipt(artifact.__cigContinuitySnapshot?.referenceReceipt || artifact.referenceReceipt) } }
+            : {}),
         cig_iteration_artifact: iterationArtifactForStorage(artifact, plan),
         cig_iteration_persistence: { planId: plan.planId, invocationId: plan.invocationId },
     });
@@ -3722,6 +3773,9 @@ async function dispatchIterationPlan(plan, signal) {
         artifacts: [{
             ...plan.artifacts[0],
             imageData: generated.imageData,
+            ...((Array.isArray(generated.__cigContinuitySnapshot?.referenceReceipt?.used) || Array.isArray(generated.__cigContinuitySnapshot?.referenceReceipt?.omitted))
+                ? { referenceReceipt: compactReferenceReceipt(generated.__cigContinuitySnapshot.referenceReceipt) }
+                : {}),
             ...(Array.isArray(generated.__cigStoryMemoryFacts) && generated.__cigStoryMemoryFacts.length
                 ? { __cigStoryMemoryFacts: cloneSnapshot(generated.__cigStoryMemoryFacts) }
                 : {}),
@@ -4242,7 +4296,7 @@ jQuery(async () => {
         if (!document.getElementById('cig_cast_settings_styles')) {
             const castStyle = document.createElement('style');
             castStyle.id = 'cig_cast_settings_styles';
-            castStyle.textContent = CAST_CORRECTION_SETTINGS_CSS;
+            castStyle.textContent = `${CAST_CORRECTION_SETTINGS_CSS}${REFERENCE_READINESS_CSS}${REFERENCE_RECEIPT_CSS}`;
             document.head.appendChild(castStyle);
         }
     } catch (error) {
@@ -4283,6 +4337,7 @@ jQuery(async () => {
         toggleImageSizeVisibility();
         toggleProviderSpecificSettings();
         renderModelManager();
+        renderChatAppearanceSources();
         saveSettingsDebounced();
     });
 
@@ -4386,6 +4441,7 @@ jQuery(async () => {
         clearSetupRuntimeIssue();
         toggleImageSizeVisibility();
         renderModelManager();
+        renderChatAppearanceSources();
         saveSettingsDebounced();
     });
 
@@ -4411,6 +4467,7 @@ jQuery(async () => {
 
     $('#cig_use_avatars').on('change', function () {
         extension_settings[extensionName].use_avatars = $(this).prop('checked');
+        renderChatAppearanceSources();
         saveSettingsDebounced();
     });
 
@@ -4421,6 +4478,7 @@ jQuery(async () => {
 
     $('#cig_include_descriptions').on('change', function () {
         extension_settings[extensionName].include_descriptions = $(this).prop('checked');
+        renderChatAppearanceSources();
         saveSettingsDebounced();
     });
 
@@ -4433,6 +4491,7 @@ jQuery(async () => {
             // immediately. Persisted Story Memory history remains untouched.
             pendingStoryMemoryContinuation = null;
         }
+        renderChatAppearanceSources();
         saveSettingsDebounced();
     });
 
