@@ -4014,12 +4014,6 @@ function onCigImageArrowKeydown(event) {
     target.click();
 }
 
-function configureAllCigImageArrows() {
-    $('.mes').each(function () {
-        configureCigImageArrows($(this));
-    });
-}
-
 async function autoGenerateForMessage(messageId) {
     const settings = extension_settings[extensionName];
     if (settings.auto_generate === 'off' || !extraStoryToolEnabled('cinematic')) return;
@@ -4741,10 +4735,6 @@ jQuery(async () => {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
         if (extraStoryToolEnabled('iteration')) renderIterationActionSurface(messageElement);
-        scheduleImageArrowConfiguration({
-            schedule: (callback) => setTimeout(callback, 0),
-            reconfigure: () => configureCigImageArrows(messageElement),
-        });
         if (extraStoryToolEnabled('cinematic')) void observeCinematicMessage(messageId);
     }
 
@@ -4759,7 +4749,6 @@ jQuery(async () => {
             syncChatWandPreferenceControls();
             renderChatAppearanceSources();
             if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
-            configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
             void resumePendingOutfitState();
             void resumePendingSceneState();
@@ -4787,7 +4776,6 @@ jQuery(async () => {
     setTimeout(() => {
         injectAllMessageButtons();
         if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
-        configureAllCigImageArrows();
     }, 500);
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({

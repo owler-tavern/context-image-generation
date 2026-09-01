@@ -16,3 +16,18 @@ test('stable settings load does not delete and recreate retired director session
         'a stable load must not force a full SillyTavern settings save by recreating retired state',
     );
 });
+
+test('ordinary message rendering and chat startup do not schedule full image-navigation scans', () => {
+    const renderedStart = indexSource.indexOf('function onCigMessageRendered(messageId)');
+    const eventsEnd = indexSource.indexOf('SlashCommandParser.addCommandObject', renderedStart);
+    const runtimeEvents = renderedStart >= 0 && eventsEnd > renderedStart
+        ? indexSource.slice(renderedStart, eventsEnd)
+        : '';
+
+    assert.ok(runtimeEvents, 'message lifecycle source should be available');
+    assert.doesNotMatch(
+        runtimeEvents,
+        /scheduleImageArrowConfiguration|configureAllCigImageArrows/u,
+        'idle message and chat lifecycle must not add image-navigation timers or full DOM scans',
+    );
+});
