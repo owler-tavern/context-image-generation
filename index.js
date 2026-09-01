@@ -89,6 +89,7 @@ import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMAT
 import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
 import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
+import { renderVisualStorySurface, revealVisualStorySurface as revealVisualStorySurfaceUi, VISUAL_STORY_UI_CSS } from './lib/rp/visual-story-ui.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -143,6 +144,7 @@ let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
 let storyMemoryLoadPromise = null;
 let storyMemoryLoadCapture = null;
+let visualStoryMemoryUnsubscribe = null;
 let pendingStoryMemoryContinuation = null;
 let cinematicRuntime = null;
 let cinematicUiController = null;
@@ -926,6 +928,8 @@ function createStoryMemorySurface() {
         },
     };
     storyMemoryController = createStoryMemoryController(dependencies);
+    visualStoryMemoryUnsubscribe?.();
+    visualStoryMemoryUnsubscribe = storyMemoryController.subscribe?.(() => renderVisualStoryOverview()) || null;
     storyMemoryLoadPromise = null;
     storyMemoryLoadCapture = null;
     const host = document.getElementById('cig_story_memory_surface');
@@ -933,6 +937,40 @@ function createStoryMemorySurface() {
     storyMemorySurfaceMount?.destroy?.();
     storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
     void loadStoryMemoryForCurrentChat();
+}
+
+function visualStoryAppearanceSummary() {
+    const identities = getAppearanceIdentityChoices();
+    const truths = continuityTruths(identities);
+    const ready = truths.filter((truth) => truth.sourceType === 'avatar' || truth.sourceType === 'description').length;
+    if (!identities.length) return 'No current character or persona is available for continuity yet. Open appearance controls to add one.';
+    return `${ready} of ${identities.length} current character or persona identities have appearance readiness. Open appearance controls to review avatar, description, and active look choices.`;
+}
+
+function renderVisualStoryOverview() {
+    const host = document.getElementById('cig_visual_story_surface');
+    if (!host) return;
+    const cinematic = cinematicRuntimeSettings();
+    host.innerHTML = renderVisualStorySurface({
+        memoryState: storyMemoryController?.getState?.() || {},
+        appearanceSummary: visualStoryAppearanceSummary(),
+        cinematicEnabled: cinematic.enabled === true && cinematic.mode !== 'off',
+    });
+}
+
+function createVisualStorySurface() {
+    if (typeof document === 'undefined') return;
+    if (!document.getElementById('cig_visual_story_styles')) {
+        const style = document.createElement('style');
+        style.id = 'cig_visual_story_styles';
+        style.textContent = VISUAL_STORY_UI_CSS;
+        document.head.appendChild(style);
+    }
+    renderVisualStoryOverview();
+}
+
+function revealVisualStorySurface(tab = 'images-cast') {
+    return revealVisualStorySurfaceUi({ documentLike: document, activateTab: (tabId) => activateSettingsTab(tabId), tab });
 }
 
 function loadStoryMemoryForCurrentChat(captured = null) {
@@ -1012,6 +1050,7 @@ function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
     const status = statusOverride || (state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
     $('#cig_cinematic_status').text(status);
     $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
+    renderVisualStoryOverview();
 }
 
 function createCinematicSurface() {
@@ -1411,6 +1450,7 @@ async function loadSettings() {
     renderAppearanceList();
     createStoryMemorySurface();
     createCinematicSurface();
+    createVisualStorySurface();
     createDirectorSurface();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
@@ -3099,6 +3139,7 @@ function renderAppearanceList(lifecycleView = null) {
         row.prepend(text);
         list.append(row);
     }
+    renderVisualStoryOverview();
 }
 
 async function generateImage() {
@@ -3751,8 +3792,11 @@ function injectMessageButton(messageId) {
     messageElement.find('.cig_message_director').remove();
     const directorButton = $('<button type="button" class="menu_button cig_message_director cig_message_director_inline">Direct this scene</button>')
         .attr({ title: 'Direct this scene', 'aria-label': 'Direct this scene' });
+    const visualStoryButton = $('<button type="button" class="menu_button cig_message_visual_story cig_message_visual_story_inline">Visual Story</button>')
+        .attr({ title: 'Open this chat\'s Visual Story surface', 'aria-label': 'Open this chat\'s Visual Story surface' });
     const textAnchor = messageElement.find('.mes_text').last();
     if (textAnchor.length) textAnchor.after(directorButton); else messageElement.append(directorButton);
+    directorButton.after(visualStoryButton);
 }
 
 function visibleCanonMessageSender(message) {
@@ -4557,6 +4601,49 @@ jQuery(async () => {
         cigMessageButton($(e.currentTarget));
     });
 
+    function focusVisualStoryTarget(selector) {
+        const target = document.querySelector(selector);
+        if (!target) return false;
+        target.scrollIntoView?.({ behavior: 'smooth', block: 'nearest' });
+        const heading = target.querySelector?.('h2, h3') || target;
+        heading.setAttribute?.('tabindex', '-1');
+        heading.focus?.({ preventScroll: true });
+        return true;
+    }
+
+    $(document).on('click', '.cig_message_visual_story', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const result = revealVisualStorySurface();
+        if (result?.status !== 'revealed') toastr.info('Visual Story is not available until the extension settings are mounted.', 'Visual Story');
+    });
+
+    $(document).on('keydown', '.cig_message_visual_story', function (e) {
+        if (e.key !== 'Enter' && e.key !== ' ' && e.key !== 'Spacebar') return;
+        e.preventDefault();
+        e.stopPropagation();
+        $(e.currentTarget).trigger('click');
+    });
+
+    $(document).on('click', '[data-cig-visual-story-action]', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        const action = $(e.currentTarget).attr('data-cig-visual-story-action');
+        if (action === 'open-memory') {
+            revealStoryMemoryEntry({ documentLike: document, activateTab: (tab) => activateSettingsTab(tab) });
+        } else if (action === 'open-appearance') {
+            revealVisualStorySurface();
+            focusVisualStoryTarget('#cig_appearances');
+        } else if (action === 'configure-cinematic') {
+            const cinematic = extension_settings[extensionName]?.cinematic_automation || {};
+            revealVisualStorySurface('preferences');
+            if (cinematic.enabled !== true || cinematic.mode === 'off') {
+                $('#cig_cinematic_enabled').prop('checked', true).trigger('change');
+            }
+            focusVisualStoryTarget('#cig_cinematic_automation');
+        }
+    });
+
     async function openDirectorFromTrigger(trigger) {
         const messageElement = $(trigger).closest('.mes');
         const messageId = Number(messageElement.attr('mesid'));
@@ -4695,6 +4782,7 @@ jQuery(async () => {
         directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
+        renderVisualStoryOverview();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         renderDirectorSurface();
         destroyIterationSurfaceMounts();
@@ -4725,6 +4813,7 @@ jQuery(async () => {
         directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         refreshCinematicSurface();
+        renderVisualStoryOverview();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         renderDirectorSurface();
         destroyIterationSurfaceMounts();
