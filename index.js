@@ -74,6 +74,8 @@ import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-r
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
 import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
 import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
+import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitPrompt, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
+import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -104,6 +106,7 @@ const defaultSettings = {
     gallery: [],
     visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
+    rp_outfits: { schema: 1, outfits: [] },
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -868,6 +871,11 @@ async function loadSettings() {
         cigSettings.rp_library = migratedAppearanceLibrary;
         settingsMigrated = true;
     }
+    const migratedOutfitCatalog = migrateOutfitCatalog(cigSettings.rp_outfits);
+    if (JSON.stringify(cigSettings.rp_outfits) !== JSON.stringify(migratedOutfitCatalog)) {
+        cigSettings.rp_outfits = migratedOutfitCatalog;
+        settingsMigrated = true;
+    }
     if (!cigSettings.provider_keys || typeof cigSettings.provider_keys !== 'object' || Array.isArray(cigSettings.provider_keys)) {
         cigSettings.provider_keys = {};
         settingsMigrated = true;
@@ -1094,9 +1102,13 @@ async function getUserAvatar() {
     }
 }
 
-async function getCharacterAvatar() {
+async function getCharacterAvatar(identityId = null) {
     const context = getContext();
-    const character = context.characters[context.characterId];
+    const characters = Array.isArray(context.characters) ? context.characters : Object.values(context.characters || {});
+    const identityKey = String(identityId || '').replace(/^character:/u, '');
+    const character = identityKey
+        ? characters.find((entry) => String(entry?.avatar || '') === identityKey || String(entry?.id || '') === identityKey)
+        : context.characters[context.characterId];
     if (!character?.avatar) return null;
 
     try {
@@ -1266,6 +1278,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
             identities: appearanceIdentities,
             activeCharacterAvatar: activeCharacter?.avatar,
             personaAvatar: user_avatar,
+            groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
         }));
     }
     const canonCapture = captureCanonForGeneration({
@@ -1275,6 +1288,33 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         identities: appearanceIdentities,
         references: referenceCandidates,
     });
+    const appearanceTruthEntries = continuityTruths(appearanceIdentities);
+    const continuityCandidates = buildContinuityReferenceCandidates({
+        identities: appearanceIdentities,
+        truths: appearanceTruthEntries,
+        remembered: canonCapture.canonSnapshot.references,
+        avatarReferences: canonCapture.references,
+    }).map((candidate) => ({
+        ...candidate,
+        ...(canonCapture.canonSnapshot.assets?.[candidate.assetId]?.url ? { thumbnail: canonCapture.canonSnapshot.assets[candidate.assetId].url } : {}),
+    }));
+    const continuityReferencePlan = projectContinuityShelf({
+        identities: appearanceIdentities,
+        truths: appearanceTruthEntries,
+        candidates: continuityCandidates,
+        modelLimit: capability?.maxCount,
+        outfitCatalog: settingsSnapshot.rp_outfits,
+        outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
+    });
+    const activeOutfits = continuityReferencePlan.identities
+        .filter((entry) => entry.activeOutfit)
+        .map((entry) => ({ identityId: entry.identityId, identityLabel: entry.identityLabel, outfit: entry.activeOutfit }));
+    const outfitText = buildOutfitPrompt(activeOutfits);
+    const rawAppearanceDescription = appearanceTruthEntries
+        .filter((entry) => entry.description?.text)
+        .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
+        .join('\n\n');
+    if (rawAppearanceDescription) descriptionText = [descriptionText, rawAppearanceDescription].filter(Boolean).join('\n\n');
     const connectionId = routeModel.connectionId || `${providerId}:default`;
     const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
@@ -1284,10 +1324,12 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
-        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
+        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText, intent: 'scene' },
         canonSnapshot: canonCapture.canonSnapshot,
         identities: appearanceIdentities,
         references: canonCapture.references,
+        referencePlan: continuityReferencePlan,
+        activeOutfits,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
         policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
@@ -1299,6 +1341,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referenceCandidates: [...canonCapture.canonSnapshot.references, ...canonCapture.references],
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
+        continuityCandidates,
     });
 }
 
@@ -1324,6 +1367,7 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     const contentParts = [];
     if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
     if (plan.prompt.descriptionText) contentParts.push({ type: 'text', text: plan.prompt.descriptionText });
+    if (plan.prompt.outfitText) contentParts.push({ type: 'text', text: plan.prompt.outfitText });
     contentParts.push({ type: 'text', text: plan.prompt.messageContent || plan.prompt.sourceMessage });
     contentParts.push(...buildReferenceMessageParts(plan, referenceAssets));
 
@@ -1558,6 +1602,51 @@ function getAppearanceIdentityChoices() {
     });
 }
 
+function continuityHostSources() {
+    const context = getContext();
+    const character = context.characters?.[context.characterId] || null;
+    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
+    const groupMembers = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
+    const records = [
+        character,
+        ...groupMembers,
+        { avatar: user_avatar, name: name1 || 'User', description: power_user.persona_description || '', kind: 'user' },
+    ].filter(Boolean);
+    return records;
+}
+
+function identityHostRecord(identity) {
+    const id = String(identity?.id || '');
+    const hostKey = String(identity?.hostKey || id.replace(/^(?:character|user):/u, '')).trim();
+    return continuityHostSources().find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey)
+        || (identity?.kind === 'user' ? { description: power_user.persona_description || '' } : null);
+}
+
+function continuityTruths(identities) {
+    return buildAppearanceTruths({
+        identities,
+        sources: (identity) => {
+            const record = identityHostRecord(identity);
+            if (!record) return {};
+            const avatar = record.avatar
+                ? { path: identity.kind === 'character' ? `/characters/${encodeURIComponent(record.avatar)}` : getAvatarPath(record.avatar), characterId: identity.id }
+                : null;
+            return { avatar, description: record.description || '' };
+        },
+    });
+}
+
+function presentContinuityIdentities(message = null) {
+    const choices = getAppearanceIdentityChoices();
+    const context = getContext();
+    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
+    const groupKeys = new Set((group?.members || []).map((avatar) => String(avatar)));
+    const isPresent = (identity) => identity.kind === 'character'
+        && (!context.groupId || groupKeys.has(String(identity.hostKey)) || identity.hostKey === context.characters?.[context.characterId]?.avatar);
+    const present = choices.filter((identity) => isPresent(identity) || (message?.is_user && identity.kind === 'user' && identity.hostKey === user_avatar));
+    return present.filter((identity, index, all) => all.findIndex((item) => item.id === identity.id) === index);
+}
+
 function safeNpcId(chatId, name) {
     const chatPart = String(chatId || 'chat').replace(/[^a-zA-Z0-9_-]/gu, '-').slice(0, 80);
     const namePart = String(name || 'npc').trim().toLocaleLowerCase('und').replace(/[^\p{L}\p{N}_-]+/gu, '-').replace(/^-+|-+$/gu, '').slice(0, 60) || 'npc';
@@ -1654,6 +1743,90 @@ function capturedChatTarget(identityId, expectedRevision, activeLookId, mediaTar
         ? { id: context.chatId }
         : { avatar_url: context.characters?.[context.characterId]?.avatar, file_name: context.chatId };
     return { chatId: context.chatId, groupId, identityId, expectedRevision, activeLookId, requestBody, ...(mediaTarget ? mediaTarget : {}), ...(mediaTarget && !mediaTarget.lookId && activeLookId ? { lookId: activeLookId } : {}) };
+}
+
+async function verifyPersistedChatOutfitState({ target, expectedState } = {}) {
+    try {
+        const endpoint = target?.groupId ? '/api/chats/group/get' : '/api/chats/get';
+        const response = await fetch(endpoint, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(target?.requestBody || { chat_id: target?.chatId }) });
+        if (!response.ok) return { status: 'indeterminate' };
+        const payload = await response.json();
+        const header = Array.isArray(payload) ? payload[0] : payload;
+        const stored = header?.chat_metadata?.contextImageGeneration?.outfitState ?? header?.metadata?.contextImageGeneration?.outfitState;
+        const stable = (value) => JSON.stringify(value || { schema: 1, identities: {} });
+        return { status: stable(stored) === stable(expectedState) ? 'confirmed' : 'confirmed-absent', state: stored || null };
+    } catch (error) {
+        return { status: 'indeterminate', error };
+    }
+}
+
+async function persistChatOutfitState(identityId, nextState) {
+    const context = getContext();
+    const captured = { chatId: context.chatId, epoch: chatLifecycleEpoch.capture() };
+    const currentCanon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+    const previous = { canon: currentCanon };
+    const outfitState = { ...migrateChatOutfitState(nextState), revision: `outfit:${crypto.randomUUID()}` };
+    const candidate = { ...currentCanon, outfitState, revision: `chat-canon:${crypto.randomUUID()}` };
+    const target = capturedChatTarget(identityId, candidate.revision, getChatOutfitBinding(outfitState, identityId)?.activeOutfitId || null);
+    const result = await persistVerifiedChatMutation({
+        captured,
+        isCurrent: chatCaptureIsCurrent,
+        getState: () => ({ canon: chat_metadata[CHAT_CANON_KEY] }),
+        setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value.canon; },
+        nextState: { canon: candidate },
+        getRevision: (value) => value?.canon?.outfitState?.revision,
+        saveMetadata: () => saveChatConditional(),
+        verify: () => verifyPersistedChatOutfitState({ target, expectedState: outfitState }),
+        scheduleReconcile: () => {},
+    });
+    if (result.status !== 'confirmed' && chatCaptureIsCurrent(captured) && chat_metadata[CHAT_CANON_KEY]?.outfitState?.revision === outfitState.revision) {
+        chat_metadata[CHAT_CANON_KEY] = previous.canon;
+    }
+    renderContinuityShelves();
+    return result;
+}
+
+async function activateChatOutfit(identityId, requestedOutfitId) {
+    const settings = extension_settings[extensionName];
+    const catalog = migrateOutfitCatalog(settings.rp_outfits);
+    const current = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
+    const binding = getChatOutfitBinding(current, identityId);
+    let confirmed = false;
+    if (binding?.isLocked && binding.activeOutfitId !== requestedOutfitId) {
+        confirmed = await confirmDestructiveAction('Replace the locked outfit for this chat?', 'Activate outfit');
+        if (!confirmed) return { status: 'cancelled' };
+    }
+    const selected = selectChatOutfit(current, identityId, requestedOutfitId, { catalog, confirmed, explicitChange: confirmed });
+    if (selected.status !== 'selected') {
+        toastr.info(selected.status === 'confirmation-required' ? 'Unlock the outfit or confirm replacement first.' : 'Outfit unavailable.', 'Context Image Generation');
+        return selected;
+    }
+    const result = await persistChatOutfitState(identityId, selected.state);
+    if (result.status === 'confirmed') toastr.success(`Using ${selected.outfit.name} for ${identityId}.`, 'Context Image Generation');
+    else toastr.info('Outfit selection is pending chat persistence.', 'Context Image Generation');
+    return result;
+}
+
+async function toggleChatOutfitLock(identityId) {
+    const current = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
+    const binding = getChatOutfitBinding(current, identityId);
+    if (!binding) return { status: 'outfit-not-selected' };
+    const result = await persistChatOutfitState(identityId, setChatOutfitLock(current, identityId, !binding.isLocked));
+    if (result.status !== 'confirmed') toastr.info('Outfit lock change is pending chat persistence.', 'Context Image Generation');
+    return result;
+}
+
+async function createChatOutfit(identityId, name, description) {
+    const settings = extension_settings[extensionName];
+    const created = createOutfit({ id: `outfit:${identityId}:${crypto.randomUUID()}`, identityId, name, description });
+    if (created.status !== 'created') {
+        toastr.warning('Enter a name and outfit details first.', 'Context Image Generation');
+        return created;
+    }
+    settings.rp_outfits = { ...migrateOutfitCatalog(settings.rp_outfits), outfits: [...migrateOutfitCatalog(settings.rp_outfits).outfits, created.outfit] };
+    await saveSettings();
+    renderContinuityShelves();
+    return created;
 }
 
 function chatCaptureIsCurrent(captured) {
@@ -2263,6 +2436,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
             appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+            renderContinuityShelf(currentMessageElement, currentMessage);
             renderVisibleCanonControls(currentMessageElement, currentMessage);
             scheduleImageArrowConfiguration({
                 schedule: (callback) => setTimeout(callback, 0),
@@ -2278,6 +2452,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                     };
                 }
                 appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
+                renderContinuityShelf(currentMessageElement, currentMessage);
                 scheduleImageArrowConfiguration({
                     schedule: (callback) => setTimeout(callback, 0),
                     reconfigure: () => configureCigImageArrows(currentMessageElement),
@@ -2556,6 +2731,85 @@ function createVisibleCanonButton(className, label, attributes = {}) {
         .addClass(`menu_button ${className}`)
         .text(label)
         .attr({ ...attributes, 'aria-label': attributes['aria-label'] || label, title: attributes.title || label });
+}
+
+function renderContinuityShelf(messageElement, messageOverride = null) {
+    messageElement?.find('.cig_continuity_shelf').remove();
+    if (!messageElement?.length) return;
+    const messageId = Number(messageElement.attr('mesid'));
+    const context = getContext();
+    const message = messageOverride || context.chat?.[messageId];
+    const identities = presentContinuityIdentities(message);
+    if (!identities.length) return;
+    const settings = extension_settings[extensionName] || {};
+    const library = migrateAppearanceLibrary(settings.rp_library);
+    const truths = continuityTruths(identities);
+    const hostReferences = resolveHostAvatarIdentityReferences({
+        identities,
+        activeCharacterAvatar: context.characters?.[context.characterId]?.avatar,
+        personaAvatar: user_avatar,
+        groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
+    });
+    const canonCapture = captureCanonForGeneration({
+        library,
+        gallery: settings.gallery || [],
+        chatState: chat_metadata[CHAT_CANON_KEY],
+        identities,
+        references: hostReferences,
+    });
+    const candidates = buildContinuityReferenceCandidates({ identities, truths, remembered: canonCapture.canonSnapshot.references, avatarReferences: hostReferences }).map((candidate) => ({
+        ...candidate,
+        ...(canonCapture.canonSnapshot.assets?.[candidate.assetId]?.url ? { thumbnail: canonCapture.canonSnapshot.assets[candidate.assetId].url } : {}),
+    }));
+    const shelf = projectContinuityShelf({
+        identities,
+        truths,
+        candidates,
+        modelLimit: getReferenceImageCapability(settings.provider || 'makersuite', settings.model)?.maxCount,
+        outfitCatalog: settings.rp_outfits,
+        outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
+    });
+    const root = $('<details class="cig_continuity_shelf"></details>')
+        .attr({ 'data-message-id': String(messageId), 'aria-label': 'Visual continuity shelf' });
+    const summary = $('<summary class="cig_continuity_shelf_summary"></summary>')
+        .text(`Continuity · ${shelf.identities.map((entry) => entry.identityLabel).join(' + ')}`)
+        .appendTo(root);
+    summary.attr('title', 'Show continuity sources and outfit controls');
+    $('<small class="cig_continuity_shelf_limit" role="status"></small>')
+        .text(shelf.modelLimit.maxReferences === null ? 'Reference limit unknown; image references are held.' : `${shelf.modelLimit.used}/${shelf.modelLimit.maxReferences} image references selected.`)
+        .appendTo(root);
+    for (const entry of shelf.identities) {
+        const row = $('<article class="cig_continuity_identity"></article>').attr('data-identity-id', entry.identityId);
+        const heading = $('<div class="cig_continuity_identity_heading"></div>').appendTo(row);
+        if (entry.thumbnail) $('<img class="cig_continuity_thumbnail" alt=""></img>').attr('src', entry.thumbnail).appendTo(heading);
+        $('<strong></strong>').text(entry.identityLabel).appendTo(heading);
+        $('<span class="cig_continuity_source"></span>').text(`Source: ${entry.sourceType}`).appendTo(heading);
+        if (entry.description) $('<details class="cig_continuity_description"><summary>Written details</summary><p></p></details>').find('p').text(entry.description).end().appendTo(row);
+        const refs = $('<small class="cig_continuity_refs"></small>');
+        if (entry.selected.length) refs.append($('<span></span>').text(`Selected: ${entry.selected.map((ref) => ref.sourceType).join(', ')}`));
+        if (entry.omitted.length) refs.append($('<span></span>').text(` Omitted: ${entry.omitted.map((ref) => `${ref.sourceType} (${ref.reason})`).join(', ')}`));
+        refs.appendTo(row);
+        const outfitLabel = $('<label class="cig_continuity_outfit_label"></label>').text('Outfit');
+        const outfitSelect = $('<select class="text_pole cig_continuity_outfit_select"></select>').attr({ 'aria-label': `Choose outfit for ${entry.identityLabel}` });
+        $('<option value="">No active outfit</option>').appendTo(outfitSelect);
+        for (const outfit of entry.outfits) $('<option></option>').attr('value', outfit.id).text(outfit.name).prop('selected', outfit.id === entry.activeOutfit?.id).appendTo(outfitSelect);
+        outfitLabel.append(outfitSelect).appendTo(row);
+        if (entry.outfits.length) {
+            $('<button type="button" class="menu_button cig_continuity_outfit_activate">Activate</button>').attr({ 'aria-label': `Activate selected outfit for ${entry.identityLabel}` }).appendTo(row);
+            if (entry.activeOutfit) $('<button type="button" class="menu_button cig_continuity_outfit_lock"></button>').text(entry.activeOutfit.isLocked ? 'Unlock outfit' : 'Lock outfit').attr({ 'aria-pressed': String(entry.activeOutfit.isLocked), 'aria-label': `${entry.activeOutfit.isLocked ? 'Unlock' : 'Lock'} outfit for ${entry.identityLabel}` }).appendTo(row);
+        }
+        $('<input type="text" class="text_pole cig_continuity_outfit_name" maxlength="80" placeholder="New outfit name">').attr('aria-label', `New outfit name for ${entry.identityLabel}`).appendTo(row);
+        $('<input type="text" class="text_pole cig_continuity_outfit_details" maxlength="240" placeholder="Outfit details">').attr('aria-label', `New outfit details for ${entry.identityLabel}`).appendTo(row);
+        $('<button type="button" class="menu_button cig_continuity_outfit_create">Create outfit</button>').attr('aria-label', `Create outfit for ${entry.identityLabel}`).appendTo(row);
+        row.appendTo(root);
+    }
+    const mediaContainer = messageElement.find('.mes_img_container, .mes_media_container').last();
+    if (mediaContainer.length) mediaContainer.after(root);
+    else messageElement.find('.mes_text').after(root);
+}
+
+function renderContinuityShelves() {
+    $('.mes').each(function () { renderContinuityShelf($(this)); });
 }
 
 function renderVisibleCanonControls(messageElement, messageOverride = null) {
@@ -3135,6 +3389,29 @@ jQuery(async () => {
         await toggleAppearanceLookLock(row.attr('data-identity-id'), row.attr('data-look-id'));
     });
 
+    $(document).on('click', '.cig_continuity_outfit_activate', async function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_continuity_identity');
+        const outfitId = row.find('.cig_continuity_outfit_select').val();
+        if (!outfitId) return;
+        try { await activateChatOutfit(row.attr('data-identity-id'), outfitId); }
+        catch (error) { showGenerationError(error, 'Activate outfit'); }
+    });
+
+    $(document).on('click', '.cig_continuity_outfit_lock', async function (e) {
+        e.stopPropagation();
+        try { await toggleChatOutfitLock($(this).closest('.cig_continuity_identity').attr('data-identity-id')); }
+        catch (error) { showGenerationError(error, 'Change outfit lock'); }
+    });
+
+    $(document).on('click', '.cig_continuity_outfit_create', async function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_continuity_identity');
+        try {
+            await createChatOutfit(row.attr('data-identity-id'), row.find('.cig_continuity_outfit_name').val(), row.find('.cig_continuity_outfit_details').val());
+        } catch (error) { showGenerationError(error, 'Create outfit'); }
+    });
+
     $(document).on('click', '.cig_visible_canon_remember', async function (e) {
         e.stopPropagation();
         try {
@@ -3187,6 +3464,7 @@ jQuery(async () => {
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
+        renderContinuityShelf(messageElement);
         scheduleImageArrowConfiguration({
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
@@ -3196,6 +3474,7 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         setTimeout(() => {
             injectAllMessageButtons();
+            renderContinuityShelves();
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
         }, 100);
@@ -3212,11 +3491,12 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        setTimeout(injectAllMessageButtons, 100);
+        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); }, 100);
     });
 
     setTimeout(() => {
         injectAllMessageButtons();
+        renderContinuityShelves();
         configureAllCigImageArrows();
     }, 500);
 

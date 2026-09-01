@@ -65,6 +65,12 @@ test('catalog maps may provide the outfit id as the map key', () => {
     assert.equal(mapped.outfits[0].id, 'outfit:casual');
 });
 
+test('chat outfit revision survives metadata reload for persistence read-back', () => {
+    const reloaded = migrateChatOutfitState({ revision: 'outfit:revision-1', identities: { 'character:ava': { activeOutfitId: 'outfit:casual', isLocked: true } } });
+    assert.equal(reloaded.revision, 'outfit:revision-1');
+    assert.deepEqual(getChatOutfitBinding(reloaded, 'character:ava'), { activeOutfitId: 'outfit:casual', isLocked: true });
+});
+
 test('canonical stable identity validation accepts character, persona, and multi-part NPC IDs with spaces', () => {
     for (const id of [
         'character:ava file.png',

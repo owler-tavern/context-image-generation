@@ -168,3 +168,19 @@ test('consumes one immutable canon snapshot and ignores the removed appearance-l
     assert.deepEqual(plan.referenceOmissions.at(-1), canonSnapshot.omissions[0]);
     assert.equal(Object.isFrozen(plan.referenceAssets), true);
 });
+
+test('captures active outfit and visible reference plan in the immutable prompt snapshot', () => {
+    const referencePlan = { modelLimit: { maxReferences: 1, used: 1, remaining: 0 }, selected: [{ id: 'look:ava' }], omitted: [] };
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'outfit-plan',
+        referencePlan,
+        activeOutfits: [{ identityId: 'character:ava', identityLabel: 'Ava', outfit: { name: 'Travel', items: ['blue coat'] } }],
+        prompt: { ...baseInput.prompt, outfitText: '[Active outfits]\nAva — Travel: blue coat.' },
+    });
+    referencePlan.selected[0].id = 'changed';
+    assert.deepEqual(plan.referencePlan, { modelLimit: { maxReferences: 1, used: 1, remaining: 0 }, selected: [{ id: 'look:ava' }], omitted: [] });
+    assert.deepEqual(plan.activeOutfits[0].outfit.items, ['blue coat']);
+    assert.equal(plan.prompt.outfitText, '[Active outfits]\nAva — Travel: blue coat.');
+    assert.equal(Object.isFrozen(plan.referencePlan), true);
+});

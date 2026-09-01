@@ -194,3 +194,21 @@ test('persona-only valid canon suppresses user-avatar materialization', async ()
     assert.deepEqual(captured.references, []);
     assert.deepEqual(assets, {});
 });
+
+test('group character references stay distinct and materialize through identity-aware avatar reads', async () => {
+    const identities = [
+        { id: 'character:ava.png', kind: 'character', label: 'Ava', hostKey: 'ava.png' },
+        { id: 'character:leo.png', kind: 'character', label: 'Leo', hostKey: 'leo.png' },
+    ];
+    const references = resolveHostAvatarIdentityReferences({ identities, activeCharacterAvatar: 'ava.png', groupCharacterAvatars: ['ava.png', 'leo.png'] });
+    assert.deepEqual(references.map(({ id, identityId }) => [id, identityId]), [
+        ['host:character', 'character:ava.png'],
+        ['host:character:character:leo.png', 'character:leo.png'],
+    ]);
+    const assets = await materializeHostAvatarReferenceAssets({
+        references,
+        getCharacterAvatar: async (identityId) => ({ data: identityId, mimeType: 'image/png' }),
+    });
+    assert.deepEqual(Object.keys(assets), ['asset:host-character', 'asset:host-character:character:leo.png']);
+    assert.equal(assets['asset:host-character:character:leo.png'].data, 'character:leo.png');
+});

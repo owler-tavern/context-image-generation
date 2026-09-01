@@ -44,3 +44,15 @@ test('runtime snapshots resolve adapter IDs through the shared route contract', 
     assert.match(snapshot, /resolveAdapterId\(legacyTransport\)/);
     assert.doesNotMatch(snapshot, /openAiImages:\s*'openai-images'/);
 });
+
+test('normal inline flow renders a continuity shelf and captures outfit/reference evidence in one immutable plan', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(source, /projectContinuityShelf/);
+    assert.match(source, /renderContinuityShelf/);
+    assert.match(source, /migrateOutfitCatalog/);
+    assert.match(source, /migrateChatOutfitState/);
+    assert.match(source, /buildOutfitPrompt/);
+    assert.match(source, /referencePlan/);
+    assert.match(source, /saveChatConditional/);
+    assert.match(source, /verifyPersistedChatOutfitState/);
+});
