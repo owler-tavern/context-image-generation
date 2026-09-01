@@ -364,3 +364,49 @@ test('mounted stylesheet ownership is shared and never removes an external pre-e
     external.destroy();
     assert.equal(styles.length, 1);
 });
+
+test('hydration readback compares the full normalized artifact, including facts and provenance', async () => {
+    const { deps } = dependencies({
+        readbackMemory: async (request) => ({ memory: { ...request.memory, artifacts: { ...request.memory.artifacts, [request.expected.addedArtifactIds[0]]: { ...request.memory.artifacts[request.expected.addedArtifactIds[0]], facts: [{ id: 'stale-fact' }], provenance: { schema: 1, source: 'stale' } } } } }),
+    });
+    const controller = createStoryMemoryController(deps);
+    const result = await controller.load({ chatId: 'chat-a', gallery: [{ id: 'full-check', url: '/images/full-check.png', chatId: 'chat-a', messageId: 11, facts: [{ id: 'accepted-fact' }], provenance: { schema: 1, source: 'expected' } }] });
+    assert.equal(result.status, 'error');
+    assert.match(result.error, /stale fields|artifact/u);
+});
+
+test('concurrent loads retain captured target chat and ignore stale completion state', async () => {
+    const saved = [];
+    const base = memory();
+    const deps = {
+        readMemory: async () => base,
+        hydrateGallery: async ({ memory: value }) => ({ memory: value }),
+        persistMemory: async (request) => { await new Promise((resolve) => setTimeout(resolve, request.chatId === 'chat-a' ? 25 : 0)); saved.push({ chatId: request.chatId, epoch: request.epoch }); },
+        readbackMemory: async () => ({ memory: base }),
+    };
+    const controller = createStoryMemoryController(deps);
+    const first = controller.load({ chatId: 'chat-a' });
+    const second = controller.load({ chatId: 'chat-b' });
+    await Promise.all([first, second]);
+    assert.deepEqual(saved.map((entry) => entry.chatId).sort(), ['chat-a', 'chat-b']);
+    assert.equal(saved.every((entry) => Number.isInteger(entry.epoch)), true);
+    assert.equal(controller.getState().chatId, 'chat-b');
+});
+
+test('mount destroy is idempotent and does not remove a style while a second owner remains', () => {
+    const { deps } = dependencies();
+    const styles = [];
+    const documentLike = {
+        getElementById(id) { return styles.find((style) => style.id === id) || null; },
+        createElement() { return { id: '', textContent: '' }; },
+        head: { appendChild(style) { styles.push(style); }, removeChild(style) { styles.splice(styles.indexOf(style), 1); } },
+    };
+    const host = () => ({ innerHTML: '', addEventListener() {}, removeEventListener() {} });
+    const first = mountStoryMemorySurface(host(), createStoryMemoryController(deps), { documentLike, installStyles: true });
+    const second = mountStoryMemorySurface(host(), createStoryMemoryController(deps), { documentLike, installStyles: true });
+    first.destroy();
+    first.destroy();
+    assert.equal(styles.length, 1);
+    second.destroy();
+    assert.equal(styles.length, 0);
+});
