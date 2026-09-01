@@ -84,8 +84,32 @@ test('runRememberAppearance returns exact chat read-back outcomes', async () => 
         const fixture = rememberFixture({ persistChat: async () => ({ status }) });
         const result = await runRememberAppearance({ captured: {}, identity: { id: 'x' }, item: { id: 'gallery:a' }, io: fixture.io });
         assert.equal(result.status, status);
-        assert.equal(result.message, status === 'confirmed-absent' ? 'Saved to the appearance library, but it was not activated in this chat.' : 'Saved look verification pending. It will be reconciled before use.');
+        assert.equal(result.message, status === 'confirmed-absent' ? 'Saved to the appearance library, but it was not activated in this chat.' : 'Activation verification pending.');
     }
+});
+
+test('deduplicated Remember never deletes an existing asset when pending persistence is confirmed absent', async () => {
+    const existingUuid = '123e4567-e89b-42d3-a456-426614174000';
+    const existing = { schema: 2, revision: 'r0', assets: { [`asset:${existingUuid}`]: { id: `asset:${existingUuid}`, kind: 'appearance', url: `/user/images/context-image-generation-appearances/cig-appearance-${existingUuid}.png`, mimeType: 'image/png', byteCount: 8 } }, identities: { x: { id: 'x', label: 'X', looks: [{ id: `look:${existingUuid}`, assetId: `asset:${existingUuid}`, source: { identityId: 'x', galleryArtifactId: 'gallery:a' } }] } }, operations: {} };
+    let uploads = 0;
+    let deletes = 0;
+    let orphanRecoveries = 0;
+    const fixture = rememberFixture({
+        readLibrary: async () => ({ status: 'confirmed', library: existing }),
+        readDataUrl: async () => { throw new Error('dedupe must not read'); },
+        saveBase64: async () => { uploads++; throw new Error('dedupe must not upload'); },
+        verifyLibrary: async () => ({ status: 'confirmed-absent' }),
+        deleteAppearanceFile: async () => { deletes++; },
+        persistOrphanCleanup: async () => { orphanRecoveries++; },
+    });
+    const result = await runRememberAppearance({ captured: {}, identity: { id: 'x' }, item: { id: 'gallery:a' }, io: fixture.io });
+    assert.equal(result.status, 'confirmed-absent');
+    assert.equal(result.message, 'The look was not saved.');
+    assert.equal(result.promoted.deduplicated, true);
+    assert.equal(uploads, 0);
+    assert.equal(deletes, 0);
+    assert.equal(orphanRecoveries, 0);
+    assert.equal(existing.assets[`asset:${existingUuid}`].id, `asset:${existingUuid}`);
 });
 
 test('runRememberAppearance treats thrown post-upload persistence as indeterminate and schedules recovery', async () => {
