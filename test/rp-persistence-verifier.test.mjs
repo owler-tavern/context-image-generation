@@ -54,6 +54,22 @@ test('thrown chat save is indeterminate, restores prior UI state, and schedules 
     assert.equal(scheduled, true);
 });
 
+test('chat rollback never writes old state into a switched chat or over a newer same-chat revision', async () => {
+    const old = { revision: 'old' };
+    const candidate = { revision: 'candidate' };
+    let current = old;
+    let targetCurrent = true;
+    const switched = persistVerifiedChatMutation({ captured: {}, isCurrent: () => targetCurrent, getState: () => current, setState: (v) => { current = v; }, nextState: candidate, saveMetadata: async () => { targetCurrent = false; }, verify: async () => ({ status: 'confirmed' }) });
+    assert.equal((await switched).status, 'stale');
+    assert.equal(current, candidate);
+    targetCurrent = true;
+    current = old;
+    const newer = { revision: 'newer' };
+    const raced = persistVerifiedChatMutation({ captured: {}, isCurrent: () => true, getState: () => current, setState: (v) => { current = v; }, nextState: candidate, getRevision: (v) => v?.revision, saveMetadata: async () => { current = newer; }, verify: async () => ({ status: 'confirmed-absent' }) });
+    assert.equal((await raced).status, 'confirmed-absent');
+    assert.equal(current, newer);
+});
+
 test('library mutations are serialized after failures', async () => {
     const events = [];
     const first = enqueueLibraryMutation(async () => { events.push('a'); throw new Error('no'); });

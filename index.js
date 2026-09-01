@@ -69,6 +69,7 @@ import {
 import { deleteAppearanceAssetFile, promoteGalleryArtifact } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
+import { reconcileAppearanceOperations } from './lib/rp/appearance-operations.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -889,6 +890,8 @@ async function loadSettings() {
         saveSettingsDebounced();
     }
 
+    await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
+
 
     $('#cig_provider').val(extension_settings[extensionName].provider);
     updateModelDropdown();
@@ -1640,11 +1643,11 @@ function chatCaptureIsCurrent(captured) {
     return getContext().chatId === captured.chatId && chatLifecycleEpoch.isCurrent(captured.epoch);
 }
 
-function scheduleChatCanonReconciliation({ operationId, captured, target, candidate }) {
+function scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint }) {
     setTimeout(() => {
         void reconcilePendingOperation(operationId, async () => {
             const verification = await verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders });
-            if (verification.status === 'confirmed' && chatCaptureIsCurrent(captured)) {
+            if (verification.status === 'confirmed' && chatCaptureIsCurrent(captured) && chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId) === expectedCurrentFingerprint) {
                 chat_metadata[CHAT_CANON_KEY] = candidate;
                 renderAppearanceList();
             }
@@ -1653,15 +1656,37 @@ function scheduleChatCanonReconciliation({ operationId, captured, target, candid
     }, 1500);
 }
 
-function scheduleLibraryPromotionReconciliation(operationId, expectedRevision) {
+async function resumePendingAppearanceOperations() {
+    const settings = extension_settings[extensionName];
+    const library = migrateAppearanceLibrary(settings?.rp_library);
+    if (!Object.keys(library.operations || {}).length) return { status: 'nothing-to-do', library };
+    const result = await reconcileAppearanceOperations({
+        library,
+        verifyRevision: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        saveLibrary: async (candidate) => { settings.rp_library = candidate; await saveSettings(); },
+        verifySaved: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        deleteFile: (url) => deleteAppearanceAssetFile(url, fetch, getRequestHeaders),
+    });
+    settings.rp_library = result.library;
+    renderAppearanceList();
+    return result;
+}
+
+async function persistOrphanCleanupRetry(libraryValue, url) {
+    const library = migrateAppearanceLibrary(libraryValue);
+    const operationId = `orphan-cleanup:${crypto.randomUUID()}`;
+    library.operations = { ...(library.operations || {}), [operationId]: { status: 'orphan-cleanup', url } };
+    library.revision = `appearance-orphan:${crypto.randomUUID()}`;
+    extension_settings[extensionName].rp_library = library;
+    await saveSettings();
+    await verifyPersistedExtensionLibrary({ expectedRevision: library.revision, fetchImpl: fetch, getHeaders: getRequestHeaders });
+    scheduleLibraryPromotionReconciliation(operationId, library.revision);
+}
+
+function scheduleLibraryPromotionReconciliation(operationId, _expectedRevision) {
     setTimeout(() => {
         void reconcilePendingOperation(operationId, async () => {
-            const verification = await verifyPersistedExtensionLibrary({ expectedRevision, fetchImpl: fetch, getHeaders: getRequestHeaders });
-            if (verification.status === 'confirmed') {
-                extension_settings[extensionName].rp_library = migrateAppearanceLibrary(verification.library);
-                renderAppearanceList();
-            }
-            return verification;
+            return resumePendingAppearanceOperations();
         });
     }, 1500);
 }
@@ -1669,6 +1694,7 @@ function scheduleLibraryPromotionReconciliation(operationId, expectedRevision) {
 async function persistChatCanonChange({ captured, candidate, identityId, activeLookId }) {
     const target = capturedChatTarget(identityId, candidate.revision, activeLookId);
     const operationId = `chat-canon:${crypto.randomUUID()}`;
+    const expectedCurrentFingerprint = chatCanonRevisionFingerprint(chat_metadata[CHAT_CANON_KEY], identityId);
     return persistVerifiedChatMutation({
         captured,
         isCurrent: chatCaptureIsCurrent,
@@ -1677,7 +1703,7 @@ async function persistChatCanonChange({ captured, candidate, identityId, activeL
         nextState: candidate,
         saveMetadata: () => getContext().saveMetadata(),
         verify: () => verifyPersistedChatBinding({ target, fetchImpl: fetch, getHeaders: getRequestHeaders }),
-        scheduleReconcile: () => scheduleChatCanonReconciliation({ operationId, captured, target, candidate }),
+        scheduleReconcile: () => scheduleChatCanonReconciliation({ operationId, captured, target, candidate, identityId, expectedCurrentFingerprint }),
     });
 }
 
@@ -1716,6 +1742,7 @@ async function rememberGalleryAppearance(index) {
         const promoted = await promoteGalleryArtifact({
             item, identityId: identity.id, library: settings.rp_library, readDataUrl,
             saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
+            isTargetCurrent: () => chatCaptureIsCurrent(captured),
         });
         if (!promoted.look || !promoted.asset) throw new Error('This Gallery image could not be remembered.');
         let activationStale = !chatCaptureIsCurrent(captured);
@@ -1732,8 +1759,14 @@ async function rememberGalleryAppearance(index) {
         activationStale ||= !chatCaptureIsCurrent(captured);
         if (libraryVerification.status !== 'confirmed') {
             if (libraryVerification.status === 'confirmed-absent') {
-                await deleteAppearanceAssetFile(promoted.asset.url, fetch, getRequestHeaders);
-                settings.rp_library = migrateAppearanceLibrary(authoritative.library);
+                let cleanupTracked = false;
+                try {
+                    await deleteAppearanceAssetFile(promoted.asset.url, fetch, getRequestHeaders);
+                } catch {
+                    await persistOrphanCleanupRetry(authoritative.library, promoted.asset.url);
+                    cleanupTracked = true;
+                }
+                if (!cleanupTracked) settings.rp_library = migrateAppearanceLibrary(authoritative.library);
                 toastr.warning('The look was not saved.', 'Context Image Generation');
                 renderAppearanceList();
                 return;

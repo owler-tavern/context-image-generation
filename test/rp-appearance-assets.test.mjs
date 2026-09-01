@@ -51,3 +51,10 @@ test('confirmed-absent cleanup deletes only the exact owned path', async () => {
     assert.deepEqual(JSON.parse(calls[0][1].body), { path: url });
     await assert.rejects(() => deleteAppearanceAssetFile('/user/images/other/a.png', async () => ({ ok: true })), /unsafe/i);
 });
+
+test('promotion revalidates after decode and aborts before upload when the chat target is stale', async () => {
+    let current = true;
+    let uploads = 0;
+    await assert.rejects(() => promoteGalleryArtifact({ item: { id: 'g', imageData: png, mimeType: 'image/png' }, identityId: 'character:ava', library: {}, uuid: () => uuid, readDataUrl: async () => { current = false; return `data:image/png;base64,${png}`; }, isTargetCurrent: () => current, saveBase64: async () => { uploads++; } }), /chat.*changed/i);
+    assert.equal(uploads, 0);
+});
