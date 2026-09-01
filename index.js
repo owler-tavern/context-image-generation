@@ -69,7 +69,7 @@ import {
 import { deleteAppearanceAssetFile, promoteGalleryArtifact } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
-import { reconcileAppearanceOperations } from './lib/rp/appearance-operations.js';
+import { reconcileAppearanceOperations, runRebasedLibraryOperation } from './lib/rp/appearance-operations.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1720,8 +1720,9 @@ async function rememberGalleryAppearance(index) {
         return;
     }
 
-    await enqueueLibraryMutation(async () => {
-        const authoritative = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
+    await runRebasedLibraryOperation({
+        readLatest: () => readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders }),
+        operation: async (authoritative) => {
         if (authoritative.status !== 'confirmed') {
             toastr.info('Saved look verification pending. Please retry after settings can be read.', 'Context Image Generation');
             return;
@@ -1822,6 +1823,7 @@ async function rememberGalleryAppearance(index) {
         }
         renderAppearanceList();
         toastr.success('Saved and active in this chat.', 'Context Image Generation');
+        },
     });
 }
 

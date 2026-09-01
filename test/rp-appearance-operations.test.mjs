@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { reconcileAppearanceOperations, runRebasedLibraryMutation } from '../lib/rp/appearance-operations.js';
+import { reconcileAppearanceOperations, runRebasedLibraryMutation, runRebasedLibraryOperation } from '../lib/rp/appearance-operations.js';
 import { materializeAppearanceAssets } from '../lib/rp/appearance-library.js';
 
 const id = '123e4567-e89b-42d3-a456-426614174000';
@@ -29,4 +29,10 @@ test('production rebase seam serializes Remember Remember, Remember Delete, and 
     const run = (name) => runRebasedLibraryMutation({ readLatest: async () => structuredClone(server), mutate: async (latest) => ({ ...latest, events: [...latest.events, name], revision: latest.revision + 1 }), saveLibrary: async (next) => { server = next; }, verifySaved: async () => ({ status: 'confirmed' }) });
     await Promise.all([run('remember-1'), run('remember-2'), run('delete'), run('migration'), run('remember-3')]);
     assert.deepEqual(server.events, ['remember-1', 'remember-2', 'delete', 'migration', 'remember-3']);
+});
+
+test('shared production operation seam passes each queued action the latest library', async () => {
+    let revision = 0;
+    const run = (name) => runRebasedLibraryOperation({ readLatest: async () => ({ revision }), operation: async (latest) => { assert.equal(latest.revision, revision); revision++; return name; } });
+    assert.deepEqual(await Promise.all([run('remember'), run('delete'), run('migration')]), ['remember', 'delete', 'migration']);
 });
