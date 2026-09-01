@@ -14,8 +14,27 @@ test('Visual Story adds one visible chat entry beside Direct this scene and open
     assert.match(index, /Visual Story/);
     assert.match(index, /revealVisualStorySurface/);
     assert.match(index, /data-cig-visual-story-action/);
-    assert.match(index, /eventSource\.on\(event_types\.CHAT_CHANGED[\s\S]*renderVisualStoryOverview\(\)/);
-    assert.match(index, /eventSource\.on\(event_types\.CHAT_CREATED[\s\S]*renderVisualStoryOverview\(\)/);
+    assert.match(index, /eventSource\.on\(event_types\.CHAT_CHANGED[\s\S]*refreshStoryMemorySurface\(\);[\s\S]*refreshCinematicSurface\(\)/);
+    assert.match(index, /eventSource\.on\(event_types\.CHAT_CREATED[\s\S]*refreshStoryMemorySurface\(\);[\s\S]*refreshCinematicSurface\(\)/);
+});
+
+test('Visual Story message injection is idempotent across repeated render hooks', () => {
+    const injection = index.slice(index.indexOf('function injectMessageButton'), index.indexOf('function visibleCanonMessageSender'));
+    assert.match(injection, /messageElement\.find\('\.cig_message_director'\)\.remove\(\)/);
+    assert.match(injection, /messageElement\.find\('\.cig_message_visual_story'\)\.remove\(\)/);
+    assert.match(injection, /directorButton\.after\(visualStoryButton\)/);
+});
+
+test('Visual Story never presents a previous chat timeline while the current chat is loading', () => {
+    const html = renderVisualStorySurface({
+        currentChatId: 'chat-b',
+        memoryState: { chatId: 'chat-a', status: 'ready', timeline: [{ id: 'private-a-moment' }] },
+        appearanceSummary: 'Appearance is ready.',
+    });
+    assert.match(html, /Loading story memory for this chat/);
+    assert.doesNotMatch(html, /1 generated moment is ready/);
+    const changed = index.slice(index.indexOf('eventSource.on(event_types.CHAT_CHANGED'), index.indexOf('eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED'));
+    assert.ok(changed.indexOf('refreshStoryMemorySurface();') < changed.indexOf('refreshCinematicSurface();'));
 });
 
 test('Visual Story surface explains empty Story Memory, continuity readiness, and cinematic On or Off state', () => {
@@ -68,4 +87,31 @@ test('Visual Story renders an honest empty state and focuses the surface after o
     assert.equal(calls.scroll, 1);
     assert.equal(calls.focus, 1);
     assert.equal(focusVisualStorySurface({ documentLike }).status, 'focused');
+});
+
+test('Visual Story retries heading focus after host tab activation mounts the surface', async () => {
+    let ready = false;
+    let focusCount = 0;
+    const heading = { setAttribute() {}, focus() { focusCount += 1; documentLike.activeElement = heading; } };
+    const surface = { scrollIntoView() {}, querySelector() { return heading; } };
+    const host = { hidden: false, style: { display: 'block' } };
+    const extensionContent = { style: { display: 'block' } };
+    const extension = { querySelector(selector) { return selector === '.inline-drawer-content' ? extensionContent : null; } };
+    const documentLike = {
+        querySelector(selector) {
+            if (selector === '#rm_extensions_block') return host;
+            if (selector === '#cig_settings') return extension;
+            if (selector === '#cig_visual_story_surface') return ready ? surface : null;
+            return null;
+        },
+        activeElement: null,
+        defaultView: { getComputedStyle: (element) => element.style },
+    };
+    const result = revealVisualStorySurface({
+        documentLike,
+        activateTab: () => setTimeout(() => { ready = true; }, 10),
+    });
+    assert.equal(result.status, 'pending');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(focusCount, 1);
 });

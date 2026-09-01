@@ -953,6 +953,7 @@ function renderVisualStoryOverview() {
     const cinematic = cinematicRuntimeSettings();
     host.innerHTML = renderVisualStorySurface({
         memoryState: storyMemoryController?.getState?.() || {},
+        currentChatId: getContext().chatId,
         appearanceSummary: visualStoryAppearanceSummary(),
         cinematicEnabled: cinematic.enabled === true && cinematic.mode !== 'off',
     });
@@ -3790,6 +3791,7 @@ function injectMessageButton(messageId) {
     const message = getContext().chat?.[Number(messageId)];
     if (!message || message.is_system) return;
     messageElement.find('.cig_message_director').remove();
+    messageElement.find('.cig_message_visual_story').remove();
     const directorButton = $('<button type="button" class="menu_button cig_message_director cig_message_director_inline">Direct this scene</button>')
         .attr({ title: 'Direct this scene', 'aria-label': 'Direct this scene' });
     const visualStoryButton = $('<button type="button" class="menu_button cig_message_visual_story cig_message_visual_story_inline">Visual Story</button>')
@@ -4615,7 +4617,7 @@ jQuery(async () => {
         e.preventDefault();
         e.stopPropagation();
         const result = revealVisualStorySurface();
-        if (result?.status !== 'revealed') toastr.info('Visual Story is not available until the extension settings are mounted.', 'Visual Story');
+        if (result?.status !== 'revealed' && result?.status !== 'pending') toastr.info('Visual Story is not available until the extension settings are mounted.', 'Visual Story');
     });
 
     $(document).on('keydown', '.cig_message_visual_story', function (e) {
@@ -4781,12 +4783,11 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CHANGED, () => {
         directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        refreshStoryMemorySurface();
         refreshCinematicSurface();
-        renderVisualStoryOverview();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         renderDirectorSurface();
         destroyIterationSurfaceMounts();
-        refreshStoryMemorySurface();
         setTimeout(() => {
             injectAllMessageButtons();
             renderContinuityShelves();
@@ -4812,12 +4813,11 @@ jQuery(async () => {
     eventSource.on(event_types.CHAT_CREATED, () => {
         directorFocusCapture = null;
         cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
+        refreshStoryMemorySurface();
         refreshCinematicSurface();
-        renderVisualStoryOverview();
         directorRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
         renderDirectorSurface();
         destroyIterationSurfaceMounts();
-        refreshStoryMemorySurface();
         setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); renderIterationActionSurface($(this)); }); }, 100);
     });
 
