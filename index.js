@@ -59,18 +59,18 @@ import {
     materializeAppearanceAssets,
     migrateAppearanceLibrary,
     listVisibleAppearanceEntries,
-    applyAppearanceLookRemoval,
     applyGalleryClear,
     applyGalleryImageDeletion,
     getProtectedGalleryArtifactIds,
     trimGalleryToLimit,
-    setVisibleAppearanceLook,
+    planGlobalLookDeletion,
 } from './lib/rp/appearance-library.js';
-import { deleteAppearanceAssetFile } from './lib/rp/appearance-assets.js';
+import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
 import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
+import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1853,11 +1853,17 @@ function renderAppearanceList() {
                 .text(lockLabel)
                 .attr({ 'aria-pressed': binding?.isLocked ? 'true' : 'false', 'aria-label': lockLabel })
                 .appendTo(row);
+            if (binding) {
+                $('<button type="button" class="menu_button cig_appearance_stop">')
+                    .text('Stop using in this chat')
+                    .attr({ title: `Stop using ${look.label} in this chat`, 'aria-label': `Stop using ${look.label} in this chat` })
+                    .appendTo(row);
+            }
         }
-        const removeLabel = `Remove ${look.label} for ${identity.label}`;
-        $('<button type="button" class="menu_button cig_appearance_remove" title="Remove saved appearance" aria-label="Remove saved appearance">')
-            .text('Remove')
-            .attr({ title: removeLabel, 'aria-label': removeLabel })
+        const deleteLabel = `Delete ${look.label} everywhere for ${identity.label}`;
+        $('<button type="button" class="menu_button cig_appearance_delete_everywhere">')
+            .text('Delete saved look everywhere…')
+            .attr({ title: deleteLabel, 'aria-label': deleteLabel })
             .appendTo(row);
         row.prepend(text);
         list.append(row);
@@ -2297,11 +2303,7 @@ function injectAllMessageButtons() {
 
 async function clearGallery() {
     const settings = extension_settings[extensionName];
-    const protectedIds = getProtectedGalleryArtifactIds(settings.rp_library);
-    const warning = protectedIds.size > 0
-        ? 'Clear every gallery image? This will also remove saved appearances that use gallery images. This cannot be undone.'
-        : 'Clear every gallery image? This cannot be undone.';
-    if (!await confirmDestructiveAction(warning, 'Clear Gallery')) return;
+    if (!await confirmDestructiveAction('Clear Gallery history? Remembered appearances will remain saved.', 'Clear Gallery')) return;
     const result = applyGalleryClear({ gallery: settings.gallery, library: settings.rp_library, confirmed: true });
     settings.gallery = result.gallery;
     const persisted = await persistAppearanceLibraryMutation((latest) => applyGalleryClear({ gallery: settings.gallery, library: latest, confirmed: true }).library);
@@ -2618,27 +2620,50 @@ jQuery(async () => {
         await deleteGalleryImage(index);
     });
 
-    $(document).on('click', '.cig_appearance_remove', async function (e) {
+    $(document).on('click', '.cig_appearance_stop', async function (e) {
+        e.stopPropagation();
+        const row = $(this).closest('.cig_appearance_item');
+        const identityId = row.attr('data-identity-id');
+        const canon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
+        const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
+        const result = await runStopUsingInChat({
+            captured, identityId, canon,
+            io: {
+                isCurrent: chatCaptureIsCurrent,
+                persistChat: ({ candidate }) => persistChatCanonChange({ captured, candidate, identityId, activeLookId: null }),
+                uuid: () => crypto.randomUUID(),
+            },
+        });
+        if (result.status === 'confirmed') { renderAppearanceList(); toastr.success(result.message, 'Context Image Generation'); }
+        else toastr.info(result.message, 'Context Image Generation');
+    });
+
+    $(document).on('click', '.cig_appearance_delete_everywhere', async function (e) {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         const settings = extension_settings[extensionName];
-        const currentChatId = getContext().chatId;
-        const pending = applyAppearanceLookRemoval({
-            library: settings.rp_library,
-            identityId: row.data('identity-id'),
-            lookId: row.data('look-id'),
-            currentChatId,
-            confirmed: false,
-        });
-        if (pending.decision !== 'cancelled' || !await confirmDestructiveAction('Remove this saved appearance? This cannot be undone.', 'Remove appearance')) return;
         const identityId = row.data('identity-id');
         const lookId = row.data('look-id');
-        const persisted = await persistAppearanceLibraryMutation((latest) => {
-            const confirmed = applyAppearanceLookRemoval({ library: latest, identityId, lookId, currentChatId, confirmed: true });
-            return confirmed.decision === 'removed' ? confirmed.library : latest;
-        });
-        if (persisted.status !== 'confirmed') { toastr.info('Appearance removal verification pending.', 'Context Image Generation'); return; }
-        renderAppearanceList();
+        const plan = planGlobalLookDeletion(settings.rp_library, lookId);
+        if (plan.decision === 'not-found') return;
+        const warning = 'Delete this saved look everywhere? Other chats may use it. Affected chats will fall back to their avatar or description. This cannot be undone.';
+        if (!await confirmDestructiveAction(warning, 'Delete saved look everywhere')) return;
+        const operationId = `deletion:${crypto.randomUUID()}`;
+        const result = await runGlobalLookDeletion({ lookId, operationId, io: {
+            runExclusive: (operation) => enqueueLibraryMutation(operation),
+            readLibrary: async () => readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            saveLibrary: async (library) => { settings.rp_library = library; await saveSettings(); },
+            verifyLibrary: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            setLocalLibrary: (library) => { settings.rp_library = library; renderAppearanceList(); },
+            deleteFile: (url) => deleteAppearanceFile({ url, fetchImpl: fetch, getHeaders: getRequestHeaders }),
+            uuid: () => crypto.randomUUID(),
+        } });
+        if (result.status === 'confirmed') {
+            renderAppearanceList();
+            toastr.success(plan.sharedReferenceCount ? `Saved look deleted. ${plan.sharedReferenceCount} other saved look still uses the same file.` : result.message, 'Context Image Generation');
+        } else {
+            toastr.info(result.message || 'Saved look deletion will retry.', 'Context Image Generation');
+        }
     });
 
     $(document).on('click', '.cig_appearance_use', async function (e) {

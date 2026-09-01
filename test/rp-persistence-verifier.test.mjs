@@ -20,6 +20,11 @@ test('chat verification checks the captured target binding and revision', async 
     assert.equal(result.status, 'confirmed');
 });
 
+test('chat verification confirms an explicit Stop when the captured binding is absent', async () => {
+    const result = await verifyPersistedChatBinding({ target: { chatId: 'a', identityId: 'character:ava', expectedRevision: 'r2', activeLookId: null }, fetchImpl: async () => ({ ok: true, json: async () => ({ chat_metadata: { contextImageGeneration: { revision: 'r2', bindings: {} } } }) }) });
+    assert.equal(result.status, 'confirmed');
+});
+
 test('chat verifier understands real single and group JSONL responses and exact request bodies', async () => {
     const calls = [];
     const fetchImpl = async (url, options) => { calls.push([url, JSON.parse(options.body)]); return { ok: true, json: async () => [{ chat_metadata: { contextImageGeneration: { revision: 'r', bindings: { who: { activeLookId: 'look' } } } } }] }; };

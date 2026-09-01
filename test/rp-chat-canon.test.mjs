@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint } from '../lib/rp/chat-canon.js';
+import { migrateChatCanon, setChatBinding, setChatLock, getChatBinding, selectLookForChat, chatCanonRevisionFingerprint, clearChatBinding } from '../lib/rp/chat-canon.js';
 
 test('chat canon contains only schema and bindings', () => {
     const state = migrateChatCanon({ bindings: {} });
@@ -16,6 +16,15 @@ test('binding and lock transitions are immutable and unlock preserves the select
     assert.equal(getChatBinding(unlocked, 'character:ava').activeLookId, 'look:one');
     assert.equal(getChatBinding(unlocked, 'character:ava').isLocked, false);
     assert.deepEqual(unlocked.harmless, { note: 'preserve' });
+});
+
+test('Stop using in this chat clears only the selected binding without mutating input', () => {
+    const original = setChatBinding(setChatBinding({}, 'character:ava', { activeLookId: 'look:ava', expectedAssetId: 'asset:ava', isLocked: true, selectedAt: 1 }), 'user:sam', { activeLookId: 'look:sam', expectedAssetId: 'asset:sam', isLocked: false, selectedAt: 2 });
+    const before = structuredClone(original);
+    const stopped = clearChatBinding(original, 'character:ava');
+    assert.equal(getChatBinding(stopped, 'character:ava'), null);
+    assert.deepEqual(getChatBinding(stopped, 'user:sam'), before.bindings['user:sam']);
+    assert.deepEqual(original, before);
 });
 
 test('future schemas are read-only and unsafe or oversized unknown fields are discarded', () => {

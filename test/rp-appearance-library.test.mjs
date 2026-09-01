@@ -14,7 +14,55 @@ import {
     setVisibleAppearanceLook,
     trimGalleryToLimit,
     setActiveAppearanceLook,
+    addPromotedAppearanceLook,
+    planGlobalLookDeletion,
+    stageGlobalLookDeletion,
+    stageLegacyArtifactMigration,
+    finalizeLegacyArtifactMigration,
 } from '../lib/rp/appearance-library.js';
+
+test('clearing Gallery preserves promoted saved looks and independently materializable assets', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const library = addPromotedAppearanceLook({}, {
+        identity: { id: 'character:ava', kind: 'character', label: 'Ava' },
+        asset: { id: `asset:${id}`, kind: 'appearance', url: `/user/images/context-image-generation-appearances/cig-appearance-${id}.png`, mimeType: 'image/png', byteCount: 8 },
+        look: { id: `look:${id}`, assetId: `asset:${id}`, label: 'Canon' },
+    }).library;
+    const before = structuredClone(library);
+    const result = applyGalleryClear({ gallery: [{ id: 'g' }], library, confirmed: true });
+    assert.deepEqual(result.gallery, []);
+    assert.deepEqual(result.library, before);
+    assert.ok(materializeAppearanceAssets(result.library, []).assets[`asset:${id}`]);
+});
+
+test('global deletion stages a tombstone while retaining records and reports shared references', () => {
+    const id = '11111111-1111-4111-8111-111111111111';
+    const library = migrateAppearanceLibrary({ schema: 2, identities: { 'character:ava': { id: 'character:ava', looks: [{ id: 'look:one', assetId: 'asset:one' }, { id: 'look:two', assetId: 'asset:one' }] } }, assets: { 'asset:one': { id: 'asset:one', kind: 'appearance', url: `/user/images/context-image-generation-appearances/cig-appearance-${id}.png` } } });
+    const planned = planGlobalLookDeletion(library, 'look:one');
+    assert.equal(planned.sharedReferenceCount, 1);
+    assert.equal(planned.fileToDelete, null);
+    const staged = stageGlobalLookDeletion(library, 'look:one', 'delete:one');
+    assert.equal(staged.libraryWithTombstone.operations['delete:one'].status, 'deleting');
+    assert.equal(staged.libraryWithTombstone.identities['character:ava'].looks.length, 2);
+    assert.ok(materializeAppearanceAssets(staged.libraryWithTombstone, []).assets['asset:one'], 'a shared file remains usable by the other look');
+});
+
+test('legacy migration groups every look sharing one Gallery artifact into one deterministic operation', () => {
+    const source = { schema: 1, identities: {
+        'character:ava': { id: 'character:ava', looks: [{ id: 'look:old-a', assetId: 'asset:gallery:one' }] },
+        'user:sam': { id: 'user:sam', looks: [{ id: 'look:old-b', assetId: 'asset:gallery:one' }] },
+    }, assets: { 'asset:gallery:one': { id: 'asset:gallery:one', kind: 'gallery', source: { galleryId: 'gallery:one' } } } };
+    const targetAssetId = 'asset:11111111-1111-4111-8111-111111111111';
+    const targetUrl = '/user/images/context-image-generation-appearances/cig-appearance-11111111-1111-4111-8111-111111111111.png';
+    const staged = stageLegacyArtifactMigration(source, { operationId: 'migration:gallery:one', galleryArtifactId: 'gallery:one', targetAssetId, targetUrl });
+    assert.deepEqual(staged.library.operations['migration:gallery:one'].mappings.map((item) => item.lookId).sort(), ['look:old-a', 'look:old-b']);
+    assert.ok(staged.library.assets['asset:gallery:one']);
+    const promoted = finalizeLegacyArtifactMigration(staged.library, 'migration:gallery:one', { mimeType: 'image/png', byteCount: 8 });
+    assert.equal(promoted.identities['character:ava'].looks[0].assetId, targetAssetId);
+    assert.equal(promoted.identities['user:sam'].looks[0].assetId, targetAssetId);
+    assert.equal(promoted.assets['asset:gallery:one'], undefined);
+    assert.equal(promoted.operations['migration:gallery:one'], undefined);
+});
 
 test('schema 2 stores promoted appearance assets and looks without changing the frozen global default', async () => {
     const module = await import('../lib/rp/appearance-library.js');
@@ -79,7 +127,7 @@ test('adding a gallery look creates a stable identity record and deduplicates th
     assert.equal('imageData' in second.library.assets['asset:gallery:one'], false);
 });
 
-test('confirmed gallery clear removes every image and its dependent appearance records', () => {
+test('confirmed Gallery clear removes history without silently deleting legacy saved-look records', () => {
     const saved = addAppearanceLook({}, {
         identity: { id: 'character:ava.png', kind: 'character', label: 'Ava' },
         galleryItem,
@@ -90,8 +138,9 @@ test('confirmed gallery clear removes every image and its dependent appearance r
 
     const cleared = applyGalleryClear({ gallery: [galleryItem], library: saved, confirmed: true });
     assert.deepEqual(cleared.gallery, []);
-    assert.deepEqual(cleared.library.identities['character:ava.png'].looks, []);
-    assert.deepEqual(cleared.library.assets, {});
+    assert.equal(cleared.library.identities['character:ava.png'].looks.length, 1);
+    assert.ok(cleared.library.assets['asset:gallery:one']);
+    assert.deepEqual(materializeAppearanceAssets(cleared.library, []).unavailable, ['asset:gallery:one']);
 });
 
 test('only the current chat can view or act on chat-local NPC appearances', () => {

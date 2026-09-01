@@ -7,6 +7,14 @@ test('appearance settings explain durable per-chat memory and lock controls', as
     assert.match(html, /current chat/i);
     assert.match(html, /lock/i);
 });
+
+test('appearance memory exposes distinct local stop and explicit global deletion actions', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(source, /Stop using in this chat/);
+    assert.match(source, /Delete saved look everywhere…/);
+    assert.match(source, /Delete this saved look everywhere\? Other chats may use it\. Affected chats will fall back to their avatar or description\. This cannot be undone\./);
+    assert.doesNotMatch(source, />Remove</);
+});
 import { readFile } from 'node:fs/promises';
 import { getCustomCatalogRefreshMessage, projectCustomConnectionEditor, projectRouteDiagnostics, projectProviderOptions } from '../lib/providers/ui-projection.js';
 import { connectionRevision } from '../lib/providers/custom-connections.js';

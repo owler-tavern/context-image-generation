@@ -93,7 +93,8 @@ test('gallery preview and appearance actions are semantic and identify their out
     assert.match(index, /aria-label="View generated image"/);
     assert.match(index, /on\('click', '\.cig_gallery_preview'/);
     assert.match(index, /Use \$\{look\.label\} for \$\{identity\.label\}/);
-    assert.match(index, /Remove \$\{look\.label\} for \$\{identity\.label\}/);
+    assert.match(index, /Stop using \$\{look\.label\} in this chat/);
+    assert.match(index, /Delete \$\{look\.label\} everywhere for \$\{identity\.label\}/);
 });
 
 test('reference capability feedback preserves saved preferences and clears when support returns', () => {

@@ -1,9 +1,21 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { promoteGalleryArtifact, validateAppearanceAssetUrl, deleteAppearanceAssetFile } from '../lib/rp/appearance-assets.js';
+import { promoteGalleryArtifact, validateAppearanceAssetUrl, deleteAppearanceAssetFile, deleteAppearanceFile } from '../lib/rp/appearance-assets.js';
 
 const uuid = '123e4567-e89b-42d3-a456-426614174000';
 const png = 'iVBORw0KGgo=';
+
+test('physical deletion reports a recorded 404 as already deleted and rejects unsafe paths before fetch', async () => {
+    const calls = [];
+    const result = await deleteAppearanceFile({
+        url: `/user/images/context-image-generation-appearances/cig-appearance-${uuid}.png`,
+        fetchImpl: async (...args) => { calls.push(args); return { ok: false, status: 404 }; },
+        getHeaders: () => ({ 'X-Test': 'yes' }),
+    });
+    assert.deepEqual(result, { deleted: true, reason: 'already-absent' });
+    assert.equal(calls[0][0], '/api/images/delete');
+    await assert.rejects(() => deleteAppearanceFile({ url: '/user/images/other/file.png', fetchImpl: async () => { throw new Error('must not fetch'); } }), /unsafe/i);
+});
 
 test('promotion creates a distinct owned appearance file and UUID records', async () => {
     const saves = [];
