@@ -130,3 +130,21 @@ test('aligned shelf projection exposes exactly the references sent by the immuta
         ['character:leo', ['host:leo'], []],
     ]);
 });
+
+test('description-disabled projection does not show unsent written fallback', () => {
+    const identity = { id: 'character:ava', kind: 'character', label: 'Ava' };
+    const truth = buildAppearanceTruths({ identities: [identity], sources: { 'character:ava': { description: 'Ava written details.' } } });
+    const shelf = projectContinuityShelf({ identities: [identity], truths: truth, candidates: [], modelLimit: 1, includeDescriptions: false, includeAvatars: false });
+    assert.equal(shelf.identities[0].sourceType, 'none');
+    assert.equal(shelf.identities[0].description, null);
+    assert.equal(shelf.identities[0].thumbnail, null);
+});
+
+test('missing selected visual is shown as unavailable rather than a falsely active avatar', () => {
+    const identity = { id: 'character:ava', kind: 'character', label: 'Ava' };
+    const truth = buildAppearanceTruths({ identities: [identity], sources: { 'character:ava': { avatar: { url: '/ava.png', characterId: 'character:ava' }, description: 'Ava details.' } } });
+    const shelf = projectContinuityShelf({ identities: [identity], truths: truth, candidates: [{ id: 'look:ava', identityId: identity.id, sourceType: 'remembered', role: 'identity-look', assetId: 'asset:missing' }], modelLimit: 1 });
+    const aligned = alignContinuityReferencePlan(shelf, { selected: [], omitted: [{ candidate: { id: 'look:ava', identityId: identity.id, role: 'identity-look', assetId: 'asset:missing' }, reason: 'asset-unavailable' }] });
+    assert.equal(aligned.identities[0].sourceType, 'unavailable');
+    assert.equal(aligned.identities[0].thumbnail, null);
+});

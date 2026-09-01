@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGenerationPlan } from '../lib/generation-plan.js';
+import { buildReferenceMessageParts } from '../lib/rp/reference-message-parts.js';
 
 const baseInput = {
     id: 'plan-1',
@@ -183,4 +184,21 @@ test('captures active outfit and visible reference plan in the immutable prompt 
     assert.deepEqual(plan.activeOutfits[0].outfit.items, ['blue coat']);
     assert.equal(plan.prompt.outfitText, '[Active outfits]\nAva — Travel: blue coat.');
     assert.equal(Object.isFrozen(plan.referencePlan), true);
+});
+
+test('final available reference set excludes a missing canon asset from plan and message parts', () => {
+    const missing = { id: 'look:missing', role: 'identity-look', identityId: 'character:ava.png', assetId: 'asset:missing', label: 'Ava' };
+    const plan = createGenerationPlan({
+        ...baseInput,
+        id: 'missing-canon-asset',
+        references: [],
+        availableReferenceIds: [],
+        canonSnapshot: { references: [missing], assets: {}, omissions: [], continuityRevision: 'canon-v1-missing' },
+        referenceOmissions: [{ id: missing.id, reason: 'asset-unavailable' }],
+        referencePlan: { modelLimit: { maxReferences: 1, used: 1, remaining: 0 }, identities: [{ identityId: missing.identityId, identityLabel: 'Ava', sourceType: 'remembered', selected: [missing], omitted: [], description: null }], selected: [missing], omitted: [] },
+    });
+    assert.deepEqual(plan.references, []);
+    assert.equal(plan.referencePlan.selected.length, 0);
+    assert.deepEqual(plan.referencePlan.omitted.map((entry) => [entry.id, entry.reason]), [['look:missing', 'asset-unavailable']]);
+    assert.deepEqual(buildReferenceMessageParts(plan, {}).filter((part) => part.type === 'image_url'), []);
 });

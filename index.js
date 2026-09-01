@@ -1317,6 +1317,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         modelLimit: capability?.maxCount,
         outfitCatalog: settingsSnapshot.rp_outfits,
         outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
+        includeDescriptions: settingsSnapshot.include_descriptions === true,
+        includeAvatars: settingsSnapshot.use_avatars === true,
     });
     const activeOutfits = continuityReferencePlan.identities
         .filter((entry) => entry.activeOutfit)
@@ -1418,12 +1420,16 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
         notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         const assets = await materializeSnapshotAssets(snapshot);
-        const capturedBaseReferences = snapshot.planInput.references || [];
+        const capturedBaseReferences = [
+            ...(snapshot.planInput.references || []),
+            ...(snapshot.planInput.canonSnapshot?.references || []),
+        ].filter((reference, index, all) => all.findIndex((candidate) => candidate.id === reference.id) === index);
         const availableReferences = capturedBaseReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
         const missingReferenceOmissions = capturedBaseReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
-        const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions });
+        const availableReferenceIds = availableReferences.map((reference) => reference.id);
+        const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
-        const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions, messages });
+        const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions, messages });
         const continuitySurface = cloneSnapshot({
             schema: 1,
             invocation,
