@@ -196,6 +196,15 @@ test('incomplete dispatcher receipts fail closed without phantom artifacts or pe
     assert.equal(calls.persist.length, 0);
 });
 
+test('a non-terminal dispatched receipt is rejected even when identities match', async () => {
+    const { deps, calls } = dependencies({ dispatchCoordinator: async (plan) => ({ status: 'dispatched', planId: plan.planId, invocationId: plan.invocationId, outputCount: 1, artifacts: plan.artifacts }) });
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe' });
+    const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    assert.equal(result.status, 'error');
+    assert.equal(calls.persist.length, 0);
+});
+
 test('repaired prompt is shown for confirmation and cannot dispatch before confirmation', async () => {
     const { deps, calls } = dependencies();
     const controller = createIterationSurfaceController(deps);
@@ -230,6 +239,41 @@ test('input and change events feed prompt repair through the mount seam', () => 
     assert.equal(controller.getState().status, 'draft-review');
     assert.equal(host.innerHTML, initialMarkup, 'draft updates must not replace the host markup');
     mounted.destroy();
+});
+
+test('repaired preview is targeted and restores focused prompt selection', () => {
+    const { deps } = dependencies();
+    const controller = createIterationSurfaceController(deps);
+    const listeners = new Map();
+    const prompt = { name: 'prompt', value: 'Ava (waits', selectionStart: 5, selectionEnd: 5, setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; } };
+    const repairRegion = { innerHTML: '' };
+    const status = { textContent: '' };
+    const host = {
+        innerHTML: '',
+        addEventListener(type, listener) { listeners.set(type, listener); },
+        removeEventListener() {},
+        querySelector(selector) { return selector === '[name="prompt"]' ? prompt : selector === '[data-repair-region]' ? repairRegion : selector === '.cig-rp-status' ? status : null; },
+        contains(node) { return node === prompt; },
+        ownerDocument: { get activeElement() { return prompt; } },
+    };
+    mountIterationSurface(host, controller);
+    listeners.get('input')({ target: prompt });
+    assert.match(repairRegion.innerHTML, /Confirm repaired prompt/u);
+    assert.equal(prompt.selectionStart, 5);
+    assert.equal(prompt.selectionEnd, 5);
+    assert.match(status.textContent, /Review the repaired prompt/u);
+});
+
+test('discard exceptions preserve chosen/original state and expose cleanup reconciliation', async () => {
+    const { deps } = dependencies({ discardArtifact: async () => { throw new Error('delete transport unavailable'); } });
+    const controller = createIterationSurfaceController(deps);
+    const quote = await controller.quote({ action: 'reuse-recipe', twoUp: true });
+    await controller.submit({ action: 'reuse-recipe', twoUp: true, consent: { approved: true, outputCount: 2, quoteId: quote.quoteId, amount: quote.amount, currency: quote.currency, expiresAt: quote.expiresAt } });
+    const chosenId = controller.getState().artifacts[1].artifactId;
+    const result = await controller.chooseArtifact(chosenId);
+    assert.equal(result.status, 'cleanup-pending');
+    assert.equal(result.chosenArtifactId, chosenId);
+    assert.match(result.reconciliation.reason, /delete transport unavailable/u);
 });
 
 test('missing authoritative dependencies fail closed without dispatch', async () => {
