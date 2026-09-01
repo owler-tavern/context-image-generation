@@ -126,24 +126,12 @@ test('zero-capability routes receive no references and retain provider-agnostic 
     assert.equal(plan.policy.idempotencyKey, 'manual:plan-1');
 });
 
-test('saved appearance references enter the plan only for a positively capped reference route', () => {
-    const appearanceLibrary = {
-        identities: {
-            'character:ava.png': {
-                id: 'character:ava.png',
-                kind: 'character',
-                label: 'Ava',
-                looks: [{ id: 'look:gallery:ava', assetId: 'asset:gallery:ava', label: 'Window look' }],
-            },
-        },
-        assets: { 'asset:gallery:ava': { id: 'asset:gallery:ava', source: { galleryId: 'gallery:ava' } } },
-    };
-    const gallery = [{ id: 'gallery:ava', url: '/images/ava.png' }];
+test('saved canon references enter the plan only for a positively capped reference route', () => {
+    const canonSnapshot = { references: [{ id: 'look:gallery:ava', role: 'identity-look', identityId: 'character:ava.png', assetId: 'asset:gallery:ava' }], assets: {}, omissions: [], continuityRevision: 'canon-v1-a' };
     const capped = createGenerationPlan({
         ...baseInput,
         references: [],
-        appearanceLibrary,
-        gallery,
+        canonSnapshot,
         provider: { ...baseInput.provider, capabilities: { referenceImages: { maxCount: 1 } } },
     });
     assert.deepEqual(capped.references.map((reference) => reference.id), ['look:gallery:ava']);
@@ -151,9 +139,32 @@ test('saved appearance references enter the plan only for a positively capped re
     const unknown = createGenerationPlan({
         ...baseInput,
         references: [],
-        appearanceLibrary,
-        gallery,
+        canonSnapshot,
         provider: { ...baseInput.provider, capabilities: { referenceImages: {} } },
     });
     assert.deepEqual(unknown.references, []);
+});
+
+test('consumes one immutable canon snapshot and ignores the removed appearance-library path', () => {
+    const canonSnapshot = {
+        references: [{ id: 'look:chat', role: 'identity-look', identityId: 'character:ava.png', assetId: 'asset:chat' }],
+        assets: { 'asset:chat': { id: 'asset:chat', url: '/canon/chat.png', mimeType: 'image/png' } },
+        omissions: [{ identityId: 'character:broken', lookId: 'look:missing', assetId: 'asset:missing', reason: 'missing-look' }],
+        continuityRevision: 'canon-v1-chat',
+    };
+    const plan = createGenerationPlan({
+        ...baseInput,
+        references: [{ id: 'avatar:ava', role: 'host-avatar', identityId: 'character:ava.png', assetId: 'asset:avatar' }],
+        canonSnapshot,
+        appearanceLibrary: {
+            identities: { old: { id: 'old', activeLookId: 'look:wrong', looks: [{ id: 'look:wrong', assetId: 'asset:wrong' }] } },
+            assets: { 'asset:wrong': { id: 'asset:wrong', url: '/wrong.png' } },
+        },
+    });
+    canonSnapshot.references[0].id = 'mutated';
+    assert.deepEqual(plan.references.map((item) => item.id), ['look:chat', 'avatar:ava']);
+    assert.equal(plan.continuityRevision, 'canon-v1-chat');
+    assert.equal(plan.referenceAssets['asset:chat'].url, '/canon/chat.png');
+    assert.deepEqual(plan.referenceOmissions.at(-1), canonSnapshot.omissions[0]);
+    assert.equal(Object.isFrozen(plan.referenceAssets), true);
 });

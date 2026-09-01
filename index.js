@@ -49,6 +49,7 @@ import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, pr
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { materializeReferences } from './lib/rp/references.js';
+import { captureCanonForGeneration, notifyBrokenCanon } from './lib/rp/canon-generation-capture.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
     addAppearanceLook,
@@ -1249,8 +1250,6 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const referenceCandidates = [];
     const settingsSnapshot = cloneSnapshot(settings) || {};
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery) ? settingsSnapshot.gallery : [];
-    const appearanceMaterial = materializeAppearanceAssets(settingsSnapshot.rp_library, gallerySnapshot);
-    referenceCandidates.push(...buildAppearanceReferenceCandidates(settingsSnapshot.rp_library, gallerySnapshot, { currentChatId: getContext().chatId }));
     if (capability && settingsSnapshot.use_previous_image && gallerySnapshot.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:legacy-previous', label: 'previous image' });
     // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
     // the captured capability/setting snapshot below is the authority.
@@ -1258,6 +1257,13 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referenceCandidates.push({ id: 'host:character', role: 'host-avatar', identityId: 'character:active', assetId: 'asset:host-character', label: 'character' });
         referenceCandidates.push({ id: 'host:user', role: 'host-avatar', identityId: 'user:active', assetId: 'asset:host-user', label: 'user' });
     }
+    const canonCapture = captureCanonForGeneration({
+        library: settingsSnapshot.rp_library,
+        gallery: gallerySnapshot,
+        chatState: chat_metadata[CHAT_CANON_KEY],
+        identities: getAppearanceIdentityChoices(),
+        references: referenceCandidates,
+    });
     const connectionId = routeModel.connectionId || `${providerId}:default`;
     const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
@@ -1268,7 +1274,9 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
-        references: referenceCandidates,
+        canonSnapshot: canonCapture.canonSnapshot,
+        identities: getAppearanceIdentityChoices(),
+        references: canonCapture.references,
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: { aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction, thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search },
         policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
@@ -1276,7 +1284,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     return Object.freeze({
         planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot,
         apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot,
-        referenceAssets: appearanceMaterial.assets, referenceCandidates,
+        referenceAssets: canonCapture.canonSnapshot.assets,
+        referenceCandidates: [...canonCapture.canonSnapshot.references, ...canonCapture.references],
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
     });
@@ -1345,9 +1354,11 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
         // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
         const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
         snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation);
+        notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         const assets = await materializeSnapshotAssets(snapshot);
-        const availableReferences = snapshot.referenceCandidates.filter((reference) => !reference.assetId || assets[reference.assetId]);
-        const missingReferenceOmissions = snapshot.referenceCandidates.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
+        const capturedBaseReferences = snapshot.planInput.references || [];
+        const availableReferences = capturedBaseReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
+        const missingReferenceOmissions = capturedBaseReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
         const plan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions });
         const messages = await buildMessages(prompt, sender, messageId, focusText, invocation, plan, assets);
         const dispatchedPlan = createGenerationPlan({ ...snapshot.planInput, references: availableReferences, referenceOmissions: missingReferenceOmissions, messages });
