@@ -19,6 +19,7 @@ test('Director renders an accessible cast correction section with clear current 
     assert.match(html, /Exclude Ava/);
     assert.match(html, /Current: included/);
     assert.match(html, /Current: excluded/);
+    assert.match(html, /Known identities default to Auto/);
     assert.match(html, /min-height:44px/);
 
     const empty = renderDirectorPanel({ messageId: 4, castCandidates: [] });

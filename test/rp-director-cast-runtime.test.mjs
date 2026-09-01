@@ -45,3 +45,37 @@ test('Director runtime persists cast candidates and dispatches the selected corr
         { identityId: 'character:rowan', action: 'focus' },
     ]);
 });
+
+test('Director runtime accepts an Auto candidate missed by interpretation and carries Include into dispatch', async () => {
+    let dispatched = null;
+    let previewCalls = 0;
+    const runtime = createDirectorRuntime({
+        getChatId: () => 'chat-a',
+        getEpoch: () => 1,
+        buildPreview: async () => {
+            previewCalls += 1;
+            return {
+                moment: 'Ava enters the library.',
+                castCandidates: [
+                    { identityId: 'character:ava', label: 'Ava', action: 'include', inferredAction: 'include' },
+                    { identityId: 'character:rowan', label: 'Rowan', action: 'auto', inferredAction: 'auto' },
+                ],
+            };
+        },
+        dispatch: async (input) => { dispatched = input; return { status: 'completed' }; },
+        validateTarget: () => ({ safe: true }),
+        saveChat: async () => {},
+        writeState: () => {},
+        writeDurableState: () => {},
+        saveDurableState: async () => {},
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    await runtime.open({ chatId: 'chat-a', epoch: 1, messageId: 4, message: { mes: 'Ava enters the library.' } });
+    assert.equal(runtime.getState().panel.castCandidates.find(({ identityId }) => identityId === 'character:rowan').action, 'auto');
+    const beforeEdit = previewCalls;
+    await runtime.update({ castOverrides: [{ identityId: 'character:rowan', action: 'include' }] });
+    assert.equal(previewCalls, beforeEdit + 1);
+    assert.deepEqual(runtime.getState().options.castOverrides, [{ identityId: 'character:rowan', action: 'include' }]);
+    await runtime.generate();
+    assert.deepEqual(dispatched.castOverrides, [{ identityId: 'character:rowan', action: 'include' }]);
+});
