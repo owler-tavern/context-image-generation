@@ -3,6 +3,29 @@
     width: 100%;
 }
 
+.cig_scene_inspection {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.75rem;
+    border: 1px solid var(--SmartThemeBorderColor);
+    border-radius: 0.4rem;
+    max-width: 48rem;
+}
+
+.cig_scene_inspection_summary {
+    cursor: pointer;
+    font-size: 0.9em;
+}
+
+.cig_scene_inspection_lines {
+    margin: 0.5rem 0 0;
+    padding-inline-start: 1.25rem;
+}
+
+.cig_scene_inspection_warning {
+    margin: 0.5rem 0 0;
+    color: var(--SmartThemeWarningColor, #d98c10);
+}
+
 .cig-model-row {
     display: flex;
     align-items: stretch;

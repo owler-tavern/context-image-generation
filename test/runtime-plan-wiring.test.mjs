@@ -87,3 +87,17 @@ test('outfit persistence queues durable pending state and saves only through the
     assert.match(source, /resumePendingOutfitState/);
     assert.match(source, /splitOutfitPendingByChat/);
 });
+
+test('wand integration makes scene interpretation visible, persistent, and chat-scoped', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
+    assert.match(source, /buildSceneGenerationSnapshot/);
+    assert.match(source, /messageContent = sceneSnapshot\.prompt/);
+    assert.match(source, /cig_scene_inspection/);
+    assert.match(source, /persistSceneStateForAttachment/);
+    assert.match(source, /scene_state_pending/);
+    assert.match(source, /SCENE_STATE_METADATA_KEY/);
+    assert.match(settings, /id="cig_framing_preference"/);
+    assert.match(settings, /id="cig_continuity_strength"/);
+    assert.match(settings, /id="cig_custom_visual_instruction"/);
+});

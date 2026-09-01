@@ -186,6 +186,22 @@ test('captures active outfit and visible reference plan in the immutable prompt 
     assert.equal(Object.isFrozen(plan.referencePlan), true);
 });
 
+test('retains the bounded scene interpretation on the provider-facing plan', () => {
+    const plan = createGenerationPlan({
+        ...baseInput,
+        scene: {
+            sourcePassage: 'Ava raises the lantern.',
+            prompt: 'Ava raises the lantern.\nLocation: library.',
+            state: { schema: 1, sceneFacts: { location: 'library' } },
+            inspection: { title: 'Scene interpretation', confidence: 'high', lines: ['Focus: Ava raises the lantern.'], warnings: [] },
+        },
+    });
+
+    assert.equal(plan.scene.sourcePassage, 'Ava raises the lantern.');
+    assert.equal(plan.scene.state.sceneFacts.location, 'library');
+    assert.equal(Object.isFrozen(plan.scene), true);
+});
+
 test('final available reference set excludes a missing canon asset from plan and message parts', () => {
     const missing = { id: 'look:missing', role: 'identity-look', identityId: 'character:ava.png', assetId: 'asset:missing', label: 'Ava' };
     const plan = createGenerationPlan({

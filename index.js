@@ -76,6 +76,7 @@ import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js
 import { buildVisibleCanonMediaArtifactId, createVisibleCanonActionController, createVisibleCanonDomController, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
 import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
 import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitPrompt, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
+import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
 import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
 import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
 import { saveGroupChat } from '../../../group-chats.js';
@@ -105,12 +106,16 @@ const defaultSettings = {
     include_descriptions: false,
     use_previous_image: false,
     message_depth: 1,
+    framing_preference: 'auto',
+    continuity_strength: 'balanced',
+    custom_visual_instruction: '',
     system_instruction: 'You are an image generation assistant. When reference images are provided, they represent the characters in the story. Generate an illustration that depicts the scene described in the prompt while maintaining the art style and appearance of the reference characters. You are not obligated to include both characters - if the scene depicts only one character alone, illustrate them alone. When available, you can use the internet to search for reference pictures and information to improve the accuracy and quality of your generations.',
     gallery: [],
     visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
     rp_outfits: { schema: 1, outfits: [] },
     outfit_pending: { schema: 1, pending: {} },
+    scene_state_pending: { schema: 1, pending: {} },
 };
 
 const MAX_GALLERY_SIZE = 50;
@@ -915,6 +920,7 @@ async function loadSettings() {
     await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
     await resumePendingVisibleCanonLinks();
     await resumePendingOutfitState();
+    await resumePendingSceneState();
 
 
     $('#cig_provider').val(extension_settings[extensionName].provider);
@@ -931,6 +937,9 @@ async function loadSettings() {
     $('#cig_regenerate_on_swipe').prop('checked', extension_settings[extensionName].regenerate_on_swipe);
     $('#cig_auto_generate').val(extension_settings[extensionName].auto_generate);
     $('#cig_message_depth').val(extension_settings[extensionName].message_depth);
+    $('#cig_framing_preference').val(extension_settings[extensionName].framing_preference);
+    $('#cig_continuity_strength').val(extension_settings[extensionName].continuity_strength);
+    $('#cig_custom_visual_instruction').val(extension_settings[extensionName].custom_visual_instruction);
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
 
     toggleImageSizeVisibility();
@@ -1329,6 +1338,19 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
         .join('\n\n');
     if (rawAppearanceDescription && settingsSnapshot.include_descriptions === true) descriptionText = [descriptionText, rawAppearanceDescription].filter(Boolean).join('\n\n');
+    const sceneSnapshot = buildSceneGenerationSnapshot({
+        selectedPassage: focusText,
+        clickedMessage: { name: sender || '', mes: prompt },
+        recentContext: recentMessages,
+        identities: appearanceIdentities,
+        priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
+        settings: settingsSnapshot,
+    });
+    const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
+    // The scene snapshot is the provider-facing source of truth for the wand:
+    // selected text wins, while the clicked message and nearby context resolve
+    // cast, location, and current scene facts.
+    messageContent = sceneSnapshot.prompt || messageContent;
     const connectionId = routeModel.connectionId || `${providerId}:default`;
     const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
     const planInput = {
@@ -1339,6 +1361,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
         prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText, intent: 'scene' },
+        scene: sceneMetadata,
         canonSnapshot: canonCapture.canonSnapshot,
         identities: appearanceIdentities,
         references: canonCapture.references,
@@ -1441,6 +1464,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             identities: dispatchedPlan.identities,
             referencePlan: dispatchedPlan.referencePlan,
             activeOutfits: dispatchedPlan.activeOutfits,
+            scene: dispatchedPlan.scene,
         });
         // Retain only the redacted Advanced projection; prompt/context/assets
         // must not survive the dispatch lifecycle in extension state.
@@ -1501,7 +1525,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                 }
             }
             const generatedWithContinuity = generated && typeof generated === 'object'
-                ? { ...generated, __cigContinuitySnapshot: continuitySurface }
+                ? { ...generated, __cigContinuitySnapshot: continuitySurface, __cigSceneMetadata: dispatchedPlan.scene }
                 : generated;
             if (typeof finalize !== 'function') return generatedWithContinuity;
             const persisted = await finalize(generatedWithContinuity, signal);
@@ -1802,6 +1826,118 @@ async function verifyPersistedChatOutfitState({ target, expectedState } = {}) {
     } catch (error) {
         return { status: 'indeterminate', error };
     }
+}
+
+function normalizeScenePendingStore(value) {
+    const pending = value?.pending;
+    return pending && typeof pending === 'object' && !Array.isArray(pending)
+        ? { schema: 1, pending: { ...pending } }
+        : { schema: 1, pending: {} };
+}
+
+function queueScenePending(value, entry) {
+    const store = normalizeScenePendingStore(value);
+    const key = sceneStatePendingKey(entry);
+    if (key) store.pending[key] = cloneSnapshot(entry);
+    return store;
+}
+
+function removeScenePending(value, entry) {
+    const store = normalizeScenePendingStore(value);
+    delete store.pending[sceneStatePendingKey(entry)];
+    return store;
+}
+
+function scheduleSceneStatePendingRetry() {
+    setTimeout(() => { void resumePendingSceneState(); }, 1500);
+}
+
+async function verifyPersistedSceneState(entry) {
+    try {
+        const target = entry?.target || {};
+        const groupId = target.groupId || getContext().groupId || null;
+        const endpoint = groupId ? '/api/chats/group/get' : '/api/chats/get';
+        const requestBody = target.requestBody || (groupId ? { id: target.chatId } : { chat_id: target.chatId });
+        const response = await fetch(endpoint, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(requestBody) });
+        if (!response.ok) return { status: 'indeterminate' };
+        const payload = await response.json();
+        const header = Array.isArray(payload) ? payload[0] : payload;
+        const stored = header?.chat_metadata?.[SCENE_STATE_METADATA_KEY] ?? header?.metadata?.[SCENE_STATE_METADATA_KEY];
+        const expected = entry.state || null;
+        const stable = (value) => JSON.stringify(value ?? null);
+        return { status: stable(stored) === stable(expected) ? 'confirmed' : 'confirmed-absent', state: stored || null };
+    } catch (error) {
+        return { status: 'indeterminate', error };
+    }
+}
+
+async function persistSceneStateForAttachment(result, target, epoch) {
+    const scene = result?.__cigSceneMetadata;
+    if (!scene?.state || !target?.chatId || !Number.isInteger(target.messageId)) return { saved: true, status: 'not-applicable' };
+    const captured = { chatId: target.chatId, epoch };
+    const pending = createSceneStatePending({
+        chatId: target.chatId,
+        epoch,
+        state: scene.state,
+        target: { ...target, groupId: getContext().groupId || null },
+    });
+    const settings = extension_settings[extensionName];
+    const outcome = await persistAcceptedSceneState({
+        pending,
+        isCurrent: (entry) => chatCaptureIsCurrent({ chatId: entry.chatId, epoch: entry.epoch })
+            && validateMessageTarget({ target: entry.target, currentChatId: getContext().chatId, currentChat: getContext().chat }).safe,
+        getState: () => chat_metadata[SCENE_STATE_METADATA_KEY],
+        setState: (state) => { chat_metadata[SCENE_STATE_METADATA_KEY] = cloneSnapshot(state); },
+        savePending: async (entry) => {
+            settings.scene_state_pending = queueScenePending(settings.scene_state_pending, entry);
+            await saveSettings();
+        },
+        saveChat: async (result) => {
+            await saveChatConditional();
+            return { saved: true };
+        },
+        readback: verifyPersistedSceneState,
+        removePending: async (entry) => {
+            settings.scene_state_pending = removeScenePending(settings.scene_state_pending, entry);
+            await saveSettings();
+        },
+        scheduleRetry: scheduleSceneStatePendingRetry,
+    });
+    if (outcome.status === 'stale') return { saved: false, reason: 'chat-changed' };
+    return { saved: true, sceneStateStatus: outcome.status, captured };
+}
+
+async function resumePendingSceneState() {
+    const settings = extension_settings[extensionName];
+    const store = normalizeScenePendingStore(settings.scene_state_pending);
+    const currentChatId = getContext().chatId;
+    const entries = Object.values(store.pending).filter((entry) => String(entry?.chatId) === String(currentChatId));
+    if (!entries.length) return { status: 'nothing-to-do' };
+    for (const entry of entries) {
+        const outcome = await persistAcceptedSceneState({
+            pending: entry,
+            isCurrent: (value) => chatCaptureIsCurrent({ chatId: value.chatId, epoch: value.epoch })
+                && validateMessageTarget({ target: value.target, currentChatId: getContext().chatId, currentChat: getContext().chat }).safe,
+            getState: () => chat_metadata[SCENE_STATE_METADATA_KEY],
+            setState: (state) => { chat_metadata[SCENE_STATE_METADATA_KEY] = cloneSnapshot(state); },
+            savePending: async (value) => {
+                settings.scene_state_pending = queueScenePending(settings.scene_state_pending, value);
+                await saveSettings();
+            },
+            saveChat: async () => { await saveChatConditional(); return { saved: true }; },
+            readback: verifyPersistedSceneState,
+            removePending: async (value) => {
+                settings.scene_state_pending = removeScenePending(settings.scene_state_pending, value);
+                await saveSettings();
+            },
+            scheduleRetry: scheduleSceneStatePendingRetry,
+        });
+        if (outcome.status === 'confirmed') {
+            settings.scene_state_pending = removeScenePending(settings.scene_state_pending, entry);
+        }
+    }
+    await saveSettings();
+    return { status: 'processed', pending: settings.scene_state_pending };
 }
 
 async function verifyPersistedOutfitPending(entry) {
@@ -2551,11 +2687,13 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 source: MEDIA_SOURCE.GENERATED,
                 cig_owner: extensionName,
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
+                ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
             appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
             renderContinuityShelf(currentMessageElement, currentMessage);
+            renderSceneInspection(currentMessageElement, currentMessage);
             renderVisibleCanonControls(currentMessageElement, currentMessage);
             scheduleImageArrowConfiguration({
                 schedule: (callback) => setTimeout(callback, 0),
@@ -2572,6 +2710,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 }
                 appendMediaToMessage(currentMessage, currentMessageElement, SCROLL_BEHAVIOR.KEEP);
                 renderContinuityShelf(currentMessageElement, currentMessage);
+                renderSceneInspection(currentMessageElement, currentMessage);
                 scheduleImageArrowConfiguration({
                     schedule: (callback) => setTimeout(callback, 0),
                     reconfigure: () => configureCigImageArrows(currentMessageElement),
@@ -2589,19 +2728,19 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 return beforeSave.safe ? { safe: false, reason: 'chat-changed' } : beforeSave;
             }
 
-            // ST's saveChatConditional has no target argument. Re-check after it
-            // completes so an intervening chat switch cannot be reported as a
-            // successful attachment; the helper rolls back the in-memory append
-            // and keeps the file in the gallery when this gate fails.
-            await saveChatConditional();
-            if (!chatLifecycleEpoch.isCurrent(saveEpoch)) return { safe: false, reason: 'chat-changed' };
+            // Persist the reconciled scene state in the same captured chat. The
+            // scene helper saves the metadata, verifies it, and retains a
+            // chat-scoped pending entry when the readback is indeterminate.
+            const sceneSave = await persistSceneStateForAttachment(result, effectiveTarget, saveEpoch);
+            if (sceneSave.saved === false) return sceneSave;
+            if (!chatLifecycleEpoch.isCurrent(saveEpoch)) return { saved: false, reason: 'chat-changed' };
             const afterSaveContext = getContext();
             const afterSave = validateMessageTarget({
                 target: effectiveTarget,
                 currentChatId: afterSaveContext.chatId,
                 currentChat: afterSaveContext.chat,
             });
-            return afterSave.safe ? { saved: true } : afterSave;
+            return afterSave.safe ? { saved: true, sceneStateStatus: sceneSave.sceneStateStatus } : afterSave;
         },
         addToGallery,
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
@@ -2922,6 +3061,27 @@ function renderContinuityShelf(messageElement, messageOverride = null) {
 
 function renderContinuityShelves() {
     $('.mes').each(function () { renderContinuityShelf($(this)); });
+}
+
+function renderSceneInspection(messageElement, messageOverride = null) {
+    messageElement?.find('.cig_scene_inspection').remove();
+    const messageId = Number(messageElement?.attr('mesid'));
+    const message = messageOverride || getContext().chat?.[messageId];
+    const inspection = activeMediaForMessage(message)?.item?.cig_scene_inspection;
+    if (!inspection || !Array.isArray(inspection.lines)) return;
+
+    const confidence = String(inspection.confidence || 'low');
+    const root = $('<details class="cig_scene_inspection"></details>')
+        .attr({ 'data-message-id': String(messageId), 'aria-label': 'Scene interpretation inspection' });
+    $('<summary class="cig_scene_inspection_summary"></summary>')
+        .text(`Scene interpretation · ${confidence} confidence`)
+        .appendTo(root);
+    const lines = $('<ul class="cig_scene_inspection_lines"></ul>').appendTo(root);
+    for (const line of inspection.lines.slice(0, 8)) $('<li></li>').text(String(line)).appendTo(lines);
+    for (const warning of Array.isArray(inspection.warnings) ? inspection.warnings.slice(0, 4) : []) {
+        $('<p class="cig_scene_inspection_warning" role="note"></p>').text(`Note: ${String(warning)}`).appendTo(root);
+    }
+    messageElement?.find('.mes_text, .mes_img_container, .mes_media_container').last().after(root);
 }
 
 function renderVisibleCanonControls(messageElement, messageOverride = null) {
@@ -3422,6 +3582,21 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
+    $('#cig_framing_preference').on('change', function () {
+        extension_settings[extensionName].framing_preference = $(this).val() || 'auto';
+        saveSettingsDebounced();
+    });
+
+    $('#cig_continuity_strength').on('change', function () {
+        extension_settings[extensionName].continuity_strength = $(this).val() || 'balanced';
+        saveSettingsDebounced();
+    });
+
+    $('#cig_custom_visual_instruction').on('input', function () {
+        extension_settings[extensionName].custom_visual_instruction = String($(this).val() || '').slice(0, 4000);
+        saveSettingsDebounced();
+    });
+
     $('#cig_system_instruction').on('input', function () {
         extension_settings[extensionName].system_instruction = $(this).val();
         saveSettingsDebounced();
@@ -3577,6 +3752,7 @@ jQuery(async () => {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
         renderContinuityShelf(messageElement);
+        renderSceneInspection(messageElement);
         scheduleImageArrowConfiguration({
             schedule: (callback) => setTimeout(callback, 0),
             reconfigure: () => configureCigImageArrows(messageElement),
@@ -3587,9 +3763,11 @@ jQuery(async () => {
         setTimeout(() => {
             injectAllMessageButtons();
             renderContinuityShelves();
+            $('.mes').each(function () { renderSceneInspection($(this)); });
             configureAllCigImageArrows();
             void resumePendingVisibleCanonLinks();
             void resumePendingOutfitState();
+            void resumePendingSceneState();
         }, 100);
     });
 
@@ -3604,12 +3782,13 @@ jQuery(async () => {
     });
 
     eventSource.on(event_types.CHAT_CREATED, () => {
-        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); }, 100);
+        setTimeout(() => { injectAllMessageButtons(); renderContinuityShelves(); $('.mes').each(function () { renderSceneInspection($(this)); }); }, 100);
     });
 
     setTimeout(() => {
         injectAllMessageButtons();
         renderContinuityShelves();
+        $('.mes').each(function () { renderSceneInspection($(this)); });
         configureAllCigImageArrows();
     }, 500);
 
