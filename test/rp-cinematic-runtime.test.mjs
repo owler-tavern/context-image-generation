@@ -258,6 +258,54 @@ test('settings updates propagate to every remembered chat session', async () => 
     assert.equal(runtime.getState().session.costCeiling, null);
 });
 
+test('active chat persistence uses a bounded provider-free projection and reloads a pending card', async () => {
+    let latestChatMetadata = null;
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 150 },
+        getChatId: () => 'chat-a',
+        getEpoch: () => 1,
+        readState: () => latestChatMetadata || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value) => { latestChatMetadata = structuredClone(value); },
+        saveChat: async () => {},
+        saveDurableState: async () => {},
+        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
+        dispatch: async () => ({ status: 'completed', receipt: { actualCost: null } }),
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    for (let index = 0; index < 110; index += 1) {
+        const delta = interpretationDelta({ location: `location-${index}` });
+        delta.acceptedEvidence = [{ source: 'private', text: 'PRIVATE_CINEMATIC_CHAT_TEXT_123' }];
+        const result = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: index, message: { mes: `Private scene ${index}` }, acceptedSceneDelta: delta });
+        if (result.suggestion) await runtime.approve(result.suggestion.suggestionId);
+    }
+    const pending = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 111, message: { mes: 'Private final scene' }, acceptedSceneDelta: interpretationDelta({ location: 'final-location' }) });
+    assert.equal(pending.status, 'suggested');
+    const serialized = JSON.stringify(latestChatMetadata);
+    assert.doesNotMatch(serialized, /PRIVATE_CINEMATIC_CHAT_TEXT_123/);
+    assert.doesNotMatch(serialized, /Private scene/);
+    const persistedSession = latestChatMetadata.cinematicAutomation.session;
+    assert.ok(Object.keys(persistedSession.eventRegistry).length <= 96);
+    assert.ok(Object.keys(persistedSession.approvedSuggestionRecords).length <= 96);
+    assert.ok(Object.keys(persistedSession.settledPlans).length <= 96);
+    assert.ok(latestChatMetadata.cinematicAutomation.processedMessageIds.length <= 96);
+    assert.ok(latestChatMetadata.cinematicAutomation.queuedEvents.length <= 24);
+
+    const restarted = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 150 },
+        getChatId: () => 'chat-a',
+        getEpoch: () => 2,
+        readState: () => latestChatMetadata,
+        writeState: (value) => { latestChatMetadata = structuredClone(value); },
+        saveChat: async () => {},
+        saveDurableState: async () => {},
+        dispatch: async () => ({ status: 'completed', receipt: { actualCost: null } }),
+    });
+    const loaded = restarted.load({ chatId: 'chat-a', epoch: 2 });
+    assert.equal(loaded.suggestion?.suggestionId, pending.suggestion.suggestionId);
+    assert.equal((await restarted.approve(pending.suggestion.suggestionId)).status, 'completed');
+    assert.equal(restarted.getState().session.reservedGenerationCount, 0);
+});
+
 test('runtime accepts the real scene interpretation delta, not a message counter', async () => {
     const { runtime } = setup({
         interpret: ({ message, priorStoryState }) => buildSceneGenerationSnapshot({

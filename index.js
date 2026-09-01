@@ -84,7 +84,7 @@ import { createIterationSurfaceController, mountIterationSurface, installIterati
 import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
 import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
-import { createCinematicRuntime, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
+import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
 import { createCinematicUiController, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
 
 const extensionName = 'context-image-generation';
@@ -984,7 +984,7 @@ function createCinematicSurface() {
         writeState: (value, { chatId } = {}) => {
             if (chatId && String(chatId) !== String(getContext().chatId)) return;
             if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
-            chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = value.cinematicAutomation;
+            chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = compactCinematicRuntimeState(value.cinematicAutomation);
             chat_metadata[SCENE_STATE_METADATA_KEY] = value.storyState;
         },
         saveChat: () => saveChatConditional(),

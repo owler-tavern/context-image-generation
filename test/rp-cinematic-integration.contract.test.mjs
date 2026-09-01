@@ -22,6 +22,7 @@ test('cinematic automation is mounted into real chat lifecycle hooks and uses st
     assert.match(index, /readDurableState: \(\{ chatId \} = \{\}\)/);
     assert.match(index, /writeDurableState: \(value, \{ chatId \} = \{\}\)/);
     assert.match(index, /saveDurableState: async \(\) => \{ await saveSettings\(\); \}/);
+    assert.match(index, /compactCinematicRuntimeState\(value\.cinematicAutomation\)/);
     assert.match(index, /cinematicRuntime\.approve/);
 });
 
