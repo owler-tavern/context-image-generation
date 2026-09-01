@@ -35,12 +35,18 @@ const verifiedRoute = {
     modelId: 'image-model',
     capabilities: { imageGeneration: true },
 };
+const generationPlan = Object.freeze({ planId: 'registry:plan', revision: 'revision:1', capabilities: { imageGeneration: true } });
+const verifyGenerationPlan = (candidate) => ({ status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: 'registry-token', routeResolved: true, capabilities: { imageGeneration: true } });
+const verifyCanonicalEligibility = (candidate) => ({ status: 'eligible', artifactId: candidate.artifactId, authorityToken: 'canon-token' });
 const reserveInvocation = () => true;
 function planIterationAction(input) {
     return rawPlanIterationAction({
         ...input,
         reserveInvocation,
         resolvedRoute: verifiedRoute,
+        generationPlan,
+        verifyGenerationPlan,
+        verifyCanonicalEligibility,
         invocationId: input.invocationId || input.actionId || 'test-invocation',
         paidConsent: input.paidConsent ? { costUnavailableAcknowledged: true, ...input.paidConsent } : input.paidConsent,
     });
@@ -279,6 +285,13 @@ test('two-up consent preserves caller claims and requires exact count plus cost 
         paidConsent: { approved: true, outputCount: 2, cost: 0.08 },
     });
     assert.equal(ready.status, 'ready');
+    const negative = rawPlanIterationAction({
+        action: 'vary-shot', sourceArtifact: source, invocationId: 'two-up-negative-cost', twoUp: true,
+        resolvedRoute: verifiedRoute, reserveInvocation, generationPlan, verifyGenerationPlan,
+        changes: { composition: { framing: 'wide' } },
+        paidConsent: { approved: true, outputCount: 2, cost: -0.01 },
+    });
+    assert.equal(negative.status, 'consent-required');
 });
 
 test('missing or reused invocation IDs are rejected by the injected reservation seam', () => {
@@ -292,7 +305,7 @@ test('missing or reused invocation IDs are rejected by the injected reservation 
 test('generation dispatch remains unavailable without verified route and image capability evidence', () => {
     const plan = rawPlanIterationAction({ action: 'reuse-recipe', sourceArtifact: source, invocationId: 'no-route', reserveInvocation, paidConsent: { approved: true, outputCount: 1, cost: 0.01 } });
     assert.equal(plan.dispatch.allowed, false);
-    assert.equal(plan.dispatch.reason, 'verified-route-and-capability-required');
+    assert.equal(plan.dispatch.reason, 'verified-generation-plan-required');
 });
 
 test('a separately injected verified capability tripwire can complete a resolved route', () => {
@@ -300,9 +313,23 @@ test('a separately injected verified capability tripwire can complete a resolved
         action: 'reuse-recipe', sourceArtifact: source, invocationId: 'separate-capability', reserveInvocation,
         resolvedRoute: { status: 'verified', resolved: true, providerId: 'linkapi', modelId: 'image-model' },
         capabilityTripwire: true,
+        generationPlan, verifyGenerationPlan,
         paidConsent: { approved: true, outputCount: 1, cost: 0.01 },
     });
     assert.equal(plan.dispatch.allowed, true);
+});
+
+test('dispatch trusts only an injected authority result matching the immutable registry plan identity and revision', () => {
+    const base = {
+        action: 'reuse-recipe', sourceArtifact: source, invocationId: 'authority-mismatch', reserveInvocation,
+        generationPlan, paidConsent: { approved: true, outputCount: 1, cost: 0.01 },
+    };
+    const forgedBoolean = rawPlanIterationAction({ ...base, verifyGenerationPlan: () => true });
+    assert.equal(forgedBoolean.dispatch.allowed, false);
+    const mismatched = rawPlanIterationAction({ ...base, verifyGenerationPlan: () => ({ status: 'verified', planId: 'other', revision: 'revision:1', authorityToken: 'x' }) });
+    assert.equal(mismatched.dispatch.allowed, false);
+    const accepted = rawPlanIterationAction({ ...base, invocationId: 'authority-ok', resolvedRoute: verifiedRoute, verifyGenerationPlan });
+    assert.equal(accepted.dispatch.allowed, true);
 });
 
 test('change-scene requires fresh source passage, prompt, and current state and removes old scene context', () => {
@@ -338,15 +365,30 @@ test('edit rejects an empty prompt and vary-shot merges controls into the effect
     assert.equal(plan.artifacts[0].options.composition.camera, 'low-angle');
 });
 
+test('change-scene carries only durable model options and drops scene-bound or unknown options', () => {
+    const plan = rawPlanIterationAction({
+        action: 'keep-characters-change-scene', sourceArtifact: { ...source, recipe: { ...source.recipe, options: { aspectRatio: '1:1', scene: 'station', custom: 'drop' } } },
+        invocationId: 'durable-options', reserveInvocation, resolvedRoute: verifiedRoute, generationPlan, verifyGenerationPlan,
+        changes: { sourcePassage: { text: 'Ava enters the library.' }, prompt: 'Ava enters the library.', scene: { location: 'library' } },
+        paidConsent: { approved: true, outputCount: 1, cost: 0.01 },
+    });
+    assert.deepEqual(plan.artifacts[0].options, { aspectRatio: '1:1' });
+});
+
 test('make-canonical validates exact non-empty roles and plans persistence against the selected artifact', () => {
     const plan = rawPlanIterationAction({
         action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-mutation', reserveInvocation,
+        verifyCanonicalEligibility,
         changes: { roles: { chatBackground: 'quiet suspense' } },
     });
     assert.equal(plan.artifacts[0].artifactId, source.artifactId);
     assert.deepEqual(plan.mutation, { operation: 'update-canonical-roles', targetArtifactId: source.artifactId, roles: { chatBackground: 'quiet suspense' } });
     assert.throws(() => rawPlanIterationAction({ action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-unknown', reserveInvocation, changes: { roles: { unknown: 'x' } } }), /unknown canonical role/u);
     assert.throws(() => rawPlanIterationAction({ action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-empty', reserveInvocation, changes: { roles: { chatBackground: ' ' } } }), /empty/u);
+});
+
+test('canonical mutation fails closed without injected ownership and eligibility authority', () => {
+    assert.throws(() => rawPlanIterationAction({ action: 'make-canonical-roles', sourceArtifact: source, invocationId: 'canon-no-authority', reserveInvocation, changes: { roles: { chatBackground: 'quiet' } } }), /eligibility/u);
 });
 
 test('two-up retention stays awaiting selection until one output is explicitly chosen', () => {
