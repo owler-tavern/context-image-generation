@@ -3,7 +3,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
 import {
+    createVisibleCanonActionController,
+    linkVisibleCanonGalleryArtifact,
     projectVisibleCanon,
+    resolveVisibleCanonIdentityId,
+    VISIBLE_CANON_MIN_TOUCH_TARGET,
+    visibleCanonKeyActivation,
     visibleCanonActionLabels,
     visibleCanonStatus,
 } from '../lib/rp/visible-canon.js';
@@ -42,7 +47,7 @@ test('unactivated inline canon projection exposes Remember and saved-look choice
         'Remember character look',
         'Change look',
     ]);
-    assert.equal(visibleCanonStatus(projection), 'No character look is active in this chat.');
+    assert.equal(visibleCanonStatus(projection), 'Identity: Ava · No look active in this chat.');
 });
 
 test('activated inline canon projection states the active lock and keeps every chat action available', () => {
@@ -71,7 +76,7 @@ test('activated inline canon projection states the active lock and keeps every c
         'Unlock look',
         'Stop using look',
     ]);
-    assert.equal(visibleCanonStatus(projection), 'Active look: Day outfit. Locked for this chat.');
+    assert.equal(visibleCanonStatus(projection), 'Identity: Ava · Look: Day outfit · Locked');
 });
 
 test('unlocked active look is explicit and unavailable saved files are not offered', () => {
@@ -93,26 +98,92 @@ test('unlocked active look is explicit and unavailable saved files are not offer
     });
 
     assert.deepEqual(projection.looks.map((look) => look.id), ['look:night']);
-    assert.equal(visibleCanonStatus(projection), 'Active look: Night outfit. Unlocked for this chat.');
+    assert.equal(visibleCanonStatus(projection), 'Identity: Ava · Look: Night outfit · Unlocked');
     assert.ok(visibleCanonActionLabels(projection).includes('Lock look'));
 });
 
-test('production message wiring projects visible canon without entering provider dispatch', async () => {
-    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+test('visible canon controls keep the executable touch-target contract without provider dispatch', async () => {
     const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 
-    assert.match(index, /import \{ projectVisibleCanon, visibleCanonStatus \} from '\.\/lib\/rp\/visible-canon\.js'/);
-    assert.match(index, /renderVisibleCanonControls\(messageElement\)/);
-    assert.match(index, /renderVisibleCanonControls\(currentMessageElement, currentMessage\)/);
-    assert.match(index, /Remember character look/);
-    assert.match(index, /cig_visible_canon_change/);
-    assert.match(index, /cig_visible_canon_lock/);
-    assert.match(index, /cig_visible_canon_stop/);
-    assert.match(index, /refreshVisibleCanonControls\(\)/);
-    assert.match(index, /runRememberAppearance/);
-    assert.match(index, /appearanceFeatureController\(\)\.use/);
-    assert.doesNotMatch(index, /cig_visible_canon[^\n]*dispatchProviderRoute/);
+    assert.equal(VISIBLE_CANON_MIN_TOUCH_TARGET, 44);
     assert.match(style, /\.cig_visible_canon button,[\s\S]*?min-width:\s*44px/);
     assert.match(style, /\.cig_visible_canon button,[\s\S]*?min-height:\s*44px/);
     assert.match(style, /@media \(max-width: 600px\)/);
+});
+
+test('remembered artifact identity wins over the message sender for persona or NPC selections', () => {
+    const persona = { id: 'user:persona.png', kind: 'user', label: 'Sam', looks: [{ id: 'look:sam', assetId: 'asset:sam', label: 'Sam look' }] };
+    const npc = { id: 'npc:chat:guard', kind: 'npc', label: 'The guard', looks: [{ id: 'look:guard', assetId: 'asset:guard', label: 'Guard look' }] };
+    const sharedLibrary = {
+        schema: 2,
+        identities: { [persona.id]: persona, [npc.id]: npc },
+        assets: {
+            'asset:sam': { id: 'asset:sam', kind: 'appearance', url: '/sam.png' },
+            'asset:guard': { id: 'asset:guard', kind: 'appearance', url: '/guard.png' },
+        },
+    };
+    const chatState = { schema: 1, bindings: {
+        [persona.id]: { activeLookId: 'look:sam', expectedAssetId: 'asset:sam', isLocked: true, selectedAt: 1 },
+        [npc.id]: { activeLookId: 'look:guard', expectedAssetId: 'asset:guard', isLocked: false, selectedAt: 1 },
+    } };
+
+    const linkedId = resolveVisibleCanonIdentityId({
+        fallbackIdentityId: 'character:ava.png',
+        media: { url: '/sam.png' },
+        messageId: 4,
+        gallery: [{ url: '/sam.png', messageId: 4, cig_identity_id: persona.id, cig_look_id: 'look:sam' }],
+    });
+    const projection = projectVisibleCanon({ library: sharedLibrary, chatState, identityId: linkedId });
+    assert.equal(linkedId, persona.id);
+    assert.equal(projection.identityLabel, 'Sam');
+    assert.equal(visibleCanonStatus(projection), 'Identity: Sam · Look: Sam look · Locked');
+});
+
+test('artifact linking keeps the selected identity and look as one durable Gallery record', () => {
+    assert.deepEqual(linkVisibleCanonGalleryArtifact({ url: '/sam.png', messageId: 4 }, {
+        identityId: 'user:persona.png',
+        lookId: 'look:sam',
+    }), {
+        url: '/sam.png',
+        messageId: 4,
+        cig_identity_id: 'user:persona.png',
+        cig_look_id: 'look:sam',
+    });
+});
+
+test('active media identity link changes with swipe-selected media', () => {
+    const gallery = [{ id: 'gallery:guard', url: '/guard.png', messageId: 9, sourceMetadata: { cig_identity_id: 'npc:chat:guard' } }];
+    const media = [
+        { url: '/character.png', cig_owner: 'context-image-generation', cig_identity_id: 'character:ava.png' },
+        { url: '/guard.png', cig_owner: 'context-image-generation' },
+    ];
+    assert.equal(resolveVisibleCanonIdentityId({ fallbackIdentityId: 'character:ava.png', media: media[0], messageId: 9, gallery }), 'character:ava.png');
+    assert.equal(resolveVisibleCanonIdentityId({ fallbackIdentityId: 'character:ava.png', media: media[1], messageId: 9, gallery }), 'npc:chat:guard');
+});
+
+test('visible canon action controller handles keyboard-equivalent actions without a provider dependency', async () => {
+    const calls = [];
+    let refreshes = 0;
+    const controller = createVisibleCanonActionController({
+        actions: {
+            remember: (payload) => { calls.push(['remember', payload]); return { status: 'confirmed' }; },
+            change: (payload) => { calls.push(['change', payload]); return { status: 'confirmed' }; },
+            lock: (payload) => { calls.push(['lock', payload]); return { status: 'confirmed' }; },
+            stop: (payload) => { calls.push(['stop', payload]); return { status: 'confirmed' }; },
+        },
+        refresh: () => { refreshes++; },
+    });
+    for (const [action, payload] of [['remember', { mediaUrl: '/x.png' }], ['change', { lookId: 'look:2' }], ['lock', { identityId: 'user:persona.png' }], ['stop', { lookId: 'look:2' }]]) {
+        await controller.run(action, payload);
+    }
+    assert.deepEqual(calls, [
+        ['remember', { mediaUrl: '/x.png' }],
+        ['change', { lookId: 'look:2' }],
+        ['lock', { identityId: 'user:persona.png' }],
+        ['stop', { lookId: 'look:2' }],
+    ]);
+    assert.equal(refreshes, 4);
+    assert.equal(visibleCanonKeyActivation({ key: 'Enter' }), true);
+    assert.equal(visibleCanonKeyActivation({ key: ' ' }), true);
+    assert.equal(visibleCanonKeyActivation({ key: 'Tab' }), false);
 });

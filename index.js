@@ -67,12 +67,12 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, getChatBinding, migrateChatCanon, selectLookForChat, setChatBinding, setChatLock } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
-import { projectVisibleCanon, visibleCanonStatus } from './lib/rp/visible-canon.js';
+import { createVisibleCanonActionController, linkVisibleCanonGalleryArtifact, projectVisibleCanon, resolveVisibleCanonIdentityId, visibleCanonStatus } from './lib/rp/visible-canon.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -1799,6 +1799,33 @@ async function persistAppearanceLibraryMutation(mutate) {
     return result;
 }
 
+function scheduleVisibleCanonGalleryLinkRetry({ artifactId, identityId, lookId }) {
+    setTimeout(() => {
+        void persistVisibleCanonGalleryLink({ artifactId, identityId, lookId, retry: false, notify: false });
+    }, 1500);
+}
+
+async function persistVisibleCanonGalleryLink({ artifactId, identityId, lookId, retry = true, notify = true } = {}) {
+    const settings = extension_settings[extensionName];
+    const linkedIndex = (settings.gallery || []).findIndex((entry) => galleryArtifactKey(entry) === artifactId);
+    if (linkedIndex < 0) return { status: 'confirmed-absent' };
+    settings.gallery[linkedIndex] = linkVisibleCanonGalleryArtifact(settings.gallery[linkedIndex], { identityId, lookId });
+    try {
+        await saveSettings();
+        const verification = await verifyPersistedGalleryArtifact({ artifactId, expectedIdentityId: identityId, expectedLookId: lookId, fetchImpl: fetch, getHeaders: getRequestHeaders });
+        if (verification.status !== 'confirmed' && retry) scheduleVisibleCanonGalleryLinkRetry({ artifactId, identityId, lookId });
+        if (verification.status !== 'confirmed' && notify) toastr.info('The selected identity link is pending persistence and will be retried shortly.', 'Context Image Generation');
+        return verification;
+    } catch (error) {
+        if (retry) scheduleVisibleCanonGalleryLinkRetry({ artifactId, identityId, lookId });
+        if (notify) {
+            toastr.info('The selected identity link is pending persistence and will be retried shortly.', 'Context Image Generation');
+            console.warn(`[${extensionName}] Gallery identity link verification pending`, error);
+        }
+        return { status: 'indeterminate', error };
+    }
+}
+
 async function rememberGalleryAppearance(index) {
     const settings = extension_settings[extensionName];
     const item = settings.gallery?.[index];
@@ -1844,10 +1871,16 @@ async function rememberGalleryAppearance(index) {
             now: () => Date.now(),
         },
     });
+    if (activation.promoted?.look?.id && ['confirmed', 'alternate'].includes(activation.status)) {
+        const artifactId = galleryArtifactKey(item);
+        await persistVisibleCanonGalleryLink({ artifactId, identityId: identity.id, lookId: activation.promoted.look.id });
+    }
     renderAppearanceList();
+    refreshVisibleCanonControls();
     if (activation.status === 'confirmed' || activation.status === 'alternate') toastr.success(activation.message, 'Context Image Generation');
     else if (activation.status === 'confirmed-absent') toastr.warning(activation.message, 'Context Image Generation');
     else toastr.info(activation.message, 'Context Image Generation');
+    return { activation, identityId: identity.id, lookId: activation.promoted?.look?.id || null };
 }
 
 function renderAppearanceList(lifecycleView = null) {
@@ -2364,7 +2397,13 @@ function renderVisibleCanonControls(messageElement, messageOverride = null) {
     const settings = extension_settings[extensionName] || {};
     const library = migrateAppearanceLibrary(settings.rp_library);
     const materialized = materializeAppearanceAssets(library, settings.gallery || []);
-    const identityId = getStableSpeakerIdentityId(visibleCanonMessageSender(message));
+    const fallbackIdentityId = getStableSpeakerIdentityId(visibleCanonMessageSender(message));
+    const identityId = resolveVisibleCanonIdentityId({
+        fallbackIdentityId,
+        media: activeMedia.item,
+        messageId,
+        gallery: settings.gallery,
+    });
     const projection = projectVisibleCanon({
         library,
         chatState: chat_metadata[CHAT_CANON_KEY],
@@ -2609,6 +2648,18 @@ async function rememberVisibleCanonImage(messageId, mediaUrl) {
     }
     await rememberGalleryAppearance(index);
     refreshVisibleCanonControls();
+}
+
+function visibleCanonActionController() {
+    return createVisibleCanonActionController({
+        actions: {
+            remember: ({ messageId, mediaUrl }) => rememberVisibleCanonImage(messageId, mediaUrl),
+            change: ({ identityId, lookId }) => useAppearanceLook(identityId, lookId),
+            lock: ({ identityId, lookId }) => toggleAppearanceLookLock(identityId, lookId),
+            stop: ({ identityId, lookId }) => stopAppearanceLook(identityId, lookId),
+        },
+        refresh: refreshVisibleCanonControls,
+    });
 }
 
 jQuery(async () => {
@@ -2898,7 +2949,10 @@ jQuery(async () => {
     $(document).on('click', '.cig_visible_canon_remember', async function (e) {
         e.stopPropagation();
         try {
-            await rememberVisibleCanonImage($(this).attr('data-message-id'), $(this).attr('data-media-url'));
+            await visibleCanonActionController().run('remember', {
+                messageId: $(this).attr('data-message-id'),
+                mediaUrl: $(this).attr('data-media-url'),
+            });
         } catch (error) {
             showGenerationError(error, 'Remember character look');
         }
@@ -2908,17 +2962,17 @@ jQuery(async () => {
         e.stopPropagation();
         const root = $(this).closest('.cig_visible_canon');
         const lookId = root.find('.cig_visible_canon_select').val();
-        if (lookId) await useAppearanceLook($(this).attr('data-identity-id'), lookId);
+        if (lookId) await visibleCanonActionController().run('change', { identityId: $(this).attr('data-identity-id'), lookId });
     });
 
     $(document).on('click', '.cig_visible_canon_lock', async function (e) {
         e.stopPropagation();
-        await toggleAppearanceLookLock($(this).attr('data-identity-id'), $(this).attr('data-look-id'));
+        await visibleCanonActionController().run('lock', { identityId: $(this).attr('data-identity-id'), lookId: $(this).attr('data-look-id') });
     });
 
     $(document).on('click', '.cig_visible_canon_stop', async function (e) {
         e.stopPropagation();
-        await stopAppearanceLook($(this).attr('data-identity-id'), $(this).attr('data-look-id'));
+        await visibleCanonActionController().run('stop', { identityId: $(this).attr('data-identity-id'), lookId: $(this).attr('data-look-id') });
     });
 
     $(document).on('click', '.cig_message_gen', function (e) {

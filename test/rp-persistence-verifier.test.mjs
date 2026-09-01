@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, persistVerifiedChatMutation, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, readPersistedExtensionLibrary, verifyPersistedExtensionLibrary, verifyPersistedChatBinding, persistVerifiedChatMutation, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear } from '../lib/rp/persistence-verifier.js';
 
 test('library verification is three-state and checks exact revision', async () => {
     let method;
@@ -19,6 +19,14 @@ test('Gallery clear verification requires both the exact library revision and em
     const fetchImpl = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': { rp_library: { revision: 'clear:1' }, gallery: [] } } }) });
     assert.equal((await verifyPersistedGalleryClear({ expectedRevision: 'clear:1', fetchImpl })).status, 'confirmed');
     assert.equal((await verifyPersistedGalleryClear({ expectedRevision: 'other', fetchImpl })).status, 'confirmed-absent');
+});
+
+test('Gallery artifact verification confirms the selected identity/look link and distinguishes absent read-back', async () => {
+    const fetchImpl = async () => ({ ok: true, json: async () => ({ extension_settings: { 'context-image-generation': {
+        gallery: [{ url: '/selected.png', cig_identity_id: 'persona:sam', cig_look_id: 'look:selected' }],
+    } } }) });
+    assert.equal((await verifyPersistedGalleryArtifact({ artifactId: 'url:/selected.png', expectedIdentityId: 'persona:sam', expectedLookId: 'look:selected', fetchImpl })).status, 'confirmed');
+    assert.equal((await verifyPersistedGalleryArtifact({ artifactId: 'url:/selected.png', expectedIdentityId: 'npc:guard', expectedLookId: 'look:selected', fetchImpl })).status, 'confirmed-absent');
 });
 
 test('chat verification checks the captured target binding and revision', async () => {
