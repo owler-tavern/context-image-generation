@@ -44,6 +44,16 @@ test('verified chat mutation reports confirmed absent and indeterminate distinct
     }
 });
 
+test('thrown chat save is indeterminate, restores prior UI state, and schedules reconciliation', async () => {
+    const base = { schema: 1, bindings: {} };
+    let current = base;
+    let scheduled = false;
+    const result = await persistVerifiedChatMutation({ captured: { chatId: 'c' }, isCurrent: () => true, getState: () => current, setState: (value) => { current = value; }, nextState: { schema: 1, bindings: { who: {} } }, saveMetadata: async () => { throw new Error('offline'); }, verify: async () => ({ status: 'confirmed' }), scheduleReconcile: () => { scheduled = true; } });
+    assert.equal(result.status, 'indeterminate');
+    assert.deepEqual(current, base);
+    assert.equal(scheduled, true);
+});
+
 test('library mutations are serialized after failures', async () => {
     const events = [];
     const first = enqueueLibraryMutation(async () => { events.push('a'); throw new Error('no'); });
