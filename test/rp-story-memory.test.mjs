@@ -181,6 +181,16 @@ test('reports alias resolution status and rejects conflicted IDs before artifact
     assert.deepEqual(resolveArtifactIdAliasStatus(cyclic, 'first'), { status: 'cycle', canonicalId: null });
     assert.throws(() => addStoryArtifact(cyclic, { ...generated({ id: 'first' }), url: '/same.png' }), /cycle/i);
     assert.equal(cyclic.artifacts.first.prompt, 'prompt 1');
+
+    const fallbackId = buildStoryArtifactId({ item: { id: 'legacy-id', chatId: 'chat-b', messageId: 7 }, chatId: 'chat-b' });
+    const fallbackCollision = {
+        artifacts: {
+            target: { ...generated({ id: 'target', chatId: 'chat-a' }), aliases: ['legacy-id'] },
+            [fallbackId]: { ...generated({ id: fallbackId, chatId: 'chat-a' }), url: '/user/images/legacy-id.png' },
+            other: { ...generated({ id: 'other', chatId: 'chat-a' }), aliases: [fallbackId] },
+        },
+    };
+    assert.throws(() => addStoryArtifact(fallbackCollision, generated({ id: 'legacy-id', chatId: 'chat-b', messageId: 7 })), /ambiguous/i);
 });
 
 test('artifact IDs are unambiguous for delimiter-heavy chat/source values', () => {
