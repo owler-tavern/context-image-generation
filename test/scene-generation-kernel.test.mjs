@@ -141,7 +141,7 @@ test('kernel passes Task 4 adapter seams through capture, materialization, plan 
         capture: async (request) => (received.captureRequest = request, { captured: request }),
         collectReferences: async (snapshot, request) => (received.materialization = { snapshot, request }, { assets: { 'asset:avatar': 'AA==' } }),
         createPlan: (input) => (received.planInput = input, { id: 'plan:1', ...input }),
-        coordinate: async (key, run) => (received.key = key, run(new AbortController().signal)),
+        coordinate: async (key, run, plan) => (received.key = key, received.coordinatedPlan = plan, run(new AbortController().signal)),
         dispatch: async (plan, signal) => (received.dispatch = { plan, signal }, { imageData: 'AA==', mimeType: 'image/png' }),
     }));
 
@@ -151,6 +151,7 @@ test('kernel passes Task 4 adapter seams through capture, materialization, plan 
     assert.equal(received.materialization.snapshot, result.plan.snapshot);
     assert.equal(received.materialization.request, result.request);
     assert.equal(received.planInput.request, result.request);
+    assert.equal(received.coordinatedPlan, result.plan);
     assert.equal(received.dispatch.plan, result.plan);
     assert.equal(received.dispatch.signal.aborted, false);
 });

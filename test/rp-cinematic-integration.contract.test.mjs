@@ -17,14 +17,14 @@ test('cinematic automation is mounted into real chat lifecycle hooks and uses st
     assert.match(index, /observeCinematicMessage\(messageId\)/);
     assert.match(index, /buildSceneGenerationSnapshot\(/);
     assert.match(index, /getMessageFingerprint/);
-    assert.match(index, /attachGeneratedImage\(message, element, prompt/);
-    assert.match(index, /if \(result !== true\).*attachmentStatus: 'not-attached'/s);
     assert.match(index, /writeState: \(value, \{ chatId \} = \{\}\)/);
     assert.match(index, /readDurableState: \(\{ chatId \} = \{\}\)/);
     assert.match(index, /writeDurableState: \(value, \{ chatId \} = \{\}\)/);
     assert.match(index, /saveDurableState: async \(\) => \{ await saveSettings\(\); \}/);
     assert.match(index, /compactCinematicRuntimeState\(value\.cinematicAutomation\)/);
     assert.match(index, /cinematicRuntime\.stage/);
+    const runtime = index.slice(index.indexOf('async function createCinematicSurface'), index.indexOf('function renderDirectorSurface'));
+    assert.doesNotMatch(runtime, /attachGeneratedImage|dispatch:\s*async|generate:\s*async/u);
 });
 
 test('settings expose explicit cinematic controls and honest cost fallback', () => {
@@ -56,6 +56,7 @@ test('cinematic suggestions stage the next wand and never dispatch from the card
     assert.match(index, /Cinematic shot: \$\{chatPreferences\.stagedSuggestion\.shot\}/u);
     assert.match(index, /stagedSuggestion: null/u);
     assert.doesNotMatch(index, /cinematicRuntime\?\.approve/u);
+    assert.doesNotMatch(index, /Cinematic image generated/u);
     assert.doesNotMatch(settings, />Approve</u);
 });
 
@@ -92,9 +93,8 @@ test('previous image is a strict opt-in at capture and pending continuation is c
     assert.match(index, /buildReferenceMessageParts\(plan, referenceAssets\)/u);
 });
 
-test('disabled extras do not create new Story Memory or iteration provenance', () => {
-    assert.match(index, /const iterationFeatureForGeneration = extraStoryToolEnabled\('iteration'\) \? await ensureIterationFeature\(\) : null/u);
+test('generation may retain Story Memory facts but creates no new iteration provenance', () => {
     assert.match(index, /const storyMemoryFeatureForGeneration = extraStoryToolEnabled\('storyMemory'\) \? await ensureStoryMemoryFeature\(\) : null/u);
-    assert.match(index, /iterationFeatureForGeneration \? \{/u);
     assert.match(index, /storyMemoryFeatureForGeneration \? \{ __cigStoryMemoryFacts/u);
+    assert.doesNotMatch(index, /iterationFeatureForGeneration|__cigIterationArtifact/u);
 });

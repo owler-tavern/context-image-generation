@@ -11,70 +11,58 @@ import {
 
 test('previous from the first image stays at the first image', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'previous', currentIndex: 0, mediaLength: 3, generatePastLast: true, generationActive: false,
+        direction: 'previous', currentIndex: 0, mediaLength: 3,
     }), { action: 'stay', index: 0, reason: 'at-first-image' });
 });
 
 test('previous from a middle image navigates to the preceding existing image', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'previous', currentIndex: 2, mediaLength: 4, generatePastLast: true, generationActive: false,
+        direction: 'previous', currentIndex: 2, mediaLength: 4,
     }), { action: 'navigate', index: 1 });
 });
 
 test('next with a later existing image navigates without generation', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 1, mediaLength: 4, generatePastLast: true, generationActive: false,
+        direction: 'next', currentIndex: 1, mediaLength: 4,
     }), { action: 'navigate', index: 2 });
 });
 
-test('next at the newest image generates when overswipe generation is enabled', () => {
+test('next at the newest image stays at the boundary even when a legacy preference is supplied', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 2, mediaLength: 3, generatePastLast: true, generationActive: false,
-    }), { action: 'generate' });
-});
-
-test('next at the newest image stays put when overswipe generation is disabled', () => {
-    assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 2, mediaLength: 3, generatePastLast: false, generationActive: false,
-    }), { action: 'stay', index: 2, reason: 'generation-disabled' });
-});
-
-test('busy generation takes precedence over the overswipe setting', () => {
-    assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 2, mediaLength: 3, generatePastLast: true, generationActive: true,
-    }), { action: 'stay', index: 2, reason: 'generation-active' });
+        direction: 'next', currentIndex: 2, mediaLength: 3, generatePastLast: true,
+    }), { action: 'stay', index: 2, reason: 'at-last-image' });
 });
 
 test('single-image boundaries never wrap', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'previous', currentIndex: 0, mediaLength: 1, generatePastLast: true, generationActive: false,
+        direction: 'previous', currentIndex: 0, mediaLength: 1,
     }), { action: 'stay', index: 0, reason: 'at-first-image' });
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 0, mediaLength: 1, generatePastLast: false, generationActive: false,
-    }), { action: 'stay', index: 0, reason: 'generation-disabled' });
+        direction: 'next', currentIndex: 0, mediaLength: 1,
+    }), { action: 'stay', index: 0, reason: 'at-last-image' });
 });
 
 test('invalid or empty media is ignored', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 0, mediaLength: 0, generatePastLast: true, generationActive: false,
+        direction: 'next', currentIndex: 0, mediaLength: 0,
     }), { action: 'ignore', reason: 'no-media' });
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 0, mediaLength: '3', generatePastLast: true, generationActive: false,
+        direction: 'next', currentIndex: 0, mediaLength: '3',
     }), { action: 'ignore', reason: 'invalid-media-length' });
 });
 
 test('numeric index bounds are normalized before navigation', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'next', currentIndex: 99, mediaLength: 3, generatePastLast: false, generationActive: false,
-    }), { action: 'stay', index: 2, reason: 'generation-disabled' });
+        direction: 'next', currentIndex: 99, mediaLength: 3,
+    }), { action: 'stay', index: 2, reason: 'at-last-image' });
     assert.deepEqual(decideImageNavigation({
-        direction: 'previous', currentIndex: -4, mediaLength: 3, generatePastLast: false, generationActive: false,
+        direction: 'previous', currentIndex: -4, mediaLength: 3,
     }), { action: 'stay', index: 0, reason: 'at-first-image' });
 });
 
 test('unknown directions are ignored', () => {
     assert.deepEqual(decideImageNavigation({
-        direction: 'up', currentIndex: 0, mediaLength: 3, generatePastLast: true, generationActive: false,
+        direction: 'up', currentIndex: 0, mediaLength: 3,
     }), { action: 'ignore', reason: 'invalid-direction' });
 });
 
@@ -137,8 +125,6 @@ test('ordinary CIG navigation reconfigures replacement controls after the host n
         direction: 'next',
         currentIndex: 0,
         mediaLength: 2,
-        generatePastLast: true,
-        generationActive: false,
         schedule: (callback) => scheduled.push(callback),
         reconfigure: () => { replacement.keyboardReady = true; },
     });
@@ -152,11 +138,10 @@ test('ordinary CIG navigation reconfigures replacement controls after the host n
     assert.equal(replacement.keyboardReady, true);
 });
 
-test('non-CIG and busy image arrows cannot respectively reconfigure controls or start generation', () => {
+test('non-CIG arrows are ignored and newest-image navigation is consumed without generation', () => {
     const foreignEvent = gestureEvent('click');
     const busyEvent = gestureEvent('click');
     let schedules = 0;
-    let generations = 0;
 
     assert.deepEqual(handleImageArrowNavigation({
         owned: false,
@@ -164,11 +149,8 @@ test('non-CIG and busy image arrows cannot respectively reconfigure controls or 
         direction: 'next',
         currentIndex: 0,
         mediaLength: 2,
-        generatePastLast: true,
-        generationActive: false,
         schedule: () => { schedules += 1; },
         reconfigure: () => { schedules += 1; },
-        generate: () => { generations += 1; },
     }), { action: 'ignore', reason: 'not-cig-owned' });
 
     assert.deepEqual(handleImageArrowNavigation({
@@ -177,15 +159,12 @@ test('non-CIG and busy image arrows cannot respectively reconfigure controls or 
         direction: 'next',
         currentIndex: 1,
         mediaLength: 2,
-        generatePastLast: true,
-        generationActive: true,
         schedule: () => { schedules += 1; },
         reconfigure: () => { schedules += 1; },
-        generate: () => { generations += 1; },
-    }), { action: 'stay', index: 1, reason: 'generation-active' });
+        generate: () => { throw new Error('navigation must not generate'); },
+    }), { action: 'stay', index: 1, reason: 'at-last-image' });
 
     assert.equal(schedules, 0);
-    assert.equal(generations, 0);
     assert.equal(foreignEvent.defaultPrevented, false);
     assert.equal(foreignEvent.propagationStopped, false);
     assert.equal(busyEvent.defaultPrevented, true);

@@ -36,10 +36,10 @@ import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomMo
 import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
-import { attachGeneratedImageSafely } from './lib/rp-attachment.js';
-import { buildGenerationKey, captureMessageTarget, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
+import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
+import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter, createSlashEntryAdapter, createWandEntryAdapter } from './lib/scene-generation/delivery.js';
+import { buildGenerationKey, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
-import { captureAutoGenerationInput, validateAutoGenerationInput } from './lib/rp-auto.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
@@ -71,7 +71,7 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, clearChatIdentityPin, getChatAppearanceSource, getChatBinding, getChatCastOverrides, getChatIdentityPin, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatCastOverride, setChatIdentityPin, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedIterationArtifact, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
@@ -93,15 +93,7 @@ const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
 const STORY_MEMORY_SETTINGS_KEY = 'story_memory';
 const CINEMATIC_AUTOMATION_KEY = 'cinematicAutomation';
-const DIRECTOR_STATE_KEY = 'director';
 const optionalFeatureLoader = createOptionalFeatureLoader({
-    iteration: async () => {
-        const [domain, ui] = await Promise.all([
-            import('./lib/rp/iteration-domain.js'),
-            import('./lib/rp/iteration-ui.js'),
-        ]);
-        return { ...domain, ...ui };
-    },
     storyMemory: async () => {
         const [ui, runtime] = await Promise.all([
             import('./lib/rp/story-memory-ui.js'),
@@ -116,24 +108,12 @@ const optionalFeatureLoader = createOptionalFeatureLoader({
         ]);
         return { ...runtime, ...ui };
     },
-    director: async () => {
-        const [runtime, ui, cast] = await Promise.all([
-            import('./lib/rp/director-runtime.js'),
-            import('./lib/rp/director-ui.js'),
-            import('./lib/rp/director-cast.js'),
-        ]);
-        return { ...runtime, ...ui, ...cast };
-    },
 });
-let iterationFeature = null;
 let storyMemoryFeature = null;
 let cinematicFeature = null;
-let directorFeature = null;
 
-async function ensureIterationFeature() { iterationFeature = await optionalFeatureLoader.load('iteration'); return iterationFeature; }
 async function ensureStoryMemoryFeature() { storyMemoryFeature = await optionalFeatureLoader.load('storyMemory'); return storyMemoryFeature; }
 async function ensureCinematicFeature() { cinematicFeature = await optionalFeatureLoader.load('cinematic'); return cinematicFeature; }
-async function ensureDirectorFeature() { directorFeature = await optionalFeatureLoader.load('director'); return directorFeature; }
 const optionalFeatureError = (error, operation) => showGenerationError(error, operation);
 const storyMemoryLifecycle = createOptionalFeatureLifecycle({
     load: ensureStoryMemoryFeature,
@@ -146,12 +126,6 @@ const cinematicLifecycle = createOptionalFeatureLifecycle({
     setup: (feature) => createCinematicSurface(feature),
     teardown: () => { cinematicRuntime?.destroy?.(); cinematicRuntime = null; cinematicUiController = null; $('.cig_cinematic_suggestion').remove(); },
     onError: (error) => optionalFeatureError(error, 'Load Cinematic'),
-});
-const iterationLifecycle = createOptionalFeatureLifecycle({
-    load: ensureIterationFeature,
-    setup: (feature) => { feature.installIterationSurfaceStyles(document); },
-    teardown: () => { destroyIterationSurfaceMounts(); $('.cig_iteration_entry').remove(); },
-    onError: (error) => optionalFeatureError(error, 'Load Iteration'),
 });
 const DEFAULT_EXTRA_STORY_TOOLS = Object.freeze({ schema: 1, enabled: false, storyMemory: false, appearanceMemory: false, cinematic: false, iteration: false, gallery: false });
 
@@ -222,9 +196,6 @@ const generationCoordinator = createRunCoordinator();
 let currentGenerationRunId = null;
 let lastGenerationPlanInspection = null;
 let setupRuntimeIssue = null;
-const activeImageBoundaryGenerations = new Set();
-const iterationSurfaceMounts = new Map();
-const iterationInvocations = new Set();
 let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
 let storyMemoryLoadPromise = null;
@@ -232,9 +203,6 @@ let storyMemoryLoadCapture = null;
 let pendingStoryMemoryContinuation = null;
 let cinematicRuntime = null;
 let cinematicUiController = null;
-let directorRuntime = null;
-let directorUiController = null;
-let directorFocusCapture = null;
 let imagesCastSettingsStale = true;
 let pendingRecoveryScheduled = false;
 function galleryIsVisible() {
@@ -1158,29 +1126,6 @@ async function createCinematicSurface(featureOverride = null) {
                 settings,
             });
         },
-        validateRoute: async ({ target }) => {
-            const context = getContext();
-            const valid = validateMessageTarget({ target, currentChatId: context.chatId, currentChat: context.chat });
-            if (!valid.safe) return { allowed: false, status: 'stale', reason: valid.reason };
-            const currentSettings = extension_settings[extensionName] || {};
-            return currentSettings.provider && currentSettings.model ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: 'Image provider and model are not configured.' };
-        },
-        dispatch: async ({ suggestion, target }) => {
-            const context = getContext();
-            const messageId = Number(target.messageId);
-            const message = context.chat?.[messageId];
-            const element = $(`.mes[mesid="${messageId}"]`);
-            if (!message || !element.length) throw new Error('The suggested story message is no longer available.');
-            const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
-            const shot = suggestion.adjustments?.prompt || suggestion.proposedShot || '';
-            const prompt = shot ? `${message.mes}\n\nCinematic shot direction: ${shot}` : message.mes;
-            const result = await attachGeneratedImage(message, element, prompt, sender, messageId, null, target, 'cinematic-automation');
-            // attachGeneratedImage resolves to true only after media append and
-            // chat persistence succeed. False means stale/gallery-only or an
-            // otherwise non-terminal attachment, so it must release the plan.
-            if (result !== true) return { status: 'failed', attachmentStatus: 'not-attached', reason: 'The generated image was not attached to the story message.' };
-            return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
-        },
     });
     cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
     cinematicUiController = feature.createCinematicUiController({
@@ -1217,189 +1162,6 @@ async function createCinematicSurface(featureOverride = null) {
     });
     feature.installCinematicStyles(document);
     refreshCinematicSurface();
-}
-
-function renderDirectorSurface() {
-    $('.cig_director_panel').remove();
-    const panel = directorRuntime?.getState()?.panel;
-    if (!panel?.target?.messageId && panel?.messageId === undefined) return;
-    const messageElement = $(`.mes[mesid="${Number(panel.target?.messageId ?? panel.messageId)}"]`);
-    if (!messageElement.length) return;
-    if (!directorFeature) return;
-    const root = $(directorFeature.renderDirectorPanel(panel));
-    const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
-    if (anchor.length) anchor.after(root); else messageElement.append(root);
-}
-
-function directorFocusCaptureIsCurrent(capture) {
-    return Boolean(capture)
-        && String(getContext().chatId) === String(capture.chatId)
-        && chatLifecycleEpoch.isCurrent(capture.epoch);
-}
-
-function directorRouteReadiness(settings) {
-    const providerId = settings.provider || 'makersuite';
-    const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const providerUi = projectSelectedProviderUi(settings, providerId, settings.model, {
-        localEntries: getProviderModelEntries(settings, providerId),
-        discoveryEvidence: discoveryState.evidence,
-        discoveryWarning: discoveryState.warning,
-    });
-    const readiness = deriveSetupReadiness({ providerUi, providerId, modelId: settings.model, apiKey: getProviderApiKey(settings, providerId) });
-    if (readiness.state !== 'ready') return { ready: false, text: `Not ready: ${readiness.label}.` };
-    let route;
-    try { route = getSelectedModelRoute(settings); } catch { return { ready: false, text: 'Not ready: the selected provider route is unavailable.' }; }
-    if (!route.model || !route.transportId) return { ready: false, text: 'Not ready: the selected provider route is unavailable.' };
-    const preflightRoute = { providerId, modelId: settings.model, transportId: route.transportId };
-    if (modelNeedsExperimentalPreflight(route.model) && !isExperimentalPreflightAccepted(settings, preflightRoute)) return { ready: false, text: 'Not ready: confirm this model route in Advanced settings before generating.' };
-    const custom = getCustomConnection(settings, providerId);
-    if (custom) {
-        const evidence = getCustomConnectionStore(settings).evidence[custom.id];
-        if (!evidence || !['configured', 'verified'].includes(evidence.state)) return { ready: false, text: 'Not ready: test this custom connection and fetch its models first.' };
-        if (evidence.state === 'configured') return { ready: true, text: `Ready: ${providerId} / ${settings.model}; Generate will ask for the one-time route confirmation.` };
-    }
-    return { ready: true, text: `Ready: ${providerId} / ${settings.model}; route and required confirmations are current.` };
-}
-
-function directorPreview({ sourceMessage, focusText, target, options: directorOptions }) {
-    const context = getContext();
-    const settings = extension_settings[extensionName] || {};
-    const identities = getAppearanceIdentityChoices();
-    const sourcePreferences = appearanceSourcePreferences();
-    const personaIdentity = identities.find((identity) => identity.kind === 'user');
-    const recentContext = (context.chat || []).slice(Math.max(0, Number(target?.messageId) - 11), Number(target?.messageId));
-    const snapshot = buildSceneGenerationSnapshot({
-        selectedPassage: focusText || sourceMessage,
-        focusText,
-        clickedMessage: context.chat?.[Number(target?.messageId)] || { mes: sourceMessage },
-        recentContext,
-        identities,
-        priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
-        settings: {
-            framing_preference: directorOptions?.framing,
-            continuity_strength: directorOptions?.continuity,
-            custom_visual_instruction: directorOptions?.visualDirection,
-        },
-        castOverrides: Array.isArray(directorOptions?.castOverrides) ? directorOptions.castOverrides : [],
-    });
-    const truths = continuityTruths(identities);
-    const activeCharacter = context.characters?.[context.characterId];
-    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
-    const groupCharacterAvatars = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar)?.avatar || avatar);
-    const capability = getReferenceImageCapability(settings.provider || 'makersuite', settings.model);
-    const avatarReferences = capability && settings.use_avatars === true
-        ? resolveHostAvatarIdentityReferences({
-            identities,
-            activeCharacterAvatar: activeCharacter?.avatar,
-            personaAvatar: personaIdentity?.hostKey || user_avatar,
-            groupCharacterAvatars,
-            sourcePreferences,
-        })
-        : [];
-    const referenceCandidates = buildContinuityReferenceCandidates({
-        identities,
-        truths,
-        remembered: chat_metadata[CHAT_CANON_KEY]?.references || [],
-        avatarReferences,
-        includeDescriptions: settings.include_descriptions === true,
-        includeAvatars: settings.use_avatars === true,
-    });
-    const ready = projectContinuityShelf({ identities, truths, candidates: referenceCandidates, includeDescriptions: settings.include_descriptions === true, includeAvatars: settings.use_avatars === true });
-    const readyLabels = (ready.identities || []).filter((entry) => entry.sourceType && entry.sourceType !== 'none').map((entry) => `${entry.identityLabel}: ${entry.sourceType} ready`).slice(0, 6);
-    const appearanceSources = identities.filter((identity) => ['character', 'user'].includes(identity.kind)).map((identity) => {
-        const source = getChatAppearanceSource(migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]), identity.id, identity.kind === 'user' ? 'persona' : identity.kind);
-        const truth = truths.find((entry) => entry.identityId === identity.id);
-        return {
-            identityId: identity.id,
-            identityLabel: identity.label || identity.id,
-            sourceType: source?.sourceType || truth?.sourcePreference || 'auto',
-            ready: truth?.sourceType !== 'none',
-            pinned: Boolean(source),
-            ...(identity.kind === 'user' && source?.identityId !== `user:${user_avatar || 'display'}` ? { replaceIdentityId: `user:${user_avatar || 'display'}` } : {}),
-        };
-    });
-    const currentSettings = extension_settings[extensionName] || {};
-    const routeSummary = directorRouteReadiness(currentSettings).text;
-    return {
-        moment: snapshot.sourcePassage || focusText || sourceMessage,
-        inspection: snapshot.inspection?.lines || [],
-        castCandidates: directorFeature?.inferDirectorCast({ interpretation: snapshot.interpretation, identities }) || [],
-        referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
-        routeSummary,
-        budgetSummary: 'Exact provider cost is unavailable; one generation will be requested only when Generate is pressed.',
-        appearanceSources,
-    };
-}
-
-async function createDirectorSurface() {
-    let feature;
-    try {
-        feature = await ensureDirectorFeature();
-    } catch (error) {
-        showGenerationError(error, 'Load Director');
-        return;
-    }
-    const settings = extension_settings[extensionName];
-    directorRuntime = feature.createDirectorRuntime({
-        getChatId: () => getContext().chatId,
-        getEpoch: () => chatLifecycleEpoch.capture(),
-        readState: ({ chatId } = {}) => {
-            if (chatId && String(chatId) !== String(getContext().chatId)) return {};
-            return chat_metadata?.[CHAT_CANON_KEY]?.[DIRECTOR_STATE_KEY] || {};
-        },
-        writeState: (value, { chatId } = {}) => {
-            if (chatId && String(chatId) !== String(getContext().chatId)) return;
-            if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
-            chat_metadata[CHAT_CANON_KEY][DIRECTOR_STATE_KEY] = value[DIRECTOR_STATE_KEY];
-        },
-        saveChat: () => saveChatConditional(),
-        readDurableState: ({ chatId } = {}) => settings.director_sessions?.chats?.[String(chatId)] || null,
-        writeDurableState: (value, { chatId } = {}) => {
-            if (!chatId) return;
-            const store = settings.director_sessions;
-            store.chats = store.chats && typeof store.chats === 'object' && !Array.isArray(store.chats) ? store.chats : {};
-            store.chats[String(chatId)] = value;
-            const keys = Object.keys(store.chats);
-            for (const staleKey of keys.slice(0, Math.max(0, keys.length - 24))) delete store.chats[staleKey];
-        },
-        saveDurableState: async () => { await saveSettings(); },
-        buildPreview: directorPreview,
-        validateTarget: ({ target }) => validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] }),
-        validateRoute: async ({ target }) => {
-            const targetValidation = validateMessageTarget({ target, currentChatId: getContext().chatId, currentChat: getContext().chat || [] });
-            if (!targetValidation.safe) return { allowed: false, status: 'stale', reason: targetValidation.reason };
-            const settings = extension_settings[extensionName] || {};
-            const readiness = directorRouteReadiness(settings);
-            return readiness.ready ? { allowed: true } : { allowed: false, status: 'route-invalid', reason: readiness.text };
-        },
-        dispatch: async ({ sourceMessage, focusText, target, framing, continuity, visualDirection, castOverrides }) => {
-            const context = getContext();
-            const messageId = Number(target.messageId);
-            const message = context.chat?.[messageId];
-            const element = $(`.mes[mesid="${messageId}"]`);
-            if (!message || !element.length) throw new Error('The directed story message is no longer available.');
-            const sender = message.is_user ? `{{user}} (${name1 || 'User'})` : `{{char}} (${context.name2 || 'Character'})`;
-            const prompt = sourceMessage || message.mes || '';
-            const attached = await attachGeneratedImage(message, element, prompt, sender, messageId, focusText || null, target, 'director', { framing, continuity, visualDirection, castOverrides });
-            if (attached !== true) return { status: 'failed', reason: 'The image was not attached to this message. Your draft is still available.' };
-            return { status: 'completed', receipt: { attachmentStatus: 'attached' } };
-        },
-    });
-    directorRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-    directorUiController = feature.createDirectorUiController({
-        open: (payload) => directorRuntime.open(payload),
-        update: (payload) => directorRuntime.update(payload),
-        close: () => directorRuntime.close(),
-        generate: () => directorRuntime.generate(),
-        render: renderDirectorSurface,
-    });
-    if (typeof document !== 'undefined' && !document.getElementById('cig_director_styles')) {
-        const style = document.createElement('style');
-        style.id = 'cig_director_styles';
-        style.textContent = feature.DIRECTOR_UI_CSS;
-        document.head.appendChild(style);
-    }
-    renderDirectorSurface();
 }
 
 async function observeCinematicMessage(messageId) {
@@ -1503,12 +1265,6 @@ async function loadSettings() {
         cigSettings.extra_story_tools = extraStoryToolsChange.value;
         settingsMigrated = true;
     }
-    // Director drafts belonged to the retired per-message entry point. Do not
-    // surface or replay them after the settings-only product boundary.
-    if (Object.prototype.hasOwnProperty.call(cigSettings, 'director_sessions')) {
-        delete cigSettings.director_sessions;
-        settingsMigrated = true;
-    }
     if (!cigSettings.cinematic_automation || typeof cigSettings.cinematic_automation !== 'object' || Array.isArray(cigSettings.cinematic_automation)) {
         cigSettings.cinematic_automation = { ...defaultSettings.cinematic_automation };
         settingsMigrated = true;
@@ -1585,8 +1341,6 @@ async function loadSettings() {
     $('#cig_use_avatars').prop('checked', extension_settings[extensionName].use_avatars);
     $('#cig_include_descriptions').prop('checked', extension_settings[extensionName].include_descriptions);
     $('#cig_use_previous_image').prop('checked', extension_settings[extensionName].use_previous_image);
-    $('#cig_regenerate_on_swipe').prop('checked', extension_settings[extensionName].regenerate_on_swipe);
-    $('#cig_auto_generate').val(extension_settings[extensionName].auto_generate);
     $('#cig_message_depth').val(extension_settings[extensionName].message_depth);
     syncChatWandPreferenceControls();
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
@@ -1865,9 +1619,7 @@ async function confirmCustomConnectionRoute(settings, invocation) {
         throw new Error('Test and fetch models before generating through this custom connection.');
     }
     if (evidence.state === 'verified') return { accepted: true, confirmedRevision: revision };
-    if (!['settings', 'wand', 'slash', 'director'].includes(invocation)) {
-        throw new Error('Configured custom connections cannot run from automation, swipe, or background generation.');
-    }
+    if (!['wand', 'slash'].includes(invocation)) throw new Error(`Unsupported generation source: ${invocation || 'missing'}`);
     const projection = projectCustomConnectionEditor(connection, {
         credentialConfigured: Boolean(getCustomConnectionKey(settings, connection)),
         evidence,
@@ -1883,7 +1635,7 @@ async function confirmCustomConnectionRoute(settings, invocation) {
     return { accepted: true, confirmedRevision: revision };
 }
 
-function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', routeConfirmation = {}, continuation = null, generationOverrides = null) {
+function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation, routeConfirmation = {}, continuation = null) {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
     const modelId = settings.model;
@@ -1956,14 +1708,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { stagedSuggestion: null });
         void saveChatConditional();
     }
-    if (generationOverrides && typeof generationOverrides === 'object') {
-        if (typeof generationOverrides.framing === 'string') settingsSnapshot.framing_preference = generationOverrides.framing;
-        if (typeof generationOverrides.continuity === 'string') settingsSnapshot.continuity_strength = generationOverrides.continuity;
-        if (typeof generationOverrides.visualDirection === 'string') settingsSnapshot.custom_visual_instruction = generationOverrides.visualDirection.slice(0, 1000);
-    }
-    const effectiveCastOverrides = Array.isArray(generationOverrides?.castOverrides)
-        ? generationOverrides.castOverrides
-        : invocation === 'wand' ? chatCastPreferences() : [];
+    const effectiveCastOverrides = invocation === 'wand' ? chatCastPreferences() : [];
     const currentChatId = String(getContext().chatId || '');
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery)
         ? settingsSnapshot.gallery.filter((item) => currentChatId && String(item?.chatId || '') === currentChatId)
@@ -2069,10 +1814,9 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         options: {
             aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
             thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search,
-            ...(generationOverrides ? { framing: settingsSnapshot.framing_preference, continuity: settingsSnapshot.continuity_strength, visualDirection: settingsSnapshot.custom_visual_instruction } : {}),
             ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}),
         },
-        policy: { source: invocation === 'automation' ? 'automation' : 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
+        policy: { source: 'manual', preflightAccepted, routeConfirmationAccepted: routeConfirmation.accepted === true },
     };
     return Object.freeze({
         planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot,
@@ -2102,8 +1846,7 @@ async function materializeSnapshotAssets(snapshot) {
     return assets;
 }
 
-// Compatibility signature: buildMessages(prompt, sender, messageId, focusText, invocation).
-async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation = 'settings', plan = null, referenceAssets = {}) {
+async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation, plan = null, referenceAssets = {}) {
     if (!plan) throw new TypeError('buildMessages requires a captured GenerationPlan.');
     const contentParts = [];
     if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
@@ -2135,61 +1878,24 @@ function getGenerationKey(prompt, messageId, target = null) {
     });
 }
 
-async function generateImageFromPrompt(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, generationOverrides = null) {
-    return await generateImageFromPromptInternal(prompt, sender, messageId, focusText, target, invocation, finalize, iterationRecipe, generationCoordinator, null, generationOverrides);
+async function captureSceneGenerationRequest(request) {
+    const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], request.source);
+    const snapshot = captureGenerationSnapshot(
+        request.prompt,
+        request.sender,
+        request.messageId ?? null,
+        request.focusText ?? null,
+        request.target ?? null,
+        request.source,
+        routeConfirmation,
+        pendingStoryMemoryContinuation,
+    );
+    const storyMemoryFeatureForGeneration = extraStoryToolEnabled('storyMemory') ? await ensureStoryMemoryFeature() : null;
+    return Object.freeze({ ...snapshot, request, storyMemoryFeatureForGeneration });
 }
 
-function assertExactIterationRoute(snapshot, recipe) {
-    const savedRoute = recipe?.route || {};
-    const savedModel = recipe?.model || {};
-    const current = snapshot?.planInput?.resolved || {};
-      const expected = {
-          providerId: savedRoute.providerId || savedModel.providerId,
-          modelId: savedRoute.modelId || savedModel.modelId,
-          transportId: savedRoute.transportId || savedRoute.transport || savedModel.transportId,
-          connectionId: savedRoute.connectionId || savedModel.connectionId,
-      };
-      if (savedRoute.endpointClass || savedModel.endpointClass) expected.endpointClass = savedRoute.endpointClass || savedModel.endpointClass;
-    if (!expected.providerId || !expected.modelId || !expected.transportId || !expected.connectionId) throw new Error('Saved recipe route is incomplete; reopen the original image to capture a fresh route.');
-    for (const key of Object.keys(expected)) {
-        if (String(current[key] || '') !== String(expected[key])) throw new Error('Saved recipe route is no longer executable; choose the current settings to generate a new image.');
-    }
-    if (snapshot.planInput.policy?.routeConfirmationAccepted !== true) throw new Error('Saved recipe route is no longer executable because route confirmation is stale.');
-}
-
-async function generateImageFromPromptInternal(prompt, sender = null, messageId = null, focusText = null, target = null, invocation = 'settings', finalize = null, iterationRecipe = null, coordinatorOverride = generationCoordinator, executionSignal = null, generationOverrides = null) {
-    let snapshot;
-    try {
-        // Legacy resolver shape: let providerRoute = resolveProviderRoute(selectedProvider, settings.model);
-        const routeConfirmation = await confirmCustomConnectionRoute(extension_settings[extensionName], invocation);
-        snapshot = captureGenerationSnapshot(prompt, sender, messageId, focusText, target, invocation, routeConfirmation, pendingStoryMemoryContinuation, generationOverrides);
-        if (iterationRecipe && typeof iterationRecipe === 'object') {
-            assertExactIterationRoute(snapshot, iterationRecipe);
-            const savedReferences = Array.isArray(iterationRecipe.references) ? cloneSnapshot(iterationRecipe.references) : [];
-            const savedCanon = cloneSnapshot(iterationRecipe.canonSnapshot || {}) || {};
-            snapshot = {
-                ...snapshot,
-                referenceAssets: {
-                    ...(snapshot.referenceAssets || {}),
-                    ...(savedCanon.assets || {}),
-                    ...Object.fromEntries(Object.entries(materializeAppearanceAssets(extension_settings[extensionName].rp_library, extension_settings[extensionName].gallery || []).assets || {})
-                        .filter(([assetId]) => savedReferences.some((reference) => String(reference?.assetId || '') === assetId))),
-                },
-                referenceCandidates: savedReferences,
-                planInput: {
-                    ...snapshot.planInput,
-                    provider: { ...snapshot.planInput.provider, providerId: iterationRecipe.model?.providerId, modelId: iterationRecipe.model?.modelId, transport: iterationRecipe.model?.transportId },
-                    resolved: { ...snapshot.planInput.resolved, ...cloneSnapshot(iterationRecipe.route), modelId: iterationRecipe.model?.modelId || snapshot.planInput.resolved.modelId },
-                    prompt: { ...snapshot.planInput.prompt, sourceMessage: iterationRecipe.sourcePassage?.text || snapshot.planInput.prompt.sourceMessage, messageContent: iterationRecipe.effectivePrompt || snapshot.planInput.prompt.messageContent },
-                    references: savedReferences,
-                    canonSnapshot: { ...savedCanon, references: [] },
-                    referencePlan: { selected: savedReferences, omitted: [] },
-                    options: cloneSnapshot(iterationRecipe.options || {}),
-                },
-            };
-            const missingSavedReference = savedReferences.find((reference) => reference?.assetId && !snapshot.referenceAssets?.[reference.assetId]);
-            if (missingSavedReference) throw new Error(`Saved recipe reference ${missingSavedReference.id || missingSavedReference.assetId} is unavailable; generation is blocked.`);
-        }
+async function collectSceneGenerationReferences(snapshot) {
+        const { prompt, sender = null, messageId = null, focusText = null, target = null, source: invocation } = snapshot.request;
         notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         const materializedAssets = await materializeSnapshotAssets(snapshot);
         const capturedBaseReferences = [
@@ -2238,32 +1944,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             referenceOmissions: cloneSnapshot(plan.referenceOmissions || []),
             messages,
         });
-        const capturedIterationPlan = {
-            planId: dispatchedPlan.id,
-            revision: dispatchedPlan.resolved.routeEvidence?.revision || `${dispatchedPlan.resolved.providerId}:${dispatchedPlan.resolved.modelId}:${dispatchedPlan.resolved.transportId}`,
-            routeResolved: true,
-            routeConfirmationAccepted: dispatchedPlan.policy.routeConfirmationAccepted === true,
-            capabilities: cloneSnapshot(dispatchedPlan.resolved.capabilities || {}),
-            generationPlan: cloneSnapshot(dispatchedPlan),
-        };
-        const iterationFeatureForGeneration = extraStoryToolEnabled('iteration') ? await ensureIterationFeature() : null;
-        const storyMemoryFeatureForGeneration = extraStoryToolEnabled('storyMemory') ? await ensureStoryMemoryFeature() : null;
-        const capturedIterationArtifact = iterationFeatureForGeneration ? {
-            ...iterationFeatureForGeneration.createIterationArtifact({
-                artifactId: `artifact:${dispatchedPlan.id}`,
-                sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId, userVisible: true },
-                effectivePrompt: dispatchedPlan.prompt.messageContent || dispatchedPlan.prompt.sourceMessage,
-                references: dispatchedPlan.references,
-                model: dispatchedPlan.resolved,
-                route: dispatchedPlan.resolved,
-                options: dispatchedPlan.options,
-                canonSnapshot: dispatchedPlan.canonSnapshot,
-            }),
-            generationPlan: capturedIterationPlan,
-            referenceReceipt: compactReferenceReceipt(dispatchedPlan),
-            target: cloneSnapshot(target),
-            sender: sender || '',
-        } : null;
+        const storyMemoryFeatureForGeneration = snapshot.storyMemoryFeatureForGeneration;
         const continuitySurface = cloneSnapshot({
             schema: 1,
             invocation,
@@ -2291,21 +1972,35 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             kind: snapshot.providerRoute?.credentialKey ? 'browser-api-key' : 'sillytavern-proxy',
             enabled: true,
         };
-        const executeGeneration = async (signal) => {
-            const generated = await dispatchProviderRoute({
-                plan: dispatchedPlan,
-                connection,
-                signal,
-                transportContext: {
-                    apiKey: snapshot.apiKey,
-                    messages,
-                    reverseProxy: snapshot.reverseProxy,
-                    fetchImpl: fetch,
-                    getRequestHeaders,
-                    mapAspectRatioToSize,
-                },
-            });
-            if (snapshot.customConnection) {
+        return { plan: dispatchedPlan, snapshot, messages, connection, continuitySurface, storyMemoryFeatureForGeneration };
+}
+
+const sceneGenerationDispatchContexts = new WeakMap();
+
+function createSceneGenerationPlanAdapter({ references }) {
+    sceneGenerationDispatchContexts.set(references.plan, references);
+    return references.plan;
+}
+
+async function dispatchSceneGenerationPlan(dispatchedPlan, signal) {
+    const context = sceneGenerationDispatchContexts.get(dispatchedPlan);
+    if (!context) throw new Error('Scene generation dispatch context is unavailable.');
+    const { snapshot, messages, connection, continuitySurface, storyMemoryFeatureForGeneration } = context;
+    try {
+        const generated = await dispatchProviderRoute({
+            plan: dispatchedPlan,
+            connection,
+            signal,
+            transportContext: {
+                apiKey: snapshot.apiKey,
+                messages,
+                reverseProxy: snapshot.reverseProxy,
+                fetchImpl: fetch,
+                getRequestHeaders,
+                mapAspectRatioToSize,
+            },
+        });
+        if (snapshot.customConnection) {
                 const currentSettings = extension_settings[extensionName];
                 const currentStore = getCustomConnectionStore(currentSettings);
                 const promoted = promoteCustomConnectionEvidence({
@@ -2335,31 +2030,35 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                     saveSettingsDebounced();
                     renderCustomConnectionEditor();
                 }
+        }
+        return generated && typeof generated === 'object'
+            ? {
+                ...generated,
+                __cigContinuitySnapshot: continuitySurface,
+                __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene),
+                __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state),
+                ...(storyMemoryFeatureForGeneration ? { __cigStoryMemoryFacts: storyMemoryFeatureForGeneration.buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state) } : {}),
             }
-            const generatedWithContinuity = generated && typeof generated === 'object'
-                ? {
-                    ...generated,
-                    __cigContinuitySnapshot: continuitySurface,
-                    __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene),
-                    __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state),
-                    ...(storyMemoryFeatureForGeneration ? { __cigStoryMemoryFacts: storyMemoryFeatureForGeneration.buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state) } : {}),
-                    ...(capturedIterationArtifact ? { __cigIterationArtifact: capturedIterationArtifact } : {}),
-                }
-                : generated;
-            if (typeof finalize !== 'function') return generatedWithContinuity;
-            const persisted = await finalize(generatedWithContinuity, signal);
-            return persisted?.persistence?.stale ? { ...persisted, stale: true } : persisted;
-        };
-        const execution = coordinatorOverride
-            ? coordinatorOverride.enqueue(dispatchedPlan, executeGeneration)
-            : executeGeneration(executionSignal || new AbortController().signal);
-        currentGenerationRunId = execution.runId || currentGenerationRunId;
-        $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
-        return await execution;
-    } catch (error) {
-        throw attachNormalizedProviderError(error, { providerId: snapshot?.planInput?.resolved?.providerId || 'unknown', modelId: snapshot?.planInput?.resolved?.modelId });
+            : generated;
+    } finally {
+        sceneGenerationDispatchContexts.delete(dispatchedPlan);
     }
 }
+
+const sceneGenerationKernel = createSceneGenerationKernel({
+    capture: captureSceneGenerationRequest,
+    collectReferences: collectSceneGenerationReferences,
+    createPlan: createSceneGenerationPlanAdapter,
+    coordinate: (_key, run, plan) => {
+        const execution = generationCoordinator.enqueue(plan, run);
+        currentGenerationRunId = execution.runId || currentGenerationRunId;
+        $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
+        return execution;
+    },
+    dispatch: dispatchSceneGenerationPlan,
+    generationKey: (request) => getGenerationKey(request.prompt, request.messageId ?? null, request.target ?? null),
+    normalizeError: (error) => attachNormalizedProviderError(error, { providerId: error?.providerId || 'unknown', modelId: error?.modelId }),
+});
 // Resolve the <img> src for a gallery item. Supports new file-based items ({url})
 // and legacy base64 items ({imageData}) so pre-existing galleries keep working.
 function galleryItemSrc(item) {
@@ -3573,10 +3272,8 @@ async function setExtraStoryTools(patch = {}) {
     }
     if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.enable();
     else await cinematicLifecycle.disable();
-    if (!extraStoryToolEnabled('iteration')) await iterationLifecycle.disable();
     if (!extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (!extraStoryToolEnabled('gallery')) galleryRenderState.markDirty();
-    if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
     if (extraStoryToolEnabled('gallery')) galleryRenderState.refresh({ force: true });
     if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
@@ -3658,7 +3355,7 @@ function renderAppearanceList(lifecycleView = null) {
     }
 }
 
-async function cigMessageButton($icon, { captureSelection = true, generationInput = null, invocation = 'wand' } = {}) {
+async function cigMessageButton($icon, { captureSelection = true, generationInput = null } = {}) {
     const context = getContext();
 
     if ($icon.hasClass('cig_busy')) {
@@ -3693,12 +3390,30 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
         sender,
         captureSelection,
     });
+    const attachmentLifecycleEpoch = chatLifecycleEpoch.capture();
+    const stagedContinuationAtStart = pendingStoryMemoryContinuation ? cloneSnapshot(pendingStoryMemoryContinuation) : null;
 
     setBusyState($icon, true, { busyClass: 'cig_busy', busyTitle: 'Generating image…' });
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
-        await attachGeneratedImage(message, messageElement, prompt, sender, messageId, capturedInput.focusText, capturedInput.target, invocation);
+        const attached = await wandGenerationEntry.generate({
+            prompt,
+            sender,
+            messageId,
+            focusText: capturedInput.focusText,
+            target: capturedInput.target,
+            lifecycleEpoch: attachmentLifecycleEpoch,
+        });
+        if (attached === true && stagedContinuationAtStart
+            && pendingStoryMemoryContinuation?.chatId === stagedContinuationAtStart.chatId
+            && pendingStoryMemoryContinuation?.epoch === stagedContinuationAtStart.epoch
+            && pendingStoryMemoryContinuation?.artifactId === stagedContinuationAtStart.artifactId
+            && pendingStoryMemoryContinuation?.stageToken === stagedContinuationAtStart.stageToken
+            && String(getContext().chatId || '') === String(stagedContinuationAtStart.chatId || '')
+            && chatLifecycleEpoch.isCurrent(attachmentLifecycleEpoch)) {
+            pendingStoryMemoryContinuation = null;
+        }
     } catch (error) {
         showGenerationError(error);
     } finally {
@@ -3707,24 +3422,13 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
     }
 }
 
-// Generate an image for a message and attach it to that message's media array.
-// Shared by the wand button and the swipe-to-regenerate handler.
-async function attachGeneratedImage(message, messageElement, prompt, sender, messageId, focusText = null, target = null, invocation = 'wand', generationOverrides = null) {
-    const effectiveTarget = target || captureMessageTarget({
-        chatId: getContext().chatId,
-        messageId,
-        message,
-    });
-    const attachmentLifecycleEpoch = chatLifecycleEpoch.capture();
-    const stagedContinuationAtStart = pendingStoryMemoryContinuation ? cloneSnapshot(pendingStoryMemoryContinuation) : null;
+function createMessageDeliveryDependencies(request) {
+    const effectiveTarget = request.target;
+    const messageId = request.messageId;
+    const attachmentLifecycleEpoch = request.lifecycleEpoch;
     let currentMessageElement = null;
 
-    const attached = await attachGeneratedImageSafely({
-        target: effectiveTarget,
-        prompt,
-        sender,
-        focusText,
-        generate: ({ finalize } = {}) => generateImageFromPrompt(prompt, sender, messageId, focusText, effectiveTarget, invocation, finalize, null, generationOverrides),
+    return {
         saveImage: async (imageData) => {
             const fileName = `cig_${Date.now()}`;
             const filePath = await saveBase64AsFile(imageData, extensionName, fileName, 'png');
@@ -3743,7 +3447,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
             if (currentMessageElement.length === 0) return { safe: false, reason: 'unavailable' };
             return validation;
         },
-        appendMedia: ({ result, storedIterationArtifact, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
+        appendMedia: ({ result, filePath: savedPath, prompt: sourcePrompt, message: currentMessage }) => {
             const previousExtra = currentMessage.extra && typeof currentMessage.extra === 'object'
                 ? {
                     ...currentMessage.extra,
@@ -3769,7 +3473,6 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
                 ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
                 ...(Array.isArray(result.__cigStoryMemoryFacts) && result.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(result.__cigStoryMemoryFacts) } : {}),
-                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: storedIterationArtifact || result.__cigIterationArtifact } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
@@ -3822,22 +3525,13 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         addToGallery,
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
         rollbackMedia: (rollback) => rollback?.(),
-        sanitizeIterationArtifact: (artifact) => {
-            if (!iterationFeature) throw new Error('Iteration artifact sanitizer is unavailable.');
-            return iterationFeature.sanitizeIterationArtifactForStorage(artifact);
-        },
-    });
-    if (attached === true && invocation === 'wand' && stagedContinuationAtStart
-        && pendingStoryMemoryContinuation?.chatId === stagedContinuationAtStart.chatId
-        && pendingStoryMemoryContinuation?.epoch === stagedContinuationAtStart.epoch
-        && pendingStoryMemoryContinuation?.artifactId === stagedContinuationAtStart.artifactId
-        && pendingStoryMemoryContinuation?.stageToken === stagedContinuationAtStart.stageToken
-        && String(getContext().chatId || '') === String(stagedContinuationAtStart.chatId || '')
-        && chatLifecycleEpoch.isCurrent(attachmentLifecycleEpoch)) {
-        pendingStoryMemoryContinuation = null;
-    }
-    return attached;
+    };
 }
+
+const wandGenerationDelivery = {
+    deliver: (result) => createMessageDeliveryAdapter(createMessageDeliveryDependencies(result.request)).deliver(result),
+};
+const wandGenerationEntry = createWandEntryAdapter({ kernel: sceneGenerationKernel, delivery: wandGenerationDelivery });
 
 function isCigOwnedMedia(media) {
     return media?.cig_owner === extensionName
@@ -3854,228 +3548,6 @@ function activeMediaForMessage(message) {
     return { media, index, item: media[index] };
 }
 
-function iterationSourceArtifact(message, activeMedia, feature) {
-    const item = activeMedia?.item || {};
-    if (item.cig_iteration_artifact?.artifactId) return { ...cloneSnapshot(item.cig_iteration_artifact), mediaUrl: item.url || null };
-    const legacy = feature.createIterationArtifact({
-        artifactId: `artifact:legacy:${activeMedia?.index ?? 0}`,
-        sourcePassage: { text: item.title || '' },
-        effectivePrompt: item.title || '',
-        references: [], model: {}, route: {}, options: {}, canonSnapshot: {},
-    });
-    return { ...legacy, mediaUrl: item.url || null, target: { chatId: getContext().chatId, messageId: Number(message?.mesid ?? activeMedia?.item?.messageId ?? 0) }, sender: message?.is_user ? `{{user}} (${message.name || name1 || 'User'})` : `{{char}} (${message?.name || getContext().name2 || 'Character'})` };
-}
-
-function iterationGenerationPlan(sourceArtifact) {
-    return sourceArtifact?.generationPlan || null;
-}
-
-async function iterationArtifactForStorage(artifact, plan) {
-    const feature = iterationFeature || await ensureIterationFeature();
-    return feature.sanitizeIterationArtifactForStorage({ ...artifact, generationPlan: plan?.generationPlan || artifact?.generationPlan });
-}
-
-async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
-    if (!extraStoryToolEnabled('iteration')) return { status: 'disabled', reason: 'Post-image Improve tools are off.' };
-    await ensureIterationFeature();
-    const target = originalArtifact?.target || artifact?.target;
-    const currentContext = getContext();
-    const messageId = Number(target?.messageId);
-    const message = currentContext.chat?.[messageId];
-    if (!target?.chatId || !Number.isInteger(messageId) || !message || currentContext.chatId !== target.chatId || !artifact?.imageData) return { status: 'confirmed-absent' };
-    const messageElement = $(`.mes[mesid="${messageId}"]`);
-    if (!messageElement.length) return { status: 'confirmed-absent' };
-    const filePath = await saveBase64AsFile(artifact.imageData, extensionName, `cig_iteration_${Date.now()}`, 'png');
-    const previousExtra = cloneSnapshot(message.extra);
-    if (!message.extra || typeof message.extra !== 'object') message.extra = {};
-    if (!Array.isArray(message.extra.media)) message.extra.media = [];
-    message.extra.media.push({
-        url: filePath,
-        type: MEDIA_TYPE.IMAGE,
-        title: String(artifact.effectivePrompt || '').slice(0, 100),
-        source: MEDIA_SOURCE.GENERATED,
-        cig_owner: extensionName,
-        ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
-        ...((Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.used) || Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.omitted) || Array.isArray(artifact.referenceReceipt?.used) || Array.isArray(artifact.referenceReceipt?.omitted))
-            ? { cig_continuity_snapshot: { schema: 1, referenceReceipt: compactReferenceReceipt(artifact.__cigContinuitySnapshot?.referenceReceipt || artifact.referenceReceipt) } }
-            : {}),
-        cig_iteration_artifact: await iterationArtifactForStorage(artifact, plan),
-        cig_iteration_persistence: { planId: plan.planId, invocationId: plan.invocationId },
-    });
-    message.extra.media_index = message.extra.media.length - 1;
-    message.extra.inline_image = true;
-    appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
-    const captured = { chatId: target.chatId, epoch: chatLifecycleEpoch.capture() };
-    const saved = await saveChatForCapturedTarget(captured, target);
-    if (!saved?.saved) {
-        message.extra = previousExtra;
-        appendMediaToMessage(message, messageElement, SCROLL_BEHAVIOR.KEEP);
-        return saved;
-    }
-    await addToGallery(artifact.imageData, artifact.effectivePrompt || '', messageId, filePath, {
-        iterationArtifact: await iterationArtifactForStorage(artifact, plan),
-        ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { storyMemoryFacts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
-        source: 'iteration', chatId: target.chatId, messageId,
-    });
-    await renderIterationActionSurface(messageElement, message);
-    return { status: 'confirmed', artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId };
-}
-
-function iterationDispatchCoordinator(sourceArtifact) {
-    return {
-        enqueue(iterationPlan, execute) {
-            const captured = iterationGenerationPlan(sourceArtifact) || {};
-            const base = captured.generationPlan || captured;
-            const coordinatorPlan = {
-                ...cloneSnapshot(base),
-                id: `iteration:${iterationPlan.planId}`,
-                idempotencyKey: `iteration:${iterationPlan.planId}`,
-                target: cloneSnapshot(sourceArtifact.target),
-            };
-            return generationCoordinator.enqueue(coordinatorPlan, execute);
-        },
-    };
-}
-
-async function dispatchIterationPlan(plan, signal) {
-    const source = plan.sourceArtifact;
-    const artifact = plan.artifacts?.[0] || source;
-    const target = source.target;
-    const sourceMessage = artifact.effectivePrompt || artifact.sourcePassage?.text;
-    const generated = await generateImageFromPromptInternal(sourceMessage, source.sender || null, target?.messageId ?? null, null, target, 'wand', null, artifact, null, signal);
-    if (!generated?.imageData) throw new Error('Iteration generation returned no image.');
-    return {
-        status: 'completed',
-        planId: plan.planId,
-        invocationId: plan.invocationId,
-        outputCount: 1,
-        artifacts: [{
-            ...plan.artifacts[0],
-            imageData: generated.imageData,
-            ...((Array.isArray(generated.__cigContinuitySnapshot?.referenceReceipt?.used) || Array.isArray(generated.__cigContinuitySnapshot?.referenceReceipt?.omitted))
-                ? { referenceReceipt: compactReferenceReceipt(generated.__cigContinuitySnapshot.referenceReceipt) }
-                : {}),
-            ...(Array.isArray(generated.__cigStoryMemoryFacts) && generated.__cigStoryMemoryFacts.length
-                ? { __cigStoryMemoryFacts: cloneSnapshot(generated.__cigStoryMemoryFacts) }
-                : {}),
-        }],
-        signal,
-    };
-}
-
-async function persistIterationCanonicalRoles({ sourceArtifact, mutation }) {
-    const roles = mutation?.roles || {};
-    if (Object.keys(roles).some((role) => role !== 'activeLook') || !roles.activeLook?.identityId) throw new Error('Only the active character look can be promoted from an iteration image.');
-    if (!sourceArtifact.mediaUrl) throw new Error('The current image cannot be read for canonical promotion.');
-    const identity = getAppearanceIdentityChoices().find((entry) => entry.id === roles.activeLook.identityId);
-    if (!identity) throw new Error('The selected canonical identity is unavailable.');
-    const captured = { chatId: sourceArtifact.target?.chatId, epoch: chatLifecycleEpoch.capture() };
-    const item = { id: sourceArtifact.artifactId, url: sourceArtifact.mediaUrl, prompt: sourceArtifact.effectivePrompt || 'Saved appearance' };
-    const activation = await runRememberAppearance({
-        captured, identity, label: 'Canonical look', item,
-        io: {
-            isCurrent: visibleCanonCaptureIsCurrent,
-            runExclusive: (operation) => enqueueLibraryMutation(operation),
-            readLibrary: async () => {
-                const authoritative = await readPersistedExtensionLibrary({ fetchImpl: fetch, getHeaders: getRequestHeaders });
-                if (authoritative.status === 'confirmed') extension_settings[extensionName].rp_library = migrateAppearanceLibrary(authoritative.library);
-                return authoritative;
-            },
-            readDataUrl: async (galleryItem) => {
-                const response = await fetch(galleryItem.url);
-                if (!response.ok) throw new Error('The current image could not be read.');
-                const blob = await response.blob();
-                return getBase64Async(blob);
-            },
-            saveBase64: (data, folder, filename, extension) => saveBase64AsFile(data, folder, filename, extension),
-            saveLibrary: async (library) => { extension_settings[extensionName].rp_library = library; await saveSettings(); },
-            verifyLibrary: (revision) => verifyPersistedExtensionLibrary({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
-            deleteAppearanceFile: (url) => deleteAppearanceAssetFile(url, fetch, getRequestHeaders),
-            persistOrphanCleanup: ({ library, url }) => persistOrphanCleanupRetry(library, url),
-            setLocalLibrary: (library) => { extension_settings[extensionName].rp_library = library; },
-            scheduleLibraryReconciliation: ({ operationId, revision }) => scheduleLibraryPromotionReconciliation(operationId, revision),
-            getChatCanon: () => chat_metadata[CHAT_CANON_KEY],
-            persistChat: ({ candidate, activeLookId }) => persistChatCanonChange({ captured, candidate, identityId: identity.id, activeLookId }),
-            uuid: () => crypto.randomUUID(),
-            now: () => Date.now(),
-        },
-    });
-    if (activation.status !== 'confirmed') throw new Error(activation.message || 'Canonical look promotion was not confirmed.');
-    return { status: 'confirmed', lookId: activation.promoted?.look?.id || null, identityId: identity.id, activation };
-}
-
-async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, persisted }) {
-    const identityId = mutation?.roles?.activeLook?.identityId;
-    if (!identityId || !persisted?.lookId) return { status: 'confirmed-absent', mutation: cloneSnapshot(mutation), planId: plan.planId, invocationId: plan.invocationId };
-    const result = await verifyPersistedChatBinding({
-        target: { chatId: sourceArtifact.target?.chatId, identityId, activeLookId: persisted.lookId, expectedRevision: chat_metadata[CHAT_CANON_KEY]?.revision },
-        fetchImpl: fetch,
-        getHeaders: getRequestHeaders,
-    });
-    return { status: result.status, mutation: cloneSnapshot(mutation), role: 'activeLook', identityId, lookId: persisted.lookId, planId: plan.planId, invocationId: plan.invocationId };
-}
-
-async function renderIterationActionSurface(messageElement, messageOverride = null) {
-    if (!messageElement?.length) return;
-    messageElement.find('.cig_iteration_entry').remove();
-    if (!extraStoryToolEnabled('iteration')) return;
-    const lifecycle = await iterationLifecycle.enable();
-    if (lifecycle.status !== 'ready' || !extraStoryToolEnabled('iteration')) return;
-    const feature = iterationFeature;
-    const messageId = Number(messageElement.attr('mesid'));
-    const message = messageOverride || getContext().chat?.[messageId];
-    const activeMedia = activeMediaForMessage(message);
-    const key = `${getContext().chatId || 'unknown-chat'}:${messageId}`;
-    const previous = iterationSurfaceMounts.get(key);
-    previous?.destroy?.();
-    iterationSurfaceMounts.delete(key);
-    if (!activeMedia || !isCigOwnedMedia(activeMedia.item)) return;
-    const root = $('<section class="cig_iteration_entry" aria-label="Improve generated image"></section>');
-    const button = $('<button type="button" class="menu_button cig_iteration_improve" data-cig-iteration-open="true" data-cig-iteration-improve="true" style="min-height:44px"></button>')
-        .text('Improve')
-        .attr({ title: 'Improve this generated image', 'aria-label': 'Improve this generated image', 'data-message-id': String(messageId) });
-    const host = $('<div class="cig_iteration_host" data-cig-iteration-host hidden></div>');
-    root.append(button, host);
-    const anchor = messageElement.find('.mes_img_container, .mes_media_container').last();
-    if (anchor.length) anchor.after(root); else messageElement.append(root);
-    button.on('click', () => {
-        host.prop('hidden', false);
-        if (iterationSurfaceMounts.has(key)) return;
-        const sourceArtifact = iterationSourceArtifact(message, activeMedia, feature);
-        const generationPlan = iterationGenerationPlan(sourceArtifact);
-        const controller = feature.createIterationSurfaceController({
-            sourceArtifact,
-            generationPlan,
-            twoUpAvailable: false,
-            allowUnquotedSingle: true,
-            supportedCanonicalRoles: ['activeLook'],
-            reserveInvocation: (invocationId) => { if (iterationInvocations.has(invocationId)) return false; iterationInvocations.add(invocationId); return true; },
-            releaseInvocation: (invocationId) => iterationInvocations.delete(invocationId),
-            verifyGenerationPlan: (candidate) => candidate.planId === generationPlan?.planId && candidate.revision === generationPlan?.revision && generationPlan?.routeConfirmationAccepted === true
-                ? { status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: generationPlan.planId, routeResolved: true, capabilities: generationPlan.capabilities || {} } : { status: 'unverified' },
-            dispatchCoordinator: iterationDispatchCoordinator(sourceArtifact),
-            dispatchExecutor: dispatchIterationPlan,
-            persistArtifact: persistIterationArtifact,
-            readbackArtifact: ({ artifact, plan }) => verifyPersistedIterationArtifact({ target: sourceArtifact.target, artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId, fetchImpl: fetch, getHeaders: getRequestHeaders }),
-            readbackOriginalArtifact: async ({ originalArtifact, plan }) => {
-                const result = await verifyPersistedIterationArtifact({ target: sourceArtifact.target, artifactId: originalArtifact.artifactId, fetchImpl: fetch, getHeaders: getRequestHeaders });
-                return { ...result, planId: plan.planId, invocationId: plan.invocationId };
-            },
-            verifyCanonicalEligibility: ({ artifactId, roles }) => ({ status: artifactId === sourceArtifact.artifactId && Object.keys(roles || {}).length === 1 && Object.prototype.hasOwnProperty.call(roles || {}, 'activeLook') && sourceArtifact.mediaUrl ? 'eligible' : 'ineligible', artifactId, authorityToken: 'captured-artifact' }),
-            mutateCanonical: ({ mutation }) => persistIterationCanonicalRoles({ sourceArtifact, mutation }),
-            readbackCanonical: ({ plan, mutation, persisted }) => verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, persisted }),
-        });
-        iterationSurfaceMounts.set(key, { controller, destroy: () => mount?.destroy?.() });
-        const mount = feature.mountIterationSurface(host[0], controller);
-        iterationSurfaceMounts.set(key, { controller, destroy: mount.destroy });
-    });
-}
-
-function destroyIterationSurfaceMounts() {
-    for (const mount of iterationSurfaceMounts.values()) mount?.destroy?.();
-    iterationSurfaceMounts.clear();
-}
-
 function imageNavigationContext(messageElement) {
     const messageId = Number(messageElement?.attr('mesid'));
     const context = getContext();
@@ -4085,17 +3557,12 @@ function imageNavigationContext(messageElement) {
     return { context, message, messageId, messageElement, ...activeMedia };
 }
 
-function imageGenerationKey({ context, messageId }) {
-    return `${context.chatId || 'unknown-chat'}:${messageId}`;
-}
-
 function cigImageArrows(messageElement) {
     return messageElement.find('.mes_img_swipe_left, .mes_img_swipe_right');
 }
 
 function configureCigImageArrows(messageElement) {
     if (!imageNavigationContext(messageElement)) return;
-    void renderIterationActionSurface(messageElement);
     messageElement.find('.mes_img_swipe_left')
         .attr({ tabindex: '0', role: 'button', title: 'Previous image', 'aria-label': 'Previous image' })
         .addClass('cig_image_navigation');
@@ -4105,10 +3572,6 @@ function configureCigImageArrows(messageElement) {
     cigImageArrows(messageElement)
         .off('keydown.cigImageNavigation')
         .on('keydown.cigImageNavigation', onCigImageArrowKeydown);
-}
-
-function setCigImageArrowBusy(messageElement, busy) {
-    setBusyState(cigImageArrows(messageElement), busy, { busyClass: 'cig_busy', busyTitle: 'Generating image…' });
 }
 
 function stopImageNavigationEvent(event) {
@@ -4138,39 +3601,6 @@ function onCigImageGesture(event) {
     });
 }
 
-async function generatePastLastImage(navigation) {
-    const key = imageGenerationKey(navigation);
-    if (activeImageBoundaryGenerations.has(key)) return;
-
-    activeImageBoundaryGenerations.add(key);
-    setCigImageArrowBusy(navigation.messageElement, true);
-    const messageMedia = navigation.messageElement.find('.mes_img, .mes_video');
-    const charName = navigation.context.name2 || 'Character';
-    const userName = name1 || 'User';
-    const sender = navigation.message.is_user ? `{{user}} (${userName})` : `{{char}} (${charName})`;
-
-    try {
-        messageMedia.addClass('fa-fade');
-        await attachGeneratedImage(
-            navigation.message,
-            navigation.messageElement,
-            navigation.message.mes,
-            sender,
-            navigation.messageId,
-            null,
-            null,
-            'swipe',
-        );
-    } catch (error) {
-        showGenerationError(error, 'Image regeneration');
-    } finally {
-        messageMedia.removeClass('fa-fade');
-        activeImageBoundaryGenerations.delete(key);
-        setCigImageArrowBusy(navigation.messageElement, false);
-        configureCigImageArrows(navigation.messageElement);
-    }
-}
-
 function onCigImageArrowClick(event) {
     const target = event.target instanceof Element ? event.target.closest('.mes_img_swipe_left, .mes_img_swipe_right') : null;
     if (!target) return;
@@ -4179,22 +3609,14 @@ function onCigImageArrowClick(event) {
     if (!navigation) return;
 
     configureCigImageArrows(messageElement);
-    const key = imageGenerationKey(navigation);
-    if (activeImageBoundaryGenerations.has(key)) {
-        stopImageNavigationEvent(event);
-        return;
-    }
     handleImageArrowNavigation({
         owned: true,
         event,
         direction: target.classList.contains('mes_img_swipe_right') ? 'next' : 'previous',
         currentIndex: navigation.index,
         mediaLength: navigation.media.length,
-        generatePastLast: Boolean(extension_settings[extensionName]?.regenerate_on_swipe),
-        generationActive: false,
         schedule: (callback) => setTimeout(callback, 0),
         reconfigure: () => configureCigImageArrows(messageElement),
-        generate: () => { void generatePastLastImage(navigation); },
     });
 }
 
@@ -4206,34 +3628,18 @@ function onCigImageArrowKeydown(event) {
     target.click();
 }
 
-async function autoGenerateForMessage(messageId) {
-    const settings = extension_settings[extensionName];
-    if (settings.auto_generate === 'off' || !extraStoryToolEnabled('cinematic')) return;
-
-    const context = getContext();
-    const autoInput = captureAutoGenerationInput({ context, messageId });
-    const message = autoInput?.message;
-    if (!message || !message.mes || message.is_system) return;
-
-    // Check if we should generate for this message type
-    if (settings.auto_generate === 'bot' && message.is_user) return;
-
-    // Wait for the button to be injected, then click it
-    setTimeout(() => {
-        const validation = validateAutoGenerationInput({ input: autoInput, context: getContext() });
-        if (!validation.safe) return;
-        const messageElement = $(`.mes[mesid="${messageId}"]`);
-        const $icon = messageElement.find('.cig_message_gen');
-        if ($icon.length > 0 && !$icon.hasClass('cig_busy')) {
-            console.log(`[${extensionName}] Auto-generating image for message ${messageId}`);
-            cigMessageButton($icon, {
-                captureSelection: false,
-                invocation: 'automation',
-                generationInput: { ...autoInput, message: validation.message, focusText: null },
-            });
-        }
-    }, 200);
-}
+const slashGenerationDelivery = createPreviewGalleryDeliveryAdapter({
+    addToGallery: async (artifact, plan) => {
+        const imageDataUrl = `data:${artifact.mimeType};base64,${artifact.imageData}`;
+        await addToGallery(artifact.imageData, plan.prompt.sourceMessage, null);
+        return { url: imageDataUrl };
+    },
+    showPreview: (url) => {
+        $('#cig_preview_image').attr('src', url);
+        $('#cig_preview_container').prop('hidden', false);
+    },
+});
+const slashGenerationEntry = createSlashEntryAdapter({ kernel: sceneGenerationKernel, delivery: slashGenerationDelivery });
 
 async function slashCommandHandler(args, prompt) {
     const trimmedPrompt = String(prompt).trim();
@@ -4244,15 +3650,7 @@ async function slashCommandHandler(args, prompt) {
     }
 
     try {
-        const result = await generateImageFromPrompt(trimmedPrompt, null, null, null, null, 'slash');
-
-        if (result) {
-            const imageDataUrl = `data:${result.mimeType};base64,${result.imageData}`;
-            $('#cig_preview_image').attr('src', imageDataUrl);
-            $('#cig_preview_container').prop('hidden', false);
-            await addToGallery(result.imageData, trimmedPrompt, null);
-            return imageDataUrl;
-        }
+        return await slashGenerationEntry.generate(trimmedPrompt);
     } catch (error) {
         showGenerationError(error, 'Slash command generation');
     }
@@ -4662,11 +4060,6 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_regenerate_on_swipe').on('change', function () {
-        extension_settings[extensionName].regenerate_on_swipe = $(this).prop('checked');
-        saveSettingsDebounced();
-    });
-
     $('#cig_include_descriptions').on('change', function () {
         extension_settings[extensionName].include_descriptions = $(this).prop('checked');
         renderChatAppearanceSources();
@@ -4701,11 +4094,6 @@ jQuery(async () => {
     }
     $('#cig_extra_story_tools_disable_all').on('click', async function () {
         await setExtraStoryTools({ enabled: false });
-    });
-
-    $('#cig_auto_generate').on('change', function () {
-        extension_settings[extensionName].auto_generate = $(this).val();
-        saveSettingsDebounced();
     });
 
     $('#cig_cinematic_enabled, #cig_cinematic_mode, #cig_cinematic_budget_type, #cig_cinematic_generation_limit, #cig_cinematic_cost_ceiling').on('change input', function () {
@@ -4910,7 +4298,6 @@ jQuery(async () => {
         try {
             const result = await cinematicUiController?.action(action, input, suggestionId);
             if (result?.status === 'failed' || result?.status === 'stale') toastr.info(result.reason || 'This suggestion is no longer current.', 'Context Image Generation');
-            else if (result?.status === 'completed') toastr.success('Cinematic image generated.', 'Context Image Generation');
             else if (result?.status === 'dismissed') toastr.info('Cinematic suggestion dismissed.', 'Context Image Generation');
         } catch (error) {
             showGenerationError(error, 'Cinematic suggestion');
@@ -4925,8 +4312,6 @@ jQuery(async () => {
 
     async function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
-        const messageElement = $(`.mes[mesid="${messageId}"]`);
-        if (extraStoryToolEnabled('iteration')) await renderIterationActionSurface(messageElement);
         if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => observeCinematicMessage(messageId));
     }
 
@@ -4934,36 +4319,30 @@ jQuery(async () => {
         chatLifecycleEpoch.advance();
         if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
         if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
-        destroyIterationSurfaceMounts();
         setTimeout(async () => {
             injectAllMessageButtons();
             markImagesCastSettingsStale();
-            if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
             schedulePendingRecovery();
         }, 100);
     });
 
     eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
         await onCigMessageRendered(messageId);
-        autoGenerateForMessage(messageId);
     });
 
     eventSource.on(event_types.USER_MESSAGE_RENDERED, async (messageId) => {
         await onCigMessageRendered(messageId);
-        autoGenerateForMessage(messageId);
     });
 
     eventSource.on(event_types.CHAT_CREATED, async () => {
         chatLifecycleEpoch.advance();
         if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
         if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
-        destroyIterationSurfaceMounts();
-        setTimeout(async () => { injectAllMessageButtons(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element)); }, 100);
+        setTimeout(async () => { injectAllMessageButtons(); markImagesCastSettingsStale(); }, 100);
     });
 
     setTimeout(async () => {
         injectAllMessageButtons();
-        if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
     }, 500);
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({

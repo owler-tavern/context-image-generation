@@ -23,14 +23,16 @@ test('Appearance UI exposes per-chat use and lock actions', async () => {
     assert.match(source, /Replace the locked look for this chat\?/);
 });
 
-test('shared generation path builds one plan and labels invocation sources', async () => {
+test('wand and slash are the only production adapters into one scene-generation kernel', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    assert.match(index, /createSceneGenerationKernel\(/);
+    assert.match(index, /createWandEntryAdapter\(/);
+    assert.match(index, /createSlashEntryAdapter\(/);
     assert.match(index, /createGenerationPlan\(/);
     assert.match(index, /buildReferenceMessageParts\(/);
-    assert.match(index, /buildMessages\(prompt, sender, messageId, focusText, invocation\)/);
-    assert.match(index, /invocation: 'automation'/);
-    assert.match(index, /'slash'\)/);
-    assert.match(index, /await attachGeneratedImage\(\s*navigation\.message,\s*navigation\.messageElement,\s*navigation\.message\.mes,\s*sender,\s*navigation\.messageId,\s*null,\s*null,\s*'swipe',\s*\);/);
+    assert.match(index, /wandGenerationEntry\.generate\(/u);
+    assert.match(index, /slashGenerationEntry\.generate\(/u);
+    assert.doesNotMatch(index, /invocation:\s*'automation'|'swipe'\s*,\s*\)|'director'\s*,\s*\{/u);
 });
 
 test('runtime dispatch does not reference a removed SillyTavern request callback', async () => {
@@ -103,7 +105,7 @@ test('wand integration makes scene interpretation visible, persistent, and chat-
 
 test('successful attachment passes the generated result into scene-state persistence', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const attachment = source.slice(source.indexOf('async function attachGeneratedImage('), source.indexOf('function isCigOwnedMedia'));
+    const attachment = source.slice(source.indexOf('function createMessageDeliveryDependencies('), source.indexOf('const wandGenerationDelivery'));
     assert.match(attachment, /saveChat: async \(result\) =>/);
     assert.match(attachment, /persistSceneStateForAttachment\(result, effectiveTarget, saveEpoch\)/);
 });
@@ -111,7 +113,7 @@ test('successful attachment passes the generated result into scene-state persist
 test('scene state stays internal while the inline artifact keeps a public inspection wrapper', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     const snapshot = source.slice(source.indexOf('const sceneSnapshot = buildSceneGenerationSnapshot'), source.indexOf('const connectionId = routeModel.connectionId'));
-    const dispatch = source.slice(source.indexOf('const generatedWithContinuity'), source.indexOf('if (typeof finalize !== \'function\')'));
+    const dispatch = source.slice(source.indexOf('async function dispatchSceneGenerationPlan'), source.indexOf('const sceneGenerationKernel'));
     assert.match(snapshot, /const scenePlan = \{ \.\.\.sceneMetadata, state: cloneSnapshot\(sceneSnapshot\.state\),/);
     assert.match(source, /scene: scenePlan/);
     assert.match(dispatch, /__cigSceneMetadata: createSceneArtifactMetadata\(dispatchedPlan\.scene\)/);

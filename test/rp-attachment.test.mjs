@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { attachGeneratedImageSafely } from '../lib/rp-attachment.js';
+import { createMessageDeliveryAdapter } from '../lib/scene-generation/delivery.js';
 
 const message = { mes: 'The candle burns low.', extra: {} };
 const target = {
@@ -38,18 +39,19 @@ test('safe target appends media, saves the active chat, and records the artifact
     ]);
 });
 
-test('safe attachment can be finalized inside the coordinator execution', async () => {
+test('message delivery persists a pre-generated kernel artifact exactly once', async () => {
     let persisted = 0;
-    const result = await attachGeneratedImageSafely({
-        target: { chatId: 'chat', messageId: 1, messageFingerprint: 'fp' },
-        prompt: 'scene',
-        generate: async ({ finalize }) => finalize({ imageData: 'image', mimeType: 'image/png' }),
+    const delivery = createMessageDeliveryAdapter({
         saveImage: async () => 'saved.png',
         getCurrentTarget: () => ({ safe: true, message: {} }),
         appendMedia: () => { persisted += 1; },
         saveChat: async () => ({ saved: true }),
         addToGallery: async () => {},
         notify: () => {},
+    });
+    const result = await delivery.deliver({
+        artifact: { imageData: 'image', mimeType: 'image/png' },
+        request: { target: { chatId: 'chat', messageId: 1, messageFingerprint: 'fp' }, prompt: 'scene' },
     });
     assert.equal(result, true);
     assert.equal(persisted, 1);

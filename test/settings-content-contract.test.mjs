@@ -43,7 +43,7 @@ test('each existing preference control remains once in its user-facing group', (
         cig_preferences_image: ['cig_aspect_ratio', 'cig_image_size', 'cig_thinking_level', 'cig_use_google_search'],
         cig_preferences_scene_context: ['cig_message_depth', 'cig_system_instruction'],
         cig_preferences_references: ['cig_use_avatars', 'cig_include_descriptions', 'cig_use_previous_image'],
-        cig_preferences_automation: ['cig_regenerate_on_swipe', 'cig_auto_generate'],
+        cig_preferences_automation: ['cig_cinematic_enabled', 'cig_cinematic_mode'],
     };
     const groupIds = Object.keys(expected);
     for (const [position, groupId] of groupIds.entries()) {
@@ -60,13 +60,10 @@ test('each existing preference control remains once in its user-facing group', (
     }
 });
 
-test('overswipe generation setting explains the image boundary and retains one persisted control', () => {
-    const preference = settings.match(/<label[^>]*>[^<]*<input[^>]*id="cig_regenerate_on_swipe"[^>]*>[\s\S]*?<\/label>/)?.[0] || '';
-    assert.equal((settings.match(/id="cig_regenerate_on_swipe"/g) || []).length, 1);
-    assert.match(preference, />Generate past the last image</);
-    assert.match(preference, /title="[^"]*(swipe left|right arrow)[^"]*(swipe left|right arrow)[^"]*"/i);
-    assert.match(preference, /cig-setting-help[^>]*>[\s\S]*?(swipe left|right arrow)[\s\S]*?(swipe left|right arrow)/i);
-    assert.doesNotMatch(settings, /id="cig_regenerate_on_swipe"[\s\S]*?id="cig_regenerate_on_swipe"/);
+test('retired automatic and overswipe values have no visible settings controls', () => {
+    assert.doesNotMatch(settings, /id="cig_(?:regenerate_on_swipe|auto_generate)"/u);
+    assert.match(index, /regenerate_on_swipe:\s*false/u);
+    assert.match(index, /auto_generate:\s*'off'/u);
 });
 
 test('Images and Cast leads with current chat characters and progressively discloses extras', () => {

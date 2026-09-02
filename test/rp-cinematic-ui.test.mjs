@@ -60,6 +60,17 @@ test('UI controller routes card actions without hidden network calls', async () 
     assert.deepEqual(calls, [['adjust', 'suggestion:test'], ['dismiss', 'suggestion:test'], ['stage', 'suggestion:test']]);
 });
 
+test('legacy approve actions are inert and cannot reach a retained callback', async () => {
+    let approvals = 0;
+    const controller = createCinematicUiController({
+        getSuggestion: () => suggestion,
+        approve: async () => { approvals += 1; },
+    });
+
+    assert.deepEqual(await controller.action('approve'), { status: 'unknown-action' });
+    assert.equal(approvals, 0);
+});
+
 test('UI controller honors the clicked card identity for stale-safe dismissal', async () => {
     const calls = [];
     const controller = createCinematicUiController({
