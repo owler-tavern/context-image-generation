@@ -157,6 +157,17 @@ test('gallery preview and appearance actions are semantic and identify their out
     assert.match(index, /Delete \$\{look\.label\} everywhere for \$\{identity\.label\}/);
 });
 
+test('Gallery adds one visible tile without rebuilding all tiles and defers image decoding', () => {
+    const addStart = index.indexOf('async function addToGallery(');
+    const addEnd = index.indexOf('function renderGallery()', addStart);
+    const addToGallery = addStart >= 0 && addEnd > addStart ? index.slice(addStart, addEnd) : '';
+
+    assert.ok(addToGallery, 'addToGallery source should be available');
+    assert.doesNotMatch(addToGallery, /renderGallery\(\)/u);
+    assert.match(addToGallery, /galleryRenderState\.add\(insertedItem\)/u);
+    assert.match(index, /\$\('<img>'\)\.attr\(\{\s*src: galleryItemSrc\(item\),[\s\S]*?loading: 'lazy',[\s\S]*?decoding: 'async',/u);
+});
+
 test('reference capability feedback preserves saved preferences and clears when support returns', () => {
     const preferences = panelMarkup('cig_settings_panel_preferences');
     assert.match(preferences, /id="cig_reference_capability_note"[^>]*role="status"[^>]*aria-live="polite"/);

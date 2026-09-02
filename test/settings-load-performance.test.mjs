@@ -69,6 +69,16 @@ test('chat switching advances stale-work protection without cloning metadata or 
     assert.doesNotMatch(chatEvents, /removeRetiredMessageSurfaces|syncChatWandPreferenceControls/u);
 });
 
+test('hidden Images and Cast mutations leave the Gallery dirty instead of rebuilding its tiles', () => {
+    const start = indexSource.indexOf('function markImagesCastSettingsStale()');
+    const end = indexSource.indexOf('async function loadSettings()', start);
+    const staleMarker = start >= 0 && end > start ? indexSource.slice(start, end) : '';
+
+    assert.ok(staleMarker, 'Images and Cast stale marker should be available');
+    assert.match(staleMarker, /galleryRenderState\.markDirty\(\)/u);
+    assert.doesNotMatch(staleMarker, /renderGallery\(\)/u);
+});
+
 test('ordinary chat typing has no document-level CIG keyboard handler', () => {
     assert.doesNotMatch(indexSource, /document\.addEventListener\('keydown',\s*onCigImageArrowKeydown/u);
     assert.match(indexSource, /\.on\('keydown\.cigImageNavigation',\s*onCigImageArrowKeydown\)/u);

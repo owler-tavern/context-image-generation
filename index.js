@@ -48,6 +48,7 @@ import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
+import { createGalleryRenderState } from './lib/gallery-render-state.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
 import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
@@ -235,6 +236,14 @@ let directorUiController = null;
 let directorFocusCapture = null;
 let imagesCastSettingsStale = true;
 let pendingRecoveryScheduled = false;
+function galleryIsVisible() {
+    return extraStoryToolEnabled('gallery') && imagesCastSettingsAreVisible();
+}
+const galleryRenderState = createGalleryRenderState({
+    isVisible: galleryIsVisible,
+    renderAll: () => renderGallery(),
+    prependOne: (item) => prependGalleryItem(item),
+});
 generationCoordinator.subscribe((event) => {
     if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
     if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
@@ -1446,7 +1455,7 @@ function imagesCastSettingsAreVisible() {
 
 function renderImagesCastSettings({ force = false } = {}) {
     if (!force && (!imagesCastSettingsStale || !imagesCastSettingsAreVisible())) return false;
-    renderGallery();
+    galleryRenderState.refresh({ force });
     renderAppearanceList();
     renderChatAppearanceSources();
     imagesCastSettingsStale = false;
@@ -1455,6 +1464,7 @@ function renderImagesCastSettings({ force = false } = {}) {
 
 function markImagesCastSettingsStale() {
     imagesCastSettingsStale = true;
+    galleryRenderState.markDirty();
     renderImagesCastSettings();
 }
 
@@ -2397,7 +2407,7 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
 
     const galleryId = sourceMetadata?.galleryId || `gallery:${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const galleryChatId = sourceMetadata?.chatId || getContext().chatId || null;
-    settings.gallery.unshift({
+    const insertedItem = {
         id: galleryId,
         url: url,
         prompt: prompt.substring(0, 200),
@@ -2405,12 +2415,71 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
         messageId: messageId,
         ...(galleryChatId ? { chatId: galleryChatId } : {}),
         ...(sourceMetadata ? { sourceMetadata } : {}),
-    });
+    };
+    settings.gallery.unshift(insertedItem);
 
     settings.gallery = trimGalleryToLimit(settings.gallery, MAX_GALLERY_SIZE, settings.rp_library).gallery;
 
     saveSettingsDebounced();
-    renderGallery();
+    if (settings.gallery[0] === insertedItem) galleryRenderState.add(insertedItem);
+    else galleryRenderState.markDirty();
+}
+
+function createGalleryTile(item, index) {
+    const thumb = $('<div class="cig_gallery_item"></div>')
+        .attr('data-index', index)
+        .attr('title', item.prompt || '');
+    const preview = $('<button type="button" class="cig_gallery_preview" aria-label="View generated image">')
+        .attr('data-index', index)
+        .attr('title', 'View generated image');
+    $('<img>').attr({
+        src: galleryItemSrc(item),
+        alt: item.prompt ? `Generated image: ${item.prompt}` : 'Generated image',
+        loading: 'lazy',
+        decoding: 'async',
+    }).appendTo(preview);
+    preview.appendTo(thumb);
+    const overlay = $('<div class="cig_gallery_item_overlay"></div>');
+    $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember this look" aria-label="Remember this look">')
+        .attr('data-index', index)
+        .append($('<i class="fa-solid fa-user-pen" aria-hidden="true"></i>'))
+        .appendTo(overlay);
+    $('<button type="button" class="cig_gallery_action cig_gallery_delete" title="Delete image" aria-label="Delete image">')
+        .attr('data-index', index)
+        .append($('<i class="fa-solid fa-trash" aria-hidden="true"></i>'))
+        .appendTo(overlay);
+    overlay.appendTo(thumb);
+    return thumb;
+}
+
+function reindexGalleryTiles() {
+    $('#cig_gallery_container .cig_gallery_item').each(function (index) {
+        $(this).attr('data-index', index).find('[data-index]').attr('data-index', index);
+    });
+}
+
+function prependGalleryItem(item) {
+    const container = $('#cig_gallery_container');
+    $('#cig_gallery_empty').hide();
+    container.prepend(createGalleryTile(item, 0));
+    reindexGalleryTiles();
+}
+
+function removeGalleryTile(index) {
+    if (!galleryIsVisible() || galleryRenderState.isDirty()) {
+        galleryRenderState.markDirty();
+        return false;
+    }
+    const tile = $('#cig_gallery_container .cig_gallery_item').eq(index);
+    if (!tile.length) {
+        galleryRenderState.markDirty();
+        return false;
+    }
+    tile.remove();
+    const gallery = extension_settings[extensionName]?.gallery || [];
+    $('#cig_gallery_empty').toggle(gallery.length === 0);
+    reindexGalleryTiles();
+    return true;
 }
 
 function renderGallery() {
@@ -2431,29 +2500,8 @@ function renderGallery() {
 
     emptyMsg.hide();
 
-    // Build via DOM construction (not string interpolation) so prompt text can't
-    // break the markup or inject HTML.
     for (let i = 0; i < gallery.length; i++) {
-        const item = gallery[i];
-        const thumb = $('<div class="cig_gallery_item"></div>')
-            .attr('data-index', i)
-            .attr('title', item.prompt || '');
-        const preview = $('<button type="button" class="cig_gallery_preview" aria-label="View generated image">')
-            .attr('data-index', i)
-            .attr('title', 'View generated image');
-        $('<img>').attr({ src: galleryItemSrc(item), alt: item.prompt ? `Generated image: ${item.prompt}` : 'Generated image' }).appendTo(preview);
-        preview.appendTo(thumb);
-        const overlay = $('<div class="cig_gallery_item_overlay"></div>');
-        $('<button type="button" class="cig_gallery_action cig_gallery_remember" title="Remember this look" aria-label="Remember this look">')
-            .attr('data-index', i)
-            .append($('<i class="fa-solid fa-user-pen" aria-hidden="true"></i>'))
-            .appendTo(overlay);
-        $('<button type="button" class="cig_gallery_action cig_gallery_delete" title="Delete image" aria-label="Delete image">')
-            .attr('data-index', i)
-            .append($('<i class="fa-solid fa-trash" aria-hidden="true"></i>'))
-            .appendTo(overlay);
-        overlay.appendTo(thumb);
-        container.append(thumb);
+        container.append(createGalleryTile(gallery[i], i));
     }
 }
 
@@ -3111,7 +3159,13 @@ function appearanceMigrationIo() {
         },
         saveClearedState: async ({ library, gallery }) => { settings.rp_library = library; settings.gallery = gallery; await saveSettings(); },
         verifyClearedState: (revision) => verifyPersistedGalleryClear({ expectedRevision: revision, fetchImpl: fetch, getHeaders: getRequestHeaders }),
-        setLocalState: ({ library, gallery }) => { settings.rp_library = library; settings.gallery = gallery; renderGallery(); renderAppearanceList(); },
+        setLocalState: ({ library, gallery }) => {
+            settings.rp_library = library;
+            settings.gallery = gallery;
+            galleryRenderState.markDirty();
+            galleryRenderState.refresh({ force: true });
+            renderAppearanceList();
+        },
         uuid: () => crypto.randomUUID(),
     };
 }
@@ -3512,9 +3566,9 @@ async function setExtraStoryTools(patch = {}) {
     else await cinematicLifecycle.disable();
     if (!extraStoryToolEnabled('iteration')) await iterationLifecycle.disable();
     if (!extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
-    if (!extraStoryToolEnabled('gallery')) renderGallery();
+    if (!extraStoryToolEnabled('gallery')) galleryRenderState.markDirty();
     if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
-    if (extraStoryToolEnabled('gallery')) renderGallery();
+    if (extraStoryToolEnabled('gallery')) galleryRenderState.refresh({ force: true });
     if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
     if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
@@ -4308,7 +4362,7 @@ async function deleteGalleryImage(index) {
     if (confirmed.decision !== 'deleted') return;
     settings.gallery = confirmed.gallery;
     saveSettingsDebounced();
-    renderGallery();
+    removeGalleryTile(index);
     renderAppearanceList();
 }
 
