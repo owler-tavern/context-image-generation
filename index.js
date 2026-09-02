@@ -48,7 +48,7 @@ import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
-import { createGalleryRenderState } from './lib/gallery-render-state.js';
+import { canIncrementallyPrependGalleryItem, createGalleryRenderState, reindexGalleryTileActionTargets } from './lib/gallery-render-state.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
 import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
 import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
@@ -2392,6 +2392,7 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
     if (!settings.gallery) {
         settings.gallery = [];
     }
+    const previouslyRendered = [...settings.gallery];
 
     // Store the image as a file and keep only its path + metadata in settings.json
     // (never base64). Reuse an already-saved file path when the caller has one.
@@ -2421,8 +2422,12 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
     settings.gallery = trimGalleryToLimit(settings.gallery, MAX_GALLERY_SIZE, settings.rp_library).gallery;
 
     saveSettingsDebounced();
-    if (settings.gallery[0] === insertedItem) galleryRenderState.add(insertedItem);
-    else galleryRenderState.markDirty();
+    if (canIncrementallyPrependGalleryItem({ previouslyRendered, gallery: settings.gallery, insertedItem })) {
+        galleryRenderState.add(insertedItem);
+    } else {
+        galleryRenderState.markDirty();
+        galleryRenderState.refresh();
+    }
 }
 
 function createGalleryTile(item, index) {
@@ -2453,9 +2458,11 @@ function createGalleryTile(item, index) {
 }
 
 function reindexGalleryTiles() {
-    $('#cig_gallery_container .cig_gallery_item').each(function (index) {
-        $(this).attr('data-index', index).find('[data-index]').attr('data-index', index);
-    });
+    const tiles = $('#cig_gallery_container .cig_gallery_item').toArray().map((tile) => ({
+        tile,
+        actions: $(tile).find('.cig_gallery_preview, .cig_gallery_remember, .cig_gallery_delete').toArray(),
+    }));
+    reindexGalleryTileActionTargets(tiles, (target, tileIndex) => $(target).attr('data-index', tileIndex));
 }
 
 function prependGalleryItem(item) {

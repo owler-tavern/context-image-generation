@@ -165,7 +165,10 @@ test('Gallery adds one visible tile without rebuilding all tiles and defers imag
     assert.ok(addToGallery, 'addToGallery source should be available');
     assert.doesNotMatch(addToGallery, /renderGallery\(\)/u);
     assert.match(addToGallery, /galleryRenderState\.add\(insertedItem\)/u);
+    assert.match(addToGallery, /canIncrementallyPrependGalleryItem\(/u);
+    assert.match(addToGallery, /galleryRenderState\.refresh\(\)/u);
     assert.match(index, /\$\('<img>'\)\.attr\(\{\s*src: galleryItemSrc\(item\),[\s\S]*?loading: 'lazy',[\s\S]*?decoding: 'async',/u);
+    assert.match(index, /reindexGalleryTileActionTargets\(tiles, \(target, tileIndex\) => \$\(target\)\.attr\('data-index', tileIndex\)\)/u);
 });
 
 test('reference capability feedback preserves saved preferences and clears when support returns', () => {

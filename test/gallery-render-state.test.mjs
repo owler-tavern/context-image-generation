@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createGalleryRenderState } from '../lib/gallery-render-state.js';
+import { canIncrementallyPrependGalleryItem, createGalleryRenderState, reindexGalleryTileActionTargets } from '../lib/gallery-render-state.js';
+import { trimGalleryToLimit } from '../lib/rp/appearance-library.js';
 
 test('hidden mutation stays dirty without rebuilding Gallery tiles', () => {
     let visible = false;
@@ -75,4 +76,59 @@ test('new Gallery item prepends only while visible and clean', () => {
 
     assert.deepEqual(prepended, [first]);
     assert.equal(state.isDirty(), true);
+});
+
+test('trimmed Gallery additions require a full refresh instead of leaving an evicted tile', () => {
+    const previouslyRendered = Array.from({ length: 50 }, (_, index) => ({ id: `item:${index}` }));
+    const inserted = { id: 'inserted' };
+    const trimmedGallery = trimGalleryToLimit([inserted, ...previouslyRendered], 50, {}).gallery;
+
+    assert.equal(trimmedGallery.length, 50);
+    assert.equal(trimmedGallery.at(-1).id, 'item:48');
+    assert.equal(canIncrementallyPrependGalleryItem({ previouslyRendered, gallery: trimmedGallery, insertedItem: inserted }), false);
+});
+
+function tile(id) {
+    return {
+        tile: { id: `tile:${id}` },
+        actions: [
+            { id: `preview:${id}` },
+            { id: `remember:${id}` },
+            { id: `delete:${id}` },
+        ],
+    };
+}
+
+function actionIndices(tiles) {
+    return tiles.map(({ tile, actions }) => ({
+        tile: tile.index,
+        preview: actions[0].index,
+        remember: actions[1].index,
+        delete: actions[2].index,
+    }));
+}
+
+test('Gallery prepend reindexes preview, remember, and delete action targets', () => {
+    const tiles = [tile('current'), tile('oldest')];
+    tiles.unshift(tile('new'));
+
+    reindexGalleryTileActionTargets(tiles, (target, index) => { target.index = index; });
+
+    assert.deepEqual(actionIndices(tiles), [
+        { tile: 0, preview: 0, remember: 0, delete: 0 },
+        { tile: 1, preview: 1, remember: 1, delete: 1 },
+        { tile: 2, preview: 2, remember: 2, delete: 2 },
+    ]);
+});
+
+test('Gallery deletion reindexes preview, remember, and delete action targets', () => {
+    const tiles = [tile('new'), tile('removed'), tile('oldest')];
+    tiles.splice(1, 1);
+
+    reindexGalleryTileActionTargets(tiles, (target, index) => { target.index = index; });
+
+    assert.deepEqual(actionIndices(tiles), [
+        { tile: 0, preview: 0, remember: 0, delete: 0 },
+        { tile: 1, preview: 1, remember: 1, delete: 1 },
+    ]);
 });

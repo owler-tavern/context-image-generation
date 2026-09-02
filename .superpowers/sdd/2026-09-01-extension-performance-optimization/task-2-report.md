@@ -38,3 +38,17 @@ Complete. Gallery DOM construction is deferred while Images & Cast is hidden. A 
 - Preserved Task 1 optional-feature lazy-loading seams; no optional-feature imports or lifecycle code changed.
 - Preserved user-owned dirty documentation by staging only the six Task 2 files named above.
 - Confirmed all remaining full Gallery rendering flows go through the state controller's `renderAll` callback.
+
+## Fix round 1: trim-safe incremental prepend and action reindexing
+
+### RED/GREEN evidence
+
+1. RED: `node --test test/gallery-render-state.test.mjs` — 1 failing test file because the new trim-eligibility and action-reindex exports were not yet available from `lib/gallery-render-state.js`.
+2. GREEN: `node --test test/gallery-render-state.test.mjs` — 7/7 passed, including a real 50-item `trimGalleryToLimit()` fixture and prepend/deletion action-index fixtures.
+3. GREEN/final: `node --test test/gallery-render-state.test.mjs test/gallery-dialog.test.mjs test/settings-load-performance.test.mjs test/settings-content-contract.test.mjs` — 34/34 passed.
+4. Final checks: `node --check index.js` and `git diff --check` — exit 0.
+
+### Correction
+
+- Incremental prepend is allowed only when the post-trim Gallery is exactly the inserted item followed by every previously rendered item. Any eviction, replacement, or other sequence change dirties the controller and performs one visible full refresh.
+- The shared reindexer now updates every tile and its preview, remember, and delete targets after both prepend and visible clean deletion.
