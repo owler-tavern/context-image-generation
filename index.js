@@ -45,6 +45,7 @@ import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generatio
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
+import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, outfitCatalogEquivalent, outfitPendingStateEquivalent, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
@@ -1484,8 +1485,9 @@ async function loadSettings() {
     // migrate once: either previously enabled avatar keeps references enabled.
     const existingProviderSettings = extension_settings[extensionName];
     const migratedProviderSettings = migrateProviderSettings(existingProviderSettings);
-    if (JSON.stringify(existingProviderSettings) !== JSON.stringify(migratedProviderSettings)) {
-        extension_settings[extensionName] = migratedProviderSettings;
+    const providerSettingsChange = replaceWhenChanged(existingProviderSettings, () => migratedProviderSettings, providerSettingsEquivalent);
+    if (providerSettingsChange.changed) {
+        extension_settings[extensionName] = providerSettingsChange.value;
         settingsMigrated = true;
     }
     const cigSettings = extension_settings[extensionName];
@@ -1496,9 +1498,9 @@ async function loadSettings() {
         cigSettings.previous_image_opt_in_version = 1;
         settingsMigrated = true;
     }
-    const normalizedExtras = normalizeExtraStoryTools(cigSettings.extra_story_tools);
-    if (JSON.stringify(cigSettings.extra_story_tools) !== JSON.stringify(normalizedExtras)) {
-        cigSettings.extra_story_tools = normalizedExtras;
+    const extraStoryToolsChange = replaceWhenChanged(cigSettings.extra_story_tools, normalizeExtraStoryTools, extraStoryToolsEquivalent);
+    if (extraStoryToolsChange.changed) {
+        cigSettings.extra_story_tools = extraStoryToolsChange.value;
         settingsMigrated = true;
     }
     // Director drafts belonged to the retired per-message entry point. Do not
@@ -1527,19 +1529,19 @@ async function loadSettings() {
         cigSettings.cinematic_automation_sessions.chats = {};
         settingsMigrated = true;
     }
-    const migratedAppearanceLibrary = migrateAppearanceLibrary(cigSettings.rp_library);
-    if (JSON.stringify(cigSettings.rp_library) !== JSON.stringify(migratedAppearanceLibrary)) {
-        cigSettings.rp_library = migratedAppearanceLibrary;
+    const appearanceLibraryChange = replaceWhenChanged(cigSettings.rp_library, migrateAppearanceLibrary, appearanceLibraryEquivalent);
+    if (appearanceLibraryChange.changed) {
+        cigSettings.rp_library = appearanceLibraryChange.value;
         settingsMigrated = true;
     }
-    const migratedOutfitCatalog = migrateOutfitCatalog(cigSettings.rp_outfits);
-    if (JSON.stringify(cigSettings.rp_outfits) !== JSON.stringify(migratedOutfitCatalog)) {
-        cigSettings.rp_outfits = migratedOutfitCatalog;
+    const outfitCatalogChange = replaceWhenChanged(cigSettings.rp_outfits, migrateOutfitCatalog, outfitCatalogEquivalent);
+    if (outfitCatalogChange.changed) {
+        cigSettings.rp_outfits = outfitCatalogChange.value;
         settingsMigrated = true;
     }
-    const migratedOutfitPending = createOutfitPendingState(cigSettings.outfit_pending);
-    if (JSON.stringify(cigSettings.outfit_pending) !== JSON.stringify(migratedOutfitPending)) {
-        cigSettings.outfit_pending = migratedOutfitPending;
+    const outfitPendingStateChange = replaceWhenChanged(cigSettings.outfit_pending, createOutfitPendingState, outfitPendingStateEquivalent);
+    if (outfitPendingStateChange.changed) {
+        cigSettings.outfit_pending = outfitPendingStateChange.value;
         settingsMigrated = true;
     }
     if (!cigSettings.provider_keys || typeof cigSettings.provider_keys !== 'object' || Array.isArray(cigSettings.provider_keys)) {
