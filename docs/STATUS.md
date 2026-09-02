@@ -11,8 +11,8 @@ Task 4 — production cutover verified; awaiting independent correction review.
 - Generation source and delivery destination contracts implemented.
 - Extracted a dependency-injected scene-generation kernel without production wiring.
 - Defined the Task 4 composition seams for capture, reference materialization, plan/message construction, provider dispatch, and coordination.
-- Added dormant, dependency-injected message and preview/Gallery delivery adapters without production wiring.
-- Added pure wand and slash request factories plus thin entry adapters; Task 4 remains responsible for composing them into `index.js`.
+- Historical Task 3: added dormant, dependency-injected message and preview/Gallery delivery adapters before production wiring.
+- Historical Task 3: added pure wand and slash request factories plus thin entry adapters; Task 4 subsequently composed them into `index.js`.
 - Composed the production kernel and registered exactly two generation sources: the message wand and `/proimagine` (including its existing aliases).
 - Removed automatic, overswipe, iteration, Director, and cinematic provider dispatch while preserving legacy preferences and historical artifacts as inert/readable data.
 

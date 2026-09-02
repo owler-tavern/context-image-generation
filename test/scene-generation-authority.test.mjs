@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
 import {
     createProductionGenerationEntrypoints,
     registerProductionGenerationEntrypoints,
@@ -42,7 +43,6 @@ function createAuthorityHarness(fakeKernel) {
     return {
         clickWand: () => handlers.wand({ prompt: 'current scene', sender: 'Mira', messageId: 2, focusText: null, target: { chatId: 'chat', messageId: 2, messageFingerprint: 'fp' } }),
         runSlash: (prompt) => handlers.slash(prompt),
-        openSettings: async () => ({ configured: true, generationHandler: handlers.settings }),
         navigatePastLastImage: async () => handleImageArrowNavigation({ owned: true, direction: 'next', currentIndex: 1, mediaLength: 2 }),
         renderMessageWithAutoPreviouslyEnabled: async () => {
             await handlers.characterRendered(7);
@@ -61,21 +61,33 @@ test('only wand and slash actions reach the injected generation authority', asyn
     const fakeArtifact = { imageData: 'AA==', mimeType: 'image/png' };
     const fakeKernel = { generate: async request => (dispatched.push(request.source), { artifact: fakeArtifact, plan: {}, request }) };
     const harness = createAuthorityHarness(fakeKernel);
+    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const renderedMessageBody = index.match(/async function onCigMessageRendered\(messageId\) \{[\s\S]*?\n\}\n\njQuery/u)?.[0] || '';
+    const settingsBody = index.match(/async function loadSettings\(\) \{[\s\S]*?selectInitialSettingsTab\(cigSettings\);\r?\n\}/u)?.[0] || '';
 
     await harness.clickWand();
     await harness.runSlash('a moonlit castle');
-    const settings = await harness.openSettings();
     await harness.navigatePastLastImage();
     await harness.renderMessageWithAutoPreviouslyEnabled();
     await harness.stageCinematicSuggestion();
     const historical = await harness.openHistoricalIterationArtifact();
 
     assert.deepEqual(dispatched, ['wand', 'slash']);
-    assert.equal(settings.generationHandler, undefined);
     assert.deepEqual(harness.rendered, [7, 8]);
     assert.deepEqual(harness.staged, ['suggestion:1']);
     assert.equal(historical.artifactId, 'artifact:old');
     assert.equal(historical.recipeAvailable, true);
+
+    // Guard the real production bodies rather than a harness stand-in: rendered
+    // messages may add a wand and cinematic context, while Settings may configure
+    // preferences, but neither may acquire generation authority.
+    assert.match(index, /onMessageRendered: onCigMessageRendered/u);
+    assert.match(renderedMessageBody, /injectMessageButton\(messageId\)/u);
+    assert.match(settingsBody, /\$\('#cig_provider'\)/u);
+    assert.match(settingsBody, /\$\('#cig_use_previous_image'\)/u);
+    for (const body of [renderedMessageBody, settingsBody]) {
+        assert.doesNotMatch(body, /sceneGenerationKernel|dispatchProviderRoute|createProductionGenerationEntrypoints|cigMessageButton|\.generate\(/u);
+    }
 });
 
 test('wand and slash each reach the fake kernel exactly once', async () => {
