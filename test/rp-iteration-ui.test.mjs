@@ -31,6 +31,7 @@ function dependencies(overrides = {}) {
         }),
         verifyCanonicalEligibility: ({ artifactId }) => ({ status: 'eligible', artifactId, authorityToken: 'canon' }),
         reserveInvocation: () => true,
+        releaseInvocation: () => {},
         estimateCost: ({ outputCount, action }) => {
             calls.quote.push({ outputCount, action });
             return { quoteId: `quote:${action}:${outputCount}:${calls.quote.length}`, amount: outputCount * 0.04, currency: 'USD', expiresAt: '2999-01-01T00:00:00.000Z' };
@@ -343,7 +344,7 @@ test('discard exceptions preserve chosen/original state and expose cleanup recon
 });
 
 test('missing authoritative dependencies fail closed without dispatch', async () => {
-    for (const missing of ['verifyGenerationPlan', 'estimateCost', 'reserveInvocation', 'dispatchCoordinator', 'persistArtifact', 'readbackArtifact', 'readbackOriginalArtifact']) {
+    for (const missing of ['verifyGenerationPlan', 'estimateCost', 'reserveInvocation', 'releaseInvocation', 'dispatchCoordinator', 'persistArtifact', 'readbackArtifact', 'readbackOriginalArtifact']) {
         const { deps, calls } = dependencies({ [missing]: undefined });
         const controller = createIterationSurfaceController(deps);
         const result = await controller.submit({ action: 'reuse-recipe', consent: { approved: true, outputCount: 1 } });

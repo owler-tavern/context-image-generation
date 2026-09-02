@@ -524,3 +524,49 @@ test('Cinematic approval persistence rejection settles the reservation before re
     assert.equal(runtime.getState().session.reservedGenerationCount, 0);
     assert.equal(Object.keys(runtime.getState().session.reservations).length, 0);
 });
+
+test('Cinematic rejected interpretation clears the captured queued marker and becomes evictable after more than 32 visits', async () => {
+    const states = new Map();
+    let rejectInterpretation;
+    let interpretationStarted;
+    const started = new Promise((resolve) => { interpretationStarted = resolve; });
+    let chatId = 'chat-a';
+    let epoch = 1;
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => chatId,
+        getEpoch: () => epoch,
+        readState: ({ chatId: requested } = {}) => states.get(requested || chatId) || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value, { chatId: requested } = {}) => states.set(requested || chatId, structuredClone(value)),
+        saveChat: async () => {},
+        interpret: async () => {
+            interpretationStarted();
+            return new Promise((_resolve, reject) => { rejectInterpretation = reject; });
+        },
+    });
+    runtime.load({ chatId, epoch });
+    const observing = runtime.observe({ chatId, epoch, messageId: 1, message: { mes: 'Ava enters the library.' } });
+    await started;
+    for (let index = 0; index <= 32; index += 1) {
+        chatId = `chat-${index}`;
+        epoch += 1;
+        runtime.load({ chatId, epoch });
+    }
+    rejectInterpretation(new Error('interpretation failed'));
+    const result = await observing;
+    assert.equal(result.status, 'failed');
+    assert.equal(runtime.getState().chatId, 'chat-32');
+    assert.equal(states.get('chat-a').cinematicAutomation.queuedEvents.length, 0);
+    assert.equal(states.get('chat-a').cinematicAutomation.lastResult.status, 'failed');
+
+    for (let index = 33; index <= 65; index += 1) {
+        chatId = `chat-${index}`;
+        epoch += 1;
+        runtime.load({ chatId, epoch });
+    }
+    states.set('chat-a', { storyState: { marker: 'reloaded-after-interpret-failure' } });
+    chatId = 'chat-a';
+    epoch += 1;
+    runtime.load({ chatId, epoch });
+    assert.equal(runtime.getState().storyState.marker, 'reloaded-after-interpret-failure');
+});
