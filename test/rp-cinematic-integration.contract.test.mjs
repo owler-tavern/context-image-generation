@@ -80,7 +80,7 @@ test('production manual retrigger captures lifecycle identity and skips stale re
 });
 
 test('previous image is a strict opt-in at capture and pending continuation is cleared when turned off', () => {
-    assert.match(index, /const hadExplicitPreviousImageOptIn = Number\(extension_settings\[extensionName\]\.previous_image_opt_in_version\) >= 1/u);
+    assert.match(index, /const persistedSettings = extension_settings\[extensionName\];[\s\S]*const hadExplicitPreviousImageOptIn = Number\(persistedSettings\?\.previous_image_opt_in_version\) >= 1/u);
     assert.match(index, /if \(!hadExplicitPreviousImageOptIn\) \{[\s\S]*?cigSettings\.use_previous_image = false;[\s\S]*?cigSettings\.previous_image_opt_in_version = 1;/u);
     assert.match(index, /const previousImageEnabled = settingsSnapshot\.use_previous_image === true/u);
     assert.match(index, /settingsSnapshot\.gallery\.filter\(\(item\) => currentChatId && String\(item\?\.chatId \|\| ''\) === currentChatId\)/u);

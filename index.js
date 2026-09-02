@@ -47,7 +47,7 @@ import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generatio
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
+import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, loadExtensionSettings, persistExtensionSettings, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
@@ -73,7 +73,7 @@ import {
 } from './lib/rp/appearance-library.js';
 import { deleteAppearanceAssetFile, deleteAppearanceFile } from './lib/rp/appearance-assets.js';
 import { CHAT_CANON_KEY, chatCanonRevisionFingerprint, clearChatIdentityPin, getChatAppearanceSource, getChatBinding, getChatCastOverrides, getChatIdentityPin, getChatWandPreferences, migrateChatCanon, selectLookForChat, setChatAppearanceSource, setChatBinding, setChatCastOverride, setChatIdentityPin, setChatLock, setChatWandPreferences } from './lib/rp/chat-canon.js';
-import { enqueueLibraryMutation, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
+import { enqueueLibraryMutation, persistChatCanonMetadata, persistVerifiedChatMutation, readPersistedExtensionLibrary, reconcilePendingOperation, verifyPersistedChatBinding, verifyPersistedChatMediaLink, verifyPersistedExtensionLibrary, verifyPersistedGalleryArtifact, verifyPersistedGalleryClear, verifyPersistedVisibleCanonPending } from './lib/rp/persistence-verifier.js';
 import { persistOrphanCleanupRecovery, reconcileAppearanceOperations, runRebasedLibraryMutation } from './lib/rp/appearance-operations.js';
 import { createAppearanceFeatureController, runRememberAppearance } from './lib/rp/appearance-runtime.js';
 import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-removal.js';
@@ -1228,16 +1228,11 @@ function markImagesCastSettingsStale() {
 }
 
 async function loadSettings() {
-    extension_settings[extensionName] = extension_settings[extensionName] || {};
-    const hadExplicitPreviousImageOptIn = Number(extension_settings[extensionName].previous_image_opt_in_version) >= 1;
-    let settingsMigrated = false;
-
-    for (const [key, value] of Object.entries(defaultSettings)) {
-        if (extension_settings[extensionName][key] === undefined) {
-            extension_settings[extensionName][key] = value;
-            settingsMigrated = true;
-        }
-    }
+    const persistedSettings = extension_settings[extensionName];
+    const hadExplicitPreviousImageOptIn = Number(persistedSettings?.previous_image_opt_in_version) >= 1;
+    const loadedSettings = loadExtensionSettings(defaultSettings, persistedSettings);
+    extension_settings[extensionName] = loadedSettings.settings;
+    let settingsMigrated = loadedSettings.changed;
 
     // Restore the single avatar-reference preference. Existing split settings
     // migrate once: either previously enabled avatar keeps references enabled.
@@ -1310,7 +1305,7 @@ async function loadSettings() {
     }
 
     if (settingsMigrated) {
-        saveSettingsDebounced();
+        void persistExtensionSettings(cigSettings, saveSettingsDebounced);
     }
 
     schedulePendingRecovery();
@@ -2302,16 +2297,29 @@ function chatCastPreferences() {
     return getChatCastOverrides(chat_metadata?.[CHAT_CANON_KEY]);
 }
 
+async function persistCurrentChatCanon(candidate) {
+    const context = getContext();
+    return persistChatCanonMetadata({
+        metadata: chat_metadata,
+        candidate,
+        groupId: context.groupId || null,
+        chatName: context.chatId,
+        chatData: cloneSnapshot(context.chat || []),
+        saveOneToOne: saveChat,
+        saveGroup: saveGroupChat,
+    });
+}
+
 function setChatWandPreference(name, value) {
-    chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { [name]: value });
-    void saveChatConditional();
+    const candidate = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { [name]: value });
+    void persistCurrentChatCanon(candidate);
 }
 
 function chooseChatCastOverride(identityId, action) {
     const identity = getAppearanceIdentityChoices().find((entry) => entry.id === identityId);
     if (!identity) return { status: 'unavailable' };
-    chat_metadata[CHAT_CANON_KEY] = setChatCastOverride(chat_metadata?.[CHAT_CANON_KEY], identity.id, action);
-    void saveChatConditional();
+    const candidate = setChatCastOverride(chat_metadata?.[CHAT_CANON_KEY], identity.id, action);
+    void persistCurrentChatCanon(candidate);
     renderChatAppearanceSources();
     return { status: 'selected', identityId: identity.id, action };
 }
@@ -2324,8 +2332,7 @@ function chooseAppearanceSource(identityId, sourceType) {
     if (!identity || !['auto', 'avatar', 'description'].includes(sourceType)) return { status: 'unavailable' };
     const role = identity.kind === 'user' ? 'persona' : identity.kind;
     const next = setChatAppearanceSource(chat_metadata?.[CHAT_CANON_KEY], identity.id, { identityId: identity.id, sourceId: identity.id, sourceType, role });
-    chat_metadata[CHAT_CANON_KEY] = next;
-    void saveChatConditional();
+    void persistCurrentChatCanon(next);
     renderChatAppearanceSources();
     return { status: 'selected', identityId: identity.id, sourceType };
 }
@@ -2337,12 +2344,11 @@ function chooseIdentityPin(identityId, action = 'pin') {
     const role = identity.kind === 'user' ? 'persona' : identity.kind;
     const currentPin = Object.values(canon.identityPins || {}).find((pin) => pin?.role === role) || getChatIdentityPin(canon, identity.id, role);
     if (action === 'unpin') {
-        chat_metadata[CHAT_CANON_KEY] = clearChatIdentityPin(canon, currentPin?.identityId || identity.id);
+        void persistCurrentChatCanon(clearChatIdentityPin(canon, currentPin?.identityId || identity.id));
     } else {
         if (currentPin && currentPin.identityId !== identity.id && typeof window !== 'undefined' && typeof window.confirm === 'function' && !window.confirm('Replace the pinned identity for this chat?')) return { status: 'cancelled' };
-        chat_metadata[CHAT_CANON_KEY] = setChatIdentityPin(canon, identity.id, { sourceId: identity.id, role });
+        void persistCurrentChatCanon(setChatIdentityPin(canon, identity.id, { sourceId: identity.id, role }));
     }
-    void saveChatConditional();
     renderChatAppearanceSources();
     return { status: action === 'unpin' ? 'unpinned' : 'pinned', identityId: identity.id };
 }
@@ -2415,7 +2421,7 @@ async function chooseAppearanceIdentity(defaultLabel = '') {
     lookInput.type = 'text';
     lookInput.maxLength = 120;
     lookInput.value = String(defaultLabel || '').slice(0, 120);
-    lookInput.placeholder = 'e.g. Evening outfit';
+    lookInput.placeholder = 'e.g. Evening look';
     lookInput.setAttribute('aria-label', 'Optional look name');
     lookLabel.appendChild(lookInput);
     content.appendChild(lookLabel);

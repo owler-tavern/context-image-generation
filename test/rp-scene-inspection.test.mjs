@@ -20,12 +20,11 @@ test('projects an interpretation into a stable, human-readable inspection view',
             'Focus: Ava raises the lantern.',
             'Present: Ava.',
             'Location: library.',
-            'Outfits: Ava — wet blue coat.',
             'Objects: silver lantern (held by Ava).',
             'Injuries: unknown.',
             'State changes: none recorded.',
         ],
-        statuses: { cast: 'observed', location: 'observed', outfits: 'observed', objects: 'observed', injuries: 'unknown' },
+        statuses: { cast: 'observed', location: 'observed', objects: 'observed', injuries: 'unknown' },
         warnings: [],
     });
 });
@@ -70,7 +69,7 @@ test('inspection projects retained reconciled state and exposes fact status', ()
         },
     });
     assert.deepEqual(view.statuses, {
-        cast: 'changed', location: 'changed', outfits: 'retained', objects: 'unknown', injuries: 'unknown',
+        cast: 'changed', location: 'changed', objects: 'unknown', injuries: 'unknown',
     });
     assert.ok(view.lines.some((line) => line.includes('Sam') && line.includes('retained')));
     assert.ok(view.lines.some((line) => line.includes('station') && line.includes('changed')));

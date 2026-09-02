@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 6 — outfit behavior retired without deleting legacy user data; awaiting independent review.
+Task 6 correction round 1 — reviewer findings fixed; awaiting independent re-review.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -21,6 +21,9 @@ Task 6 — outfit behavior retired without deleting legacy user data; awaiting i
 - Captured avatar, previous-image, and saved-appearance inputs once before asynchronous materialization, preventing delayed work from mixing chats.
 - Decoupled saved-appearance asset resolution from the previous-image toggle and its selected Gallery item.
 - Retired outfit UI, handlers, prompt projection, plan/provenance fields, settings normalization, and pending-recovery scheduling. Legacy `rp_outfits`, `outfit_pending`, chat `outfitState`, and historical `activeOutfits` artifacts remain inert and structurally preserved.
+- Removed the remaining scene and cinematic outfit-state architecture. Current attire remains ordinary source text only; non-outfit scene facts remain available.
+- Preserved realistic opaque legacy `outfitState` values larger than 8192 bytes across every ordinary chat-canon writer and real one-to-one/group metadata save seam without weakening the generic unknown-field budget.
+- Added real extension-settings load/save and historical Story Memory artifact-reader coverage for compatibility preservation.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -38,11 +41,15 @@ Task 6 — outfit behavior retired without deleting legacy user data; awaiting i
 - Task 6 syntax checks — `index.js`, `lib/generation-plan.js`, and `lib/rp/continuity-shelf.js` passed `node --check`.
 - Task 6 full repository suite — 870 passed, 0 failed: `node --test test/*.mjs`.
 - Task 6 `git diff --check` — passed.
+- Task 6 correction RED — the expanded retirement suite reported 2 passed and 5 failed for real settings/metadata seams, large opaque legacy state, scene retention, and cinematic events; a final source assertion exposed one stale cinematic outfit branch at 6 passed and 1 failed.
+- Task 6 correction focused suite — 63 passed, 0 failed.
+- Task 6 correction affected scene/cinematic/canon/settings/Story Memory suite — 122 passed, 0 failed.
+- Task 6 correction full repository suite — 873 passed, 0 failed: `node --test test/*.mjs`.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
-- Independent re-review of the Task 5 correction is outstanding.
+- Independent re-review of the Task 6 correction is outstanding.
 
 ## Decisions
 - Settings is configuration-only.
@@ -51,4 +58,4 @@ Task 6 — outfit behavior retired without deleting legacy user data; awaiting i
 - Legacy outfit records are preserved as opaque compatibility data; no production path interprets, writes, replays, or injects them into generation.
 
 ## Next action
-Obtain independent review of Task 6, then proceed with the focused settings/documentation alignment task.
+Obtain independent re-review of Task 6 correction round 1, then proceed with the focused settings/documentation alignment task.

@@ -22,7 +22,7 @@ const delta = (overrides = {}) => ({
     ...overrides,
 });
 
-test('accepted location, outfit, cast, and emotional beat deltas produce stable evidence-bearing events', () => {
+test('accepted location, cast, and emotional beat deltas produce stable evidence-bearing events while outfits stay inert', () => {
     const input = delta({
         updatedSceneFacts: {
             location: { from: 'station', to: 'library' },
@@ -35,7 +35,7 @@ test('accepted location, outfit, cast, and emotional beat deltas produce stable 
     const second = deriveCinematicEvents(structuredClone(input));
 
     assert.deepEqual(first, second);
-    assert.deepEqual(first.map((event) => event.kind), ['location', 'outfit', 'cast', 'emotional-beat']);
+    assert.deepEqual(first.map((event) => event.kind), ['location', 'cast', 'emotional-beat']);
     assert.ok(first.every((event) => /^event:[a-f0-9]{16}$/u.test(event.eventId)));
     assert.ok(first.every((event) => /^beat:/u.test(event.beatId)));
     assert.equal(first[0].whyFired.reason, 'accepted location change');
@@ -54,15 +54,15 @@ test('ordinary or ambiguous chat deltas are suppressed without becoming blocked 
 test('mode thresholds are explicit and do not depend on message count', () => {
     assert.deepEqual(CINEMATIC_MODE_THRESHOLDS, { conservative: 3, balanced: 2, frequent: 1 });
     const conservative = createCinematicSession({ sessionId: 's', mode: 'conservative', costCeiling: 1 });
-    const outfit = evaluateCinematicAutomation({
+    const cast = evaluateCinematicAutomation({
         session: conservative,
         acceptedSceneDelta: delta({
-            revision: 'scene:outfit',
-            updatedSceneFacts: { outfits: [{ identityId: 'character:ava', from: 'red coat', to: 'blue dress' }] },
+            revision: 'scene:cast',
+            updatedSceneFacts: { cast: { added: [{ identityId: 'character:ava' }], removed: [] } },
             messageCount: 100000,
         }),
     });
-    assert.equal(outfit.status, 'below-threshold');
+    assert.equal(cast.status, 'below-threshold');
     const location = evaluateCinematicAutomation({ session: conservative, acceptedSceneDelta: delta() });
     assert.equal(location.status, 'suggested');
     assert.match(location.nextTrigger.explanation, /location|conservative/i);
@@ -206,21 +206,21 @@ test('set-like event arrays have order-independent IDs and cards expose only san
 
 test('conservative and balanced thresholds accumulate accepted unconsumed beats, and dismissal consumes idempotently', () => {
     const session = createCinematicSession({ sessionId: 's', mode: 'conservative', costCeiling: 1 });
-    const outfit = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta({ revision: 'scene:o', updatedSceneFacts: { outfits: [{ identityId: 'a', from: 'red', to: 'blue' }] } }) });
-    assert.equal(outfit.status, 'below-threshold');
-    const cast = evaluateCinematicAutomation({ session: outfit.session, acceptedSceneDelta: delta({ revision: 'scene:c', updatedSceneFacts: { cast: { added: [{ identityId: 'b' }], removed: [] } } }) });
-    assert.equal(cast.status, 'suggested');
-    assert.match(cast.nextTrigger.explanation, /outfit|cast/i);
-    const dismissed = dismissCinematicSuggestion(cast.session, cast.suggestion);
+    const firstCast = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta({ revision: 'scene:a', updatedSceneFacts: { cast: { added: [{ identityId: 'a' }], removed: [] } } }) });
+    assert.equal(firstCast.status, 'below-threshold');
+    const secondCast = evaluateCinematicAutomation({ session: firstCast.session, acceptedSceneDelta: delta({ revision: 'scene:b', updatedSceneFacts: { cast: { added: [{ identityId: 'b' }], removed: [] } } }) });
+    assert.equal(secondCast.status, 'suggested');
+    assert.match(secondCast.nextTrigger.explanation, /cast/i);
+    const dismissed = dismissCinematicSuggestion(secondCast.session, secondCast.suggestion);
     assert.equal(dismissed.status, 'dismissed');
     assert.equal(dismissed.session.consumedEventIds.length, 2);
-    assert.deepEqual(dismissCinematicSuggestion(dismissed.session, cast.suggestion), dismissed);
+    assert.deepEqual(dismissCinematicSuggestion(dismissed.session, secondCast.suggestion), dismissed);
 });
 
-test('any nested ambiguity in an accepted delta suppresses the entire automation decision', () => {
+test('retired outfit ambiguity cannot suppress an accepted non-outfit event', () => {
     assert.deepEqual(deriveCinematicEvents(delta({
         updatedSceneFacts: { location: { from: 'station', to: 'library', status: 'confirmed' }, outfits: { ambiguous: true, added: [{ identityId: 'a' }] } },
-    })), []);
+    })).map((event) => event.kind), ['location']);
 });
 
 test('new accepted events do not create an overlapping card while one suggestion is pending', () => {

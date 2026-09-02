@@ -3,13 +3,12 @@ import assert from 'node:assert/strict';
 import { createCinematicRuntime } from '../lib/rp/cinematic-runtime.js';
 import { buildSceneGenerationSnapshot } from '../lib/rp/scene-generation.js';
 
-function interpretationDelta({ location = null, outfits = null, cast = null } = {}) {
+function interpretationDelta({ location = null, cast = null } = {}) {
     return {
         accepted: true,
-        revision: `revision:${location || outfits || cast || 'scene'}`,
+        revision: `revision:${location || cast || 'scene'}`,
         updatedSceneFacts: {
             ...(location ? { location: { from: 'station', to: location } } : {}),
-            ...(outfits ? { outfits } : {}),
             ...(cast ? { cast } : {}),
         },
         acceptedEvidence: [{ source: 'clicked-message', text: 'accepted story change' }],
@@ -53,7 +52,7 @@ test('adjust and dismiss never dispatch, while approve dispatches once and settl
     await runtime.adjust(result.suggestion.suggestionId, { prompt: 'quiet library' });
     await runtime.dismiss(result.suggestion.suggestionId);
     assert.equal(calls.dispatch, 0);
-    const second = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 2, message: { mes: 'Ava changes clothes.' }, acceptedSceneDelta: interpretationDelta({ outfits: [{ identityId: 'ava', from: 'red coat', to: 'blue dress' }] }) });
+    const second = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 2, message: { mes: 'Sam enters.' }, acceptedSceneDelta: interpretationDelta({ cast: { added: [{ identityId: 'sam' }], removed: [] } }) });
     const approved = await runtime.approve(second.suggestion.suggestionId);
     assert.equal(approved.status, 'completed');
     assert.equal(calls.dispatch, 1);

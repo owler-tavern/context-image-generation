@@ -27,23 +27,21 @@ test('reconciles scene facts while preserving durable identity facts', () => {
 
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
     assert.equal(result.nextState.sceneFacts.location, 'library');
-    assert.deepEqual(result.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'wet blue coat' }]);
+    assert.equal(Object.hasOwn(result.nextState.sceneFacts, 'outfits'), false);
     assert.deepEqual(result.nextState.sceneFacts.objects, [
         { value: 'map', holderIdentityId: 'character:ava' },
         { value: 'silver lantern', holderIdentityId: 'character:ava' },
     ]);
     assert.deepEqual(result.removedSceneFacts, {
         location: 'station',
-        outfits: [{ identityId: 'character:ava', value: 'red coat' }],
         injuries: [{ identityId: 'character:ava', value: 'cut on hand' }],
     });
     assert.deepEqual(result.updatedSceneFacts, {
         location: { from: 'station', to: 'library' },
-        outfits: [{ identityId: 'character:ava', from: 'red coat', to: 'wet blue coat' }],
     });
 });
 
-test('does not erase durable or unobserved scene facts when the new scene is unknown or partial', () => {
+test('does not erase durable or unobserved non-outfit scene facts when the new scene is unknown or partial', () => {
     const prior = {
         schema: 1,
         durableIdentityFacts: { 'character:ava': ['Ava is left-handed.'] },
@@ -53,7 +51,7 @@ test('does not erase durable or unobserved scene facts when the new scene is unk
 
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
     assert.equal(result.nextState.sceneFacts.location, 'station');
-    assert.deepEqual(result.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'red coat' }]);
+    assert.equal(Object.hasOwn(result.nextState.sceneFacts, 'outfits'), false);
     assert.deepEqual(result.removedSceneFacts, {});
 });
 
@@ -70,23 +68,23 @@ test('clears a prior scene fact only on explicit high-confidence removal evidenc
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
 });
 
-test('sequential scene reconciliation replaces observed facts and preserves unobserved facts', () => {
+test('sequential scene reconciliation replaces observed injuries and preserves unobserved facts', () => {
     const first = reconcileStoryState({ sceneFacts: {} }, {
         location: { status: 'confirmed', value: 'station' },
-        outfits: [{ identityId: 'character:ava', value: 'red coat' }],
+        injuries: [{ identityId: 'character:ava', value: 'cut on hand' }],
     });
     const second = reconcileStoryState(first.nextState, {
         location: { status: 'unknown', value: null },
-        outfits: [{ identityId: 'character:ava', value: 'blue coat' }],
+        injuries: [{ identityId: 'character:ava', value: 'bruise on cheek' }],
     });
     assert.equal(second.nextState.sceneFacts.location, 'station');
-    assert.deepEqual(second.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'blue coat' }]);
+    assert.deepEqual(second.nextState.sceneFacts.injuries, [{ identityId: 'character:ava', value: 'bruise on cheek' }]);
     const third = reconcileStoryState(second.nextState, {
         location: { status: 'unknown', value: null },
         sceneSignals: { location: { clear: true, confidence: 'high' } },
     });
     assert.equal('location' in third.nextState.sceneFacts, false);
-    assert.deepEqual(third.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'blue coat' }]);
+    assert.deepEqual(third.nextState.sceneFacts.injuries, [{ identityId: 'character:ava', value: 'bruise on cheek' }]);
 });
 
 test('accepts only bounded, serializable state and returns immutable-by-convention clones', () => {

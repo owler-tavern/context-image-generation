@@ -44,7 +44,7 @@ test('cast excludes narrator, absent mentions, and negated mentions while preser
     assert.ok(result.ambiguities.some((entry) => entry.alias === 'guide'));
 });
 
-test('location and scene details are conservative, current, and evidence-bearing', () => {
+test('location and non-outfit scene details are conservative, current, and evidence-bearing', () => {
     const result = interpretScene({
         selectedPassage: 'In the library, Ava wears a wet blue coat and holds a silver lantern. A bruise darkens her cheek.',
         clickedMessage: { name: 'Ava', mes: 'Ava leaves the station.' },
@@ -53,10 +53,7 @@ test('location and scene details are conservative, current, and evidence-bearing
 
     assert.equal(result.location.value, 'library');
     assert.equal(result.location.confidence, 'high');
-    assert.deepEqual(result.outfits, [{
-        identityId: 'character:ava', value: 'wet blue coat', confidence: 'high',
-        evidence: [{ source: 'selected-passage', text: 'In the library, Ava wears a wet blue coat and holds a silver lantern. A bruise darkens her cheek.' }],
-    }]);
+    assert.equal(Object.hasOwn(result, 'outfits'), false);
     assert.deepEqual(result.objects, [{
         value: 'silver lantern', holderIdentityId: 'character:ava', confidence: 'high',
         evidence: [{ source: 'selected-passage', text: 'In the library, Ava wears a wet blue coat and holds a silver lantern. A bruise darkens her cheek.' }],
@@ -75,7 +72,7 @@ test('no selected passage falls back to the clicked message and reports unknown 
 
     assert.equal(result.focusPassage.source, 'clicked-message');
     assert.equal(result.location.status, 'unknown');
-    assert.deepEqual(result.outfits, []);
+    assert.equal(Object.hasOwn(result, 'outfits'), false);
     assert.deepEqual(result.objects, []);
     assert.deepEqual(result.injuries, []);
 });
@@ -155,7 +152,7 @@ test('explicit object removal clears only the obsolete object fact', () => {
     });
     assert.deepEqual(result.sceneSignals.objects.remove, [{ value: 'map', identityId: 'character:ava', holderIdentityId: 'character:ava' }]);
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.objects, []);
-    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'red coat' }]);
+    assert.equal(Object.hasOwn(result.storyStateDelta.nextState.sceneFacts, 'outfits'), false);
 });
 
 test('low-confidence recent departure is evidence but does not clear prior location', () => {
@@ -188,13 +185,13 @@ test('keeps ASCII and curly single or double quoted aliases unresolved', () => {
     }
 });
 
-test('an absent identity blocks only its lower-rank outfit and object facts', () => {
+test('an absent identity blocks its lower-rank object facts while attire remains ordinary text', () => {
     const result = interpretScene({
         selectedPassage: 'Sam is absent.',
         clickedMessage: { name: 'Sam', role: 'character', mes: 'Sam wears a red coat and holds a map.' },
         identities,
     });
-    assert.deepEqual(result.outfits, []);
+    assert.equal(Object.hasOwn(result, 'outfits'), false);
     assert.deepEqual(result.objects, []);
 });
 
@@ -207,13 +204,13 @@ test('selected absence suppresses lower-rank location facts attributable only to
     assert.equal(result.location.status, 'unknown');
 });
 
-test('selected absence does not suppress lower-rank facts for another identity', () => {
+test('selected absence does not suppress lower-rank object facts for another identity', () => {
     const result = interpretScene({
-        selectedPassage: 'Sam is absent; Sam wears a red coat.',
-        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava wears a blue coat.' },
+        selectedPassage: 'Sam is absent.',
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava holds a lantern.' },
         identities,
     });
-    assert.deepEqual(result.outfits, [{ identityId: 'character:ava', value: 'blue coat', confidence: 'high', evidence: [{ source: 'clicked-message', text: 'Ava wears a blue coat.', speaker: 'Ava', role: 'character' }] }]);
+    assert.deepEqual(result.objects, [{ value: 'lantern', holderIdentityId: 'character:ava', confidence: 'high', evidence: [{ source: 'clicked-message', text: 'Ava holds a lantern.', speaker: 'Ava', role: 'character' }] }]);
 });
 
 test('targeted absence removes only that identity from retained cast', () => {
@@ -226,7 +223,7 @@ test('targeted absence removes only that identity from retained cast', () => {
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.cast.map((entry) => entry.identityId), ['character:ava']);
 });
 
-test('removal signals target one object or outfit rather than clearing a collection', () => {
+test('removal signals target one object rather than clearing a collection', () => {
     const objectResult = interpretScene({
         clickedMessage: { name: 'Ava', mes: 'Ava drops the map.' },
         priorStoryState: { sceneFacts: { objects: [{ value: 'map', holderIdentityId: 'character:ava' }, { value: 'lantern', holderIdentityId: 'character:ava' }] } },
@@ -234,25 +231,16 @@ test('removal signals target one object or outfit rather than clearing a collect
     });
     assert.deepEqual(objectResult.storyStateDelta.nextState.sceneFacts.objects, [{ value: 'lantern', holderIdentityId: 'character:ava' }]);
 
-    const outfitResult = interpretScene({
-        clickedMessage: { name: 'Ava', mes: 'Ava removes the red coat.' },
-        priorStoryState: { sceneFacts: { outfits: [{ identityId: 'character:ava', value: 'red coat' }, { identityId: 'user:sam', value: 'blue shirt' }] } },
-        identities,
-    });
-    assert.deepEqual(outfitResult.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'user:sam', value: 'blue shirt' }]);
 });
 
-test('new observations do not remove unmentioned identities or outfits', () => {
+test('new observations preserve unmentioned cast while attire remains ordinary text', () => {
     const result = interpretScene({
         selectedPassage: 'Ava wears a blue coat.',
         priorStoryState: { sceneFacts: { cast: [{ identityId: 'user:sam', label: 'Sam' }], outfits: [{ identityId: 'user:sam', value: 'blue shirt' }] } },
         identities,
     });
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.cast.map((entry) => entry.identityId).sort(), ['user:sam', 'character:ava'].sort());
-    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [
-        { identityId: 'user:sam', value: 'blue shirt' },
-        { identityId: 'character:ava', value: 'blue coat' },
-    ]);
+    assert.equal(Object.hasOwn(result.storyStateDelta.nextState.sceneFacts, 'outfits'), false);
     assert.deepEqual(result.storyStateDelta.removedSceneFacts, {});
 });
 
