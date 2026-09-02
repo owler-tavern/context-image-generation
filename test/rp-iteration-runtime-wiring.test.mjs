@@ -62,7 +62,7 @@ test('Improve is a visible action before opening, while submit remains the only 
     assert.match(render, /\.text\('Improve'\)/);
     assert.match(render, /mountIterationSurface/);
     assert.match(source, /originalArtifact/);
-    assert.match(source, /cig_iteration_artifact: iterationArtifactForStorage/);
+    assert.match(source, /cig_iteration_artifact: await iterationArtifactForStorage/);
     assert.match(ui, /data-iteration-submit/);
     assert.match(ui, /controller\.submit/);
 });

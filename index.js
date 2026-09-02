@@ -80,22 +80,45 @@ import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitP
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
 import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
 import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
-import { createIterationArtifact, sanitizeIterationArtifactForStorage } from './lib/rp/iteration-domain.js';
-import { createIterationSurfaceController, mountIterationSurface, installIterationSurfaceStyles } from './lib/rp/iteration-ui.js';
-import { createStoryMemoryController, mountStoryMemorySurface } from './lib/rp/story-memory-ui.js';
-import { buildStoryMemoryFactSnapshot, createStoryMemoryRuntime, STORY_MEMORY_SETTINGS_KEY } from './lib/rp/story-memory-runtime.js';
 import { saveGroupChat } from '../../../group-chats.js';
-import { createCinematicRuntime, compactCinematicRuntimeState, CINEMATIC_AUTOMATION_KEY } from './lib/rp/cinematic-runtime.js';
-import { createCinematicUiController, focusCinematicSuggestionCard, installCinematicStyles, renderCinematicSuggestionCard } from './lib/rp/cinematic-ui.js';
-import { createDirectorRuntime, DIRECTOR_STATE_KEY } from './lib/rp/director-runtime.js';
-import { createDirectorUiController, DIRECTOR_UI_CSS, focusDirectorPanel, renderDirectorPanel, restoreDirectorTriggerFocus } from './lib/rp/director-ui.js';
-import { inferDirectorCast } from './lib/rp/director-cast.js';
 import { renderCastCorrectionControls, CAST_CORRECTION_SETTINGS_CSS } from './lib/rp/cast-settings-ui.js';
 import { projectReferenceReadiness, renderReferenceReadiness, REFERENCE_READINESS_CSS } from './lib/rp/reference-readiness.js';
 import { compactReferenceReceipt, REFERENCE_RECEIPT_CSS } from './lib/rp/reference-receipt.js';
+import { createOptionalFeatureLoader } from './lib/optional-feature-loader.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
+const STORY_MEMORY_SETTINGS_KEY = 'story_memory';
+const CINEMATIC_AUTOMATION_KEY = 'cinematicAutomation';
+const DIRECTOR_STATE_KEY = 'director';
+const optionalFeatureLoader = createOptionalFeatureLoader({
+    iteration: async () => ({
+        ...(await import('./lib/rp/iteration-domain.js')),
+        ...(await import('./lib/rp/iteration-ui.js')),
+    }),
+    storyMemory: async () => ({
+        ...(await import('./lib/rp/story-memory-ui.js')),
+        ...(await import('./lib/rp/story-memory-runtime.js')),
+    }),
+    cinematic: async () => ({
+        ...(await import('./lib/rp/cinematic-runtime.js')),
+        ...(await import('./lib/rp/cinematic-ui.js')),
+    }),
+    director: async () => ({
+        ...(await import('./lib/rp/director-runtime.js')),
+        ...(await import('./lib/rp/director-ui.js')),
+        ...(await import('./lib/rp/director-cast.js')),
+    }),
+});
+let iterationFeature = null;
+let storyMemoryFeature = null;
+let cinematicFeature = null;
+let directorFeature = null;
+
+async function ensureIterationFeature() { iterationFeature = await optionalFeatureLoader.load('iteration'); return iterationFeature; }
+async function ensureStoryMemoryFeature() { storyMemoryFeature = await optionalFeatureLoader.load('storyMemory'); return storyMemoryFeature; }
+async function ensureCinematicFeature() { cinematicFeature = await optionalFeatureLoader.load('cinematic'); return cinematicFeature; }
+async function ensureDirectorFeature() { directorFeature = await optionalFeatureLoader.load('director'); return directorFeature; }
 const DEFAULT_EXTRA_STORY_TOOLS = Object.freeze({ schema: 1, enabled: false, storyMemory: false, appearanceMemory: false, cinematic: false, iteration: false, gallery: false });
 
 function normalizeExtraStoryTools(value) {
@@ -911,10 +934,17 @@ function selectInitialSettingsTab(settings) {
     activateSettingsTab(resolveInitialSettingsTab({ savedTab: settings.ui_last_settings_tab, readiness }), { persist: false });
 }
 
-function createStoryMemorySurface() {
+async function createStoryMemorySurface() {
     if (!extraStoryToolEnabled('storyMemory')) return;
+    let feature;
+    try {
+        feature = await ensureStoryMemoryFeature();
+    } catch (error) {
+        showGenerationError(error, 'Load Story Memory');
+        return;
+    }
     const settings = extension_settings[extensionName];
-    const runtime = createStoryMemoryRuntime({
+    const runtime = feature.createStoryMemoryRuntime({
         extensionName,
         settings,
         getChat: () => getContext().chat || [],
@@ -984,13 +1014,13 @@ function createStoryMemorySurface() {
             };
         },
     };
-    storyMemoryController = createStoryMemoryController(dependencies);
+    storyMemoryController = feature.createStoryMemoryController(dependencies);
     storyMemoryLoadPromise = null;
     storyMemoryLoadCapture = null;
     const host = document.getElementById('cig_story_memory_surface');
     if (!host) return;
     storyMemorySurfaceMount?.destroy?.();
-    storyMemorySurfaceMount = mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
+    storyMemorySurfaceMount = feature.mountStoryMemorySurface(host, storyMemoryController, { installStyles: true, autoLoad: false });
     void loadStoryMemoryForCurrentChat();
 }
 
@@ -1029,7 +1059,8 @@ function renderCinematicSuggestion(suggestion = cinematicRuntime?.getState()?.su
         && !chatCaptureIsCurrent({ chatId: suggestion.target.chatId, epoch: suggestion.target.epoch })) return;
     const messageElement = $(`.mes[mesid="${Number(suggestion.target.messageId)}"]`);
     if (!messageElement.length) return;
-    const root = $(renderCinematicSuggestionCard(suggestion));
+    if (!cinematicFeature) return;
+    const root = $(cinematicFeature.renderCinematicSuggestionCard(suggestion));
     const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
     if (anchor.length) anchor.after(root); else messageElement.append(root);
 }
@@ -1043,11 +1074,18 @@ function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
     $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
 }
 
-function createCinematicSurface() {
+async function createCinematicSurface() {
     if (!extraStoryToolEnabled('cinematic')) return;
+    let feature;
+    try {
+        feature = await ensureCinematicFeature();
+    } catch (error) {
+        showGenerationError(error, 'Load Cinematic');
+        return;
+    }
     const settings = extension_settings[extensionName];
     const runtimeSettings = cinematicRuntimeSettings();
-    cinematicRuntime = createCinematicRuntime({
+    cinematicRuntime = feature.createCinematicRuntime({
         settings: runtimeSettings,
         getChatId: () => getContext().chatId,
         getChat: () => getContext().chat || [],
@@ -1059,7 +1097,7 @@ function createCinematicSurface() {
         writeState: (value, { chatId } = {}) => {
             if (chatId && String(chatId) !== String(getContext().chatId)) return;
             if (!chat_metadata[CHAT_CANON_KEY] || typeof chat_metadata[CHAT_CANON_KEY] !== 'object') chat_metadata[CHAT_CANON_KEY] = {};
-            chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = compactCinematicRuntimeState(value.cinematicAutomation);
+            chat_metadata[CHAT_CANON_KEY][CINEMATIC_AUTOMATION_KEY] = feature.compactCinematicRuntimeState(value.cinematicAutomation);
             chat_metadata[SCENE_STATE_METADATA_KEY] = value.storyState;
         },
         saveChat: () => saveChatConditional(),
@@ -1115,7 +1153,7 @@ function createCinematicSurface() {
         },
     });
     cinematicRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-    cinematicUiController = createCinematicUiController({
+    cinematicUiController = feature.createCinematicUiController({
         getSuggestion: () => cinematicRuntime?.getState()?.suggestion,
         stage: (id) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
@@ -1147,7 +1185,7 @@ function createCinematicSurface() {
             });
         },
     });
-    installCinematicStyles(document);
+    feature.installCinematicStyles(document);
     refreshCinematicSurface();
 }
 
@@ -1157,7 +1195,8 @@ function renderDirectorSurface() {
     if (!panel?.target?.messageId && panel?.messageId === undefined) return;
     const messageElement = $(`.mes[mesid="${Number(panel.target?.messageId ?? panel.messageId)}"]`);
     if (!messageElement.length) return;
-    const root = $(renderDirectorPanel(panel));
+    if (!directorFeature) return;
+    const root = $(directorFeature.renderDirectorPanel(panel));
     const anchor = messageElement.find('.mes_img_container, .mes_media_container, .mes_text').last();
     if (anchor.length) anchor.after(root); else messageElement.append(root);
 }
@@ -1254,7 +1293,7 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     return {
         moment: snapshot.sourcePassage || focusText || sourceMessage,
         inspection: snapshot.inspection?.lines || [],
-        castCandidates: inferDirectorCast({ interpretation: snapshot.interpretation, identities }),
+        castCandidates: directorFeature?.inferDirectorCast({ interpretation: snapshot.interpretation, identities }) || [],
         referenceSummary: readyLabels.length ? readyLabels.join('; ') : 'No character reference is ready; written descriptions may be used if enabled.',
         routeSummary,
         budgetSummary: 'Exact provider cost is unavailable; one generation will be requested only when Generate is pressed.',
@@ -1262,9 +1301,16 @@ function directorPreview({ sourceMessage, focusText, target, options: directorOp
     };
 }
 
-function createDirectorSurface() {
+async function createDirectorSurface() {
+    let feature;
+    try {
+        feature = await ensureDirectorFeature();
+    } catch (error) {
+        showGenerationError(error, 'Load Director');
+        return;
+    }
     const settings = extension_settings[extensionName];
-    directorRuntime = createDirectorRuntime({
+    directorRuntime = feature.createDirectorRuntime({
         getChatId: () => getContext().chatId,
         getEpoch: () => chatLifecycleEpoch.capture(),
         readState: ({ chatId } = {}) => {
@@ -1310,7 +1356,7 @@ function createDirectorSurface() {
         },
     });
     directorRuntime.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-    directorUiController = createDirectorUiController({
+    directorUiController = feature.createDirectorUiController({
         open: (payload) => directorRuntime.open(payload),
         update: (payload) => directorRuntime.update(payload),
         close: () => directorRuntime.close(),
@@ -1320,7 +1366,7 @@ function createDirectorSurface() {
     if (typeof document !== 'undefined' && !document.getElementById('cig_director_styles')) {
         const style = document.createElement('style');
         style.id = 'cig_director_styles';
-        style.textContent = DIRECTOR_UI_CSS;
+        style.textContent = feature.DIRECTOR_UI_CSS;
         document.head.appendChild(style);
     }
     renderDirectorSurface();
@@ -2168,8 +2214,10 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
             capabilities: cloneSnapshot(dispatchedPlan.resolved.capabilities || {}),
             generationPlan: cloneSnapshot(dispatchedPlan),
         };
-        const capturedIterationArtifact = extraStoryToolEnabled('iteration') ? {
-            ...createIterationArtifact({
+        const iterationFeatureForGeneration = extraStoryToolEnabled('iteration') ? await ensureIterationFeature() : null;
+        const storyMemoryFeatureForGeneration = extraStoryToolEnabled('storyMemory') ? await ensureStoryMemoryFeature() : null;
+        const capturedIterationArtifact = iterationFeatureForGeneration ? {
+            ...iterationFeatureForGeneration.createIterationArtifact({
                 artifactId: `artifact:${dispatchedPlan.id}`,
                 sourcePassage: { text: dispatchedPlan.prompt.sourceMessage, messageId, userVisible: true },
                 effectivePrompt: dispatchedPlan.prompt.messageContent || dispatchedPlan.prompt.sourceMessage,
@@ -2262,7 +2310,7 @@ async function generateImageFromPromptInternal(prompt, sender = null, messageId 
                     __cigContinuitySnapshot: continuitySurface,
                     __cigSceneMetadata: createSceneArtifactMetadata(dispatchedPlan.scene),
                     __cigSceneState: cloneSnapshot(dispatchedPlan.scene?.state),
-                    ...(extraStoryToolEnabled('storyMemory') ? { __cigStoryMemoryFacts: buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state) } : {}),
+                    ...(storyMemoryFeatureForGeneration ? { __cigStoryMemoryFacts: storyMemoryFeatureForGeneration.buildStoryMemoryFactSnapshot(dispatchedPlan.scene?.state) } : {}),
                     ...(capturedIterationArtifact ? { __cigIterationArtifact: capturedIterationArtifact } : {}),
                 }
                 : generated;
@@ -3638,7 +3686,7 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
                 ...(result.__cigContinuitySnapshot ? { cig_continuity_snapshot: cloneSnapshot(result.__cigContinuitySnapshot) } : {}),
                 ...(result.__cigSceneMetadata ? { cig_scene_inspection: cloneSnapshot(result.__cigSceneMetadata) } : {}),
                 ...(Array.isArray(result.__cigStoryMemoryFacts) && result.__cigStoryMemoryFacts.length ? { cig_story_memory_facts: cloneSnapshot(result.__cigStoryMemoryFacts) } : {}),
-                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: storedIterationArtifact || sanitizeIterationArtifactForStorage(result.__cigIterationArtifact) } : {}),
+                ...(result.__cigIterationArtifact ? { cig_iteration_artifact: storedIterationArtifact || result.__cigIterationArtifact } : {}),
             });
             currentMessage.extra.media_index = currentMessage.extra.media.length - 1;
             currentMessage.extra.inline_image = true;
@@ -3719,10 +3767,10 @@ function activeMediaForMessage(message) {
     return { media, index, item: media[index] };
 }
 
-function iterationSourceArtifact(message, activeMedia) {
+function iterationSourceArtifact(message, activeMedia, feature) {
     const item = activeMedia?.item || {};
     if (item.cig_iteration_artifact?.artifactId) return { ...cloneSnapshot(item.cig_iteration_artifact), mediaUrl: item.url || null };
-    const legacy = createIterationArtifact({
+    const legacy = feature.createIterationArtifact({
         artifactId: `artifact:legacy:${activeMedia?.index ?? 0}`,
         sourcePassage: { text: item.title || '' },
         effectivePrompt: item.title || '',
@@ -3735,12 +3783,14 @@ function iterationGenerationPlan(sourceArtifact) {
     return sourceArtifact?.generationPlan || null;
 }
 
-function iterationArtifactForStorage(artifact, plan) {
-    return sanitizeIterationArtifactForStorage({ ...artifact, generationPlan: plan?.generationPlan || artifact?.generationPlan });
+async function iterationArtifactForStorage(artifact, plan) {
+    const feature = iterationFeature || await ensureIterationFeature();
+    return feature.sanitizeIterationArtifactForStorage({ ...artifact, generationPlan: plan?.generationPlan || artifact?.generationPlan });
 }
 
 async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
     if (!extraStoryToolEnabled('iteration')) return { status: 'disabled', reason: 'Post-image Improve tools are off.' };
+    await ensureIterationFeature();
     const target = originalArtifact?.target || artifact?.target;
     const currentContext = getContext();
     const messageId = Number(target?.messageId);
@@ -3762,7 +3812,7 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
         ...((Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.used) || Array.isArray(artifact.__cigContinuitySnapshot?.referenceReceipt?.omitted) || Array.isArray(artifact.referenceReceipt?.used) || Array.isArray(artifact.referenceReceipt?.omitted))
             ? { cig_continuity_snapshot: { schema: 1, referenceReceipt: compactReferenceReceipt(artifact.__cigContinuitySnapshot?.referenceReceipt || artifact.referenceReceipt) } }
             : {}),
-        cig_iteration_artifact: iterationArtifactForStorage(artifact, plan),
+        cig_iteration_artifact: await iterationArtifactForStorage(artifact, plan),
         cig_iteration_persistence: { planId: plan.planId, invocationId: plan.invocationId },
     });
     message.extra.media_index = message.extra.media.length - 1;
@@ -3776,7 +3826,7 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
         return saved;
     }
     await addToGallery(artifact.imageData, artifact.effectivePrompt || '', messageId, filePath, {
-        iterationArtifact: iterationArtifactForStorage(artifact, plan),
+        iterationArtifact: await iterationArtifactForStorage(artifact, plan),
         ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { storyMemoryFacts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
         source: 'iteration', chatId: target.chatId, messageId,
     });
@@ -3878,10 +3928,17 @@ async function verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, p
     return { status: result.status, mutation: cloneSnapshot(mutation), role: 'activeLook', identityId, lookId: persisted.lookId, planId: plan.planId, invocationId: plan.invocationId };
 }
 
-function renderIterationActionSurface(messageElement, messageOverride = null) {
+async function renderIterationActionSurface(messageElement, messageOverride = null) {
     if (!messageElement?.length) return;
     messageElement.find('.cig_iteration_entry').remove();
     if (!extraStoryToolEnabled('iteration')) return;
+    let feature;
+    try {
+        feature = await ensureIterationFeature();
+    } catch (error) {
+        showGenerationError(error, 'Load Iteration');
+        return;
+    }
     const messageId = Number(messageElement.attr('mesid'));
     const message = messageOverride || getContext().chat?.[messageId];
     const activeMedia = activeMediaForMessage(message);
@@ -3901,9 +3958,9 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
     button.on('click', () => {
         host.prop('hidden', false);
         if (iterationSurfaceMounts.has(key)) return;
-        const sourceArtifact = iterationSourceArtifact(message, activeMedia);
+        const sourceArtifact = iterationSourceArtifact(message, activeMedia, feature);
         const generationPlan = iterationGenerationPlan(sourceArtifact);
-        const controller = createIterationSurfaceController({
+        const controller = feature.createIterationSurfaceController({
             sourceArtifact,
             generationPlan,
             twoUpAvailable: false,
@@ -3925,10 +3982,10 @@ function renderIterationActionSurface(messageElement, messageOverride = null) {
             readbackCanonical: ({ plan, mutation, persisted }) => verifyIterationCanonicalRoles({ sourceArtifact, plan, mutation, persisted }),
         });
         iterationSurfaceMounts.set(key, { controller, destroy: () => mount?.destroy?.() });
-        const mount = mountIterationSurface(host[0], controller);
+        const mount = feature.mountIterationSurface(host[0], controller);
         iterationSurfaceMounts.set(key, { controller, destroy: mount.destroy });
     });
-    installIterationSurfaceStyles(document);
+    feature.installIterationSurfaceStyles(document);
 }
 
 function destroyIterationSurfaceMounts() {
@@ -4598,7 +4655,7 @@ jQuery(async () => {
                     : result?.reason || 'Manual cinematic suggestion could not be created.';
             if (chatCaptureIsCurrent(captured)) {
                 refreshCinematicSurface(result?.suggestion, status);
-                if (result?.status === 'suggested') focusCinematicSuggestionCard({ documentLike: document, suggestionId: result.suggestion?.suggestionId });
+                if (result?.status === 'suggested') cinematicFeature?.focusCinematicSuggestionCard({ documentLike: document, suggestionId: result.suggestion?.suggestionId });
             }
             if (result?.status === 'suggested') toastr.info(status, 'Context Image Generation');
             else if (result?.status === 'pending-suppressed') toastr.info(status, 'Context Image Generation');

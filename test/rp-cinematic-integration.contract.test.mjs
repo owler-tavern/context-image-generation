@@ -93,6 +93,8 @@ test('previous image is a strict opt-in at capture and pending continuation is c
 });
 
 test('disabled extras do not create new Story Memory or iteration provenance', () => {
-    assert.match(index, /const capturedIterationArtifact = extraStoryToolEnabled\('iteration'\) \?/u);
-    assert.match(index, /extraStoryToolEnabled\('storyMemory'\) \? \{ __cigStoryMemoryFacts/u);
+    assert.match(index, /const iterationFeatureForGeneration = extraStoryToolEnabled\('iteration'\) \? await ensureIterationFeature\(\) : null/u);
+    assert.match(index, /const storyMemoryFeatureForGeneration = extraStoryToolEnabled\('storyMemory'\) \? await ensureStoryMemoryFeature\(\) : null/u);
+    assert.match(index, /iterationFeatureForGeneration \? \{/u);
+    assert.match(index, /storyMemoryFeatureForGeneration \? \{ __cigStoryMemoryFacts/u);
 });

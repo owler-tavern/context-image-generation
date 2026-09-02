@@ -77,3 +77,29 @@ test('normal chats schedule no deferred recovery timer when no work is pending',
     assert.ok(scheduler, 'pending recovery scheduler should be available');
     assert.match(scheduler, /if \(!hasPendingRecoveryWork\(\)\) return false;/u);
 });
+
+test('optional story features are dynamically loaded before their exports are used', () => {
+    for (const path of [
+        './lib/rp/iteration-domain.js',
+        './lib/rp/iteration-ui.js',
+        './lib/rp/story-memory-ui.js',
+        './lib/rp/story-memory-runtime.js',
+        './lib/rp/cinematic-runtime.js',
+        './lib/rp/cinematic-ui.js',
+        './lib/rp/director-runtime.js',
+        './lib/rp/director-ui.js',
+        './lib/rp/director-cast.js',
+    ]) {
+        assert.doesNotMatch(indexSource, new RegExp(`^import .*${path.replaceAll('.', '\\.')}`, 'mu'));
+    }
+
+    for (const feature of ['iteration', 'storyMemory', 'cinematic', 'director']) {
+        assert.match(indexSource, new RegExp(`${feature}: async \\(\\) =>`, 'u'));
+        assert.match(indexSource, new RegExp(`async function ensure${feature[0].toUpperCase()}${feature.slice(1)}Feature\\(\\)`, 'u'));
+    }
+
+    assert.match(indexSource, /async function createStoryMemorySurface\(\)[\s\S]*?await ensureStoryMemoryFeature\(\)[\s\S]*?createStoryMemoryRuntime\(/u);
+    assert.match(indexSource, /async function createCinematicSurface\(\)[\s\S]*?await ensureCinematicFeature\(\)[\s\S]*?createCinematicRuntime\(/u);
+    assert.match(indexSource, /async function createDirectorSurface\(\)[\s\S]*?await ensureDirectorFeature\(\)[\s\S]*?createDirectorRuntime\(/u);
+    assert.match(indexSource, /async function renderIterationActionSurface\([\s\S]*?await ensureIterationFeature\(\)[\s\S]*?mountIterationSurface\(/u);
+});
