@@ -32,7 +32,7 @@ import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolvePro
 import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries, mergeCustomDiscoveryModelRecords, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords } from './lib/providers/model-manager.js';
 import { getProviderModelEntries, setProviderModelRecords } from './lib/providers/model-record-store.js';
-import { bindModelSelectorUi, renderManagedModelSelector, renderSetupModelSelector } from './lib/providers/model-selector-ui.js';
+import { createModelSelectorController, renderManagedModelSelector } from './lib/providers/model-selector-ui.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
@@ -862,8 +862,7 @@ function renderProviderDropdown() {
     }
 }
 
-function updateModelDropdown() {
-    const settings = extension_settings[extensionName];
+function getSetupModelContext(settings) {
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
     const discoveryState = getProviderDiscoveryState(settings, providerId);
@@ -872,11 +871,31 @@ function updateModelDropdown() {
         discoveryEvidence: discoveryState.evidence,
         discoveryWarning: discoveryState.warning,
     });
-    if (!ui) return;
-    settings.model = getCustomConnection(settings, providerId)
+    if (!ui) return undefined;
+    const selectedModelId = getCustomConnection(settings, providerId)
         ? ui.selectedModelId || settings.model || ''
         : getModelFallback(providerId, settings.model, localEntries);
-    renderSetupModelSelector($, { models: ui.models, selectedModelId: settings.model });
+    return { providerId, models: ui.models, selectedModelId, ui };
+}
+
+const modelSelectorController = createModelSelectorController($, {
+    getSettings: () => extension_settings[extensionName],
+    getModelContext: getSetupModelContext,
+    getSelectedRoute: getSelectedModelRoute,
+    cancelDiscovery: cancelModelDiscovery,
+    clearPreflight: clearExperimentalPreflightForRoute,
+    clearRuntimeIssue: clearSetupRuntimeIssue,
+    renderCapabilityUi: toggleImageSizeVisibility,
+    renderReadinessUi: renderSetupReadiness,
+    renderModelManagerUi: renderModelManager,
+    renderAppearanceUi: renderChatAppearanceSources,
+    persistSettings: saveSettingsDebounced,
+});
+
+function updateModelDropdown() {
+    const context = modelSelectorController.updateModelDropdown();
+    const ui = context?.ui;
+    if (!ui) return;
     const discovery = ui.modelDiscovery;
     const statusParts = [];
     if (ui.available === false) statusParts.push(ui.unavailableReason || 'This provider is unavailable until a server adapter is available.');
@@ -893,8 +912,6 @@ function updateModelDropdown() {
     $('#cig_model_refresh_hint')
         .text(discovery.refreshEnabled ? '' : discovery.disabledReason || '')
         .toggle(!discovery.refreshEnabled && Boolean(discovery.disabledReason));
-    toggleImageSizeVisibility();
-    renderSetupReadiness(settings);
 }
 
 function activateSettingsTab(tabId, { persist = true } = {}) {
@@ -1470,17 +1487,7 @@ function toggleImageSizeVisibility() {
 }
 
 function selectSetupModel(modelId) {
-    const settings = extension_settings[extensionName];
-    const previousProvider = settings.provider || 'makersuite';
-    const previousRoute = getSelectedModelRoute(settings, settings.model);
-    cancelModelDiscovery(previousProvider);
-    clearExperimentalPreflightForRoute(settings, previousRoute);
-    settings.model = modelId;
-    clearSetupRuntimeIssue();
-    toggleImageSizeVisibility();
-    renderModelManager();
-    renderChatAppearanceSources();
-    saveSettingsDebounced();
+    modelSelectorController.selectSetupModel(modelId);
 }
 
 function renderReferenceCapabilityControls(supportsReferenceImages) {
@@ -3826,10 +3833,8 @@ jQuery(async () => {
     $('#cig_custom_connection_test').on('click', testCustomConnectionFromEditor);
     $('#cig_custom_connection_delete').on('click', deleteSelectedCustomConnection);
 
-    bindModelSelectorUi($, {
+    modelSelectorController.bind({
         onRefresh: fetchManagedProviderModels,
-        onManagedSearch: renderModelManager,
-        onModelChange: selectSetupModel,
     });
     $('#cig_managed_model_list').on('change', function () {
         const selectedId = $(this).val() || '';

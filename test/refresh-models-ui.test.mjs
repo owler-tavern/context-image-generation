@@ -105,15 +105,30 @@ test('successful custom refresh keeps manual records and replaces the previous f
         ['manual-image', 'manual'],
         ['fresh-image', 'fetched'],
     ]);
+
+    const collisionOnlyResult = await discoverCustomConnectionModels({
+        connection,
+        authPreset: 'none',
+        credential: '',
+        now: () => '2026-09-02T20:01:00.000Z',
+        fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 'manual-image' }] }), { status: 200 }),
+    });
+    const collisionOnly = modelManager.mergeCustomDiscoveryModelRecords([
+        { id: 'manual-image', source: { kind: 'manual' }, connectionId: CONNECTION_ID },
+        { id: 'old-fetched-image', source: { kind: 'fetched' }, connectionId: CONNECTION_ID },
+    ], collisionOnlyResult, connection);
+    assert.deepEqual(collisionOnly.map((entry) => [entry.id, entry.source.kind]), [
+        ['manual-image', 'manual'],
+    ]);
 });
 
-test('production refresh binding carries parsed custom records through persistence into unfiltered Setup selection', async () => {
+test('production controller carries parsed custom records through persistence into unfiltered Setup selection effects', async () => {
     const modelManager = await import('../lib/providers/model-manager.js');
     const recordStore = await import('../lib/providers/model-record-store.js');
     const selectorUi = await import('../lib/providers/model-selector-ui.js');
     assert.equal(typeof modelManager.mergeCustomDiscoveryModelRecords, 'function');
     assert.equal(typeof recordStore.setProviderModelRecords, 'function');
-    assert.equal(typeof selectorUi.bindModelSelectorUi, 'function');
+    assert.equal(typeof selectorUi.createModelSelectorController, 'function');
 
     const settings = {
         provider: CONNECTION_ID,
@@ -131,9 +146,37 @@ test('production refresh binding carries parsed custom records through persisten
         },
     };
     const $ = createFakeJQuery();
-    let projectedSelection = '';
+    const selectionEffects = [];
+    const getProjection = () => {
+        const records = recordStore.getProviderModelRecords(settings, CONNECTION_ID);
+        return projectCustomConnectionProviderUi(connection, settings.model, { localEntries: records });
+    };
+    const renderManaged = () => {
+        const ui = getProjection();
+        selectorUi.renderManagedModelSelector($, {
+            models: ui.models,
+            selectedModelId: settings.model,
+            search: $('#cig_model_search').val(),
+        });
+    };
+    const controller = selectorUi.createModelSelectorController($, {
+        getSettings: () => settings,
+        getModelContext: () => {
+            const ui = getProjection();
+            return { providerId: CONNECTION_ID, models: ui.models, selectedModelId: ui.selectedModelId };
+        },
+        getSelectedRoute: () => ({ providerId: CONNECTION_ID, modelId: settings.model }),
+        cancelDiscovery: (providerId) => selectionEffects.push(['cancel', providerId]),
+        clearPreflight: (route) => selectionEffects.push(['preflight', route.modelId]),
+        clearRuntimeIssue: () => selectionEffects.push(['issue', settings.model]),
+        renderCapabilityUi: () => selectionEffects.push(['capability', settings.model]),
+        renderReadinessUi: () => selectionEffects.push(['readiness', settings.model]),
+        renderModelManagerUi: () => { selectionEffects.push(['manager', settings.model]); renderManaged(); },
+        renderAppearanceUi: () => selectionEffects.push(['appearance', settings.model]),
+        persistSettings: () => selectionEffects.push(['persist', settings.model]),
+    });
 
-    selectorUi.bindModelSelectorUi($, {
+    controller.bind({
         onRefresh: async () => {
             const result = await discoverCustomConnectionModels({
                 connection,
@@ -145,42 +188,41 @@ test('production refresh binding carries parsed custom records through persisten
             const current = recordStore.getProviderModelRecords(settings, CONNECTION_ID);
             const merged = modelManager.mergeCustomDiscoveryModelRecords(current, result, connection);
             recordStore.setProviderModelRecords(settings, CONNECTION_ID, merged);
-            const ui = projectCustomConnectionProviderUi(connection, settings.model, { localEntries: merged });
-            selectorUi.renderSetupModelSelector($, { models: ui.models, selectedModelId: ui.selectedModelId });
-        },
-        onManagedSearch: () => {
-            const records = recordStore.getProviderModelRecords(settings, CONNECTION_ID);
-            const ui = projectCustomConnectionProviderUi(connection, settings.model, { localEntries: records });
-            selectorUi.renderManagedModelSelector($, {
-                models: ui.models,
-                selectedModelId: settings.model,
-                search: $('#cig_model_search').val(),
-            });
-        },
-        onModelChange: (modelId) => {
-            settings.model = modelId;
-            const records = recordStore.getProviderModelRecords(settings, CONNECTION_ID);
-            projectedSelection = projectCustomConnectionProviderUi(connection, settings.model, { localEntries: records }).selectedModelId;
+            controller.updateModelDropdown();
         },
     });
 
+    $('#cig_model_search').val('fresh');
     await $('#cig_model_refresh').trigger('click');
     assert.deepEqual($('#cig_model').options.map((option) => option.value), ['manual-image', 'fresh-image']);
 
-    $('#cig_model_search').val('fresh');
     await $('#cig_model_search').trigger('input');
     assert.deepEqual($('#cig_managed_model_list').options.map((option) => option.value), ['fresh-image']);
     assert.deepEqual($('#cig_model').options.map((option) => option.value), ['manual-image', 'fresh-image']);
 
+    selectionEffects.length = 0;
     $('#cig_model').val('fresh-image');
     await $('#cig_model').trigger('change');
     assert.equal(settings.model, 'fresh-image');
-    assert.equal(projectedSelection, 'fresh-image');
+    assert.equal(getProjection().selectedModelId, 'fresh-image');
+    assert.deepEqual(selectionEffects, [
+        ['cancel', CONNECTION_ID],
+        ['preflight', 'manual-image'],
+        ['issue', 'fresh-image'],
+        ['capability', 'fresh-image'],
+        ['readiness', 'fresh-image'],
+        ['manager', 'fresh-image'],
+        ['appearance', 'fresh-image'],
+        ['persist', 'fresh-image'],
+    ]);
 });
 
-test('index delegates Refresh, Advanced search, and Setup selection to the tested production binding', async () => {
+test('index delegates Refresh, Advanced search, and Setup selection to the tested production controller', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    assert.match(source, /bindModelSelectorUi\(\$,\s*\{/u);
+    assert.match(source, /createModelSelectorController\(\$,\s*\{/u);
+    assert.match(source, /modelSelectorController\.bind\(\{/u);
+    assert.match(source, /modelSelectorController\.updateModelDropdown\(\)/u);
+    assert.match(source, /modelSelectorController\.selectSetupModel\(modelId\)/u);
     assert.doesNotMatch(source, /\$\('#cig_(?:model_refresh|model_search|model)'\)\.on\(/u);
 });
 
