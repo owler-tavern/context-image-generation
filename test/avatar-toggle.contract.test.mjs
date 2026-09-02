@@ -7,7 +7,8 @@ const settings = await readFile(new URL('../settings.html', import.meta.url), 'u
 
 test('uses one avatar-reference setting while keeping legacy swipe generation inert', () => {
     assert.match(index, /use_avatars:\s*false/);
-    assert.match(index, /if \(supportsReferenceImages && settings\.use_avatars\) \{/);
+    assert.match(index, /const avatarReferenceContributor = createAvatarReferenceContributor\(/u);
+    assert.match(index, /const references = snapshot\.avatarEnabled/u);
     assert.match(index, /cigSettings\.use_char_avatar \|\| cigSettings\.use_user_avatar/);
     assert.match(index, /delete cigSettings\.use_char_avatar/);
     assert.match(index, /delete cigSettings\.use_user_avatar/);
@@ -15,7 +16,7 @@ test('uses one avatar-reference setting while keeping legacy swipe generation in
     assert.doesNotMatch(index, /\$\('#cig_regenerate_on_swipe'\)/u);
     assert.doesNotMatch(settings, /id="cig_regenerate_on_swipe"/u);
     assert.match(settings, /id="cig_use_avatars"/);
-    assert.match(index, /getReferenceImageCapability\(providerId, settings\.model\)/);
+    assert.match(index, /getReferenceImageCapability\(providerId, modelId\)/);
     assert.doesNotMatch(settings, /id="cig_use_char_avatar"/);
     assert.doesNotMatch(settings, /id="cig_use_user_avatar"/);
 });

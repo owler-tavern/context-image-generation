@@ -39,6 +39,7 @@ import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
 import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter } from './lib/scene-generation/delivery.js';
 import { createProductionGenerationEntrypoints, registerProductionGenerationEntrypoints } from './lib/scene-generation/production-entrypoints.js';
+import { createAvatarReferenceContributor, createPreviousImageReferenceContributor, createReferenceContributorPipeline, createSavedAppearanceReferenceContributor } from './lib/scene-generation/reference-contributors.js';
 import { buildGenerationKey, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
@@ -1610,6 +1611,12 @@ function cloneSnapshot(value) {
     try { return JSON.parse(JSON.stringify(value)); } catch { return value; }
 }
 
+function createGenerationSettingsSnapshot(settings) {
+    const snapshot = cloneSnapshot(settings) || {};
+    delete snapshot.rp_library;
+    return snapshot;
+}
+
 async function confirmCustomConnectionRoute(settings, invocation) {
     const connection = getCustomConnection(settings, settings.provider);
     if (!connection) return { accepted: false, confirmedRevision: '' };
@@ -1694,10 +1701,11 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         }
         descriptionText = descriptionText.trim();
     }
-    // Legacy resolver shape: getReferenceImageCapability(providerId, settings.model)
+    // Optional image sources are collected after this capture through the
+    // contributor pipeline. This snapshot intentionally contains no saved
+    // appearance library or per-chat appearance binding data.
     const capability = getReferenceImageCapability(providerId, modelId);
-    const referenceCandidates = [];
-    const settingsSnapshot = cloneSnapshot(settings) || {};
+    const settingsSnapshot = createGenerationSettingsSnapshot(settings);
     const chatPreferences = chatWandPreferences();
     if (chatPreferences.framing) settingsSnapshot.framing_preference = chatPreferences.framing;
     if (chatPreferences.continuity) settingsSnapshot.continuity_strength = chatPreferences.continuity;
@@ -1715,67 +1723,16 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         ? settingsSnapshot.gallery.filter((item) => currentChatId && String(item?.chatId || '') === currentChatId)
         : [];
     const previousImageEnabled = settingsSnapshot.use_previous_image === true;
+    const optionalTools = normalizeExtraStoryTools(settingsSnapshot.extra_story_tools);
+    const savedAppearanceEnabled = Boolean(capability) && optionalTools.enabled && optionalTools.appearanceMemory;
     const continuationIsCurrent = invocation === 'wand' && previousImageEnabled && continuation?.chatId && String(continuation.chatId) === String(getContext().chatId)
         && chatLifecycleEpoch.isCurrent(continuation.epoch) && continuation.selectedImage?.url;
-    const continuationGallery = previousImageEnabled
+    const previousImageGallery = previousImageEnabled
         ? (continuationIsCurrent
             ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }]
             : gallerySnapshot)
         : [];
     const appearanceIdentities = getAppearanceIdentityChoices();
-    const sourcePreferences = appearanceSourcePreferences();
-    if (capability && previousImageEnabled && continuationGallery.length > 0) referenceCandidates.push({ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:previous', label: continuationIsCurrent ? 'selected story scene' : 'previous image' });
-    // Legacy contract: if (supportsReferenceImages && settings.use_avatars) { —
-    // the captured capability/setting snapshot below is the authority.
-    if (capability && settingsSnapshot.use_avatars) {
-        const context = getContext();
-        const activeCharacter = context.characters?.[context.characterId];
-        referenceCandidates.push(...resolveHostAvatarIdentityReferences({
-            identities: appearanceIdentities,
-            activeCharacterAvatar: activeCharacter?.avatar,
-            personaAvatar: appearanceIdentities.find((identity) => identity.kind === 'user')?.hostKey || user_avatar,
-            groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
-            sourcePreferences,
-        }));
-    }
-    const canonCapture = captureCanonForGeneration({
-        library: settingsSnapshot.rp_library,
-        gallery: continuationGallery,
-        chatState: chat_metadata[CHAT_CANON_KEY],
-        identities: appearanceIdentities,
-        references: referenceCandidates,
-    });
-    const appearanceTruthEntries = continuityTruths(appearanceIdentities);
-    const continuityCandidates = buildContinuityReferenceCandidates({
-        identities: appearanceIdentities,
-        truths: appearanceTruthEntries,
-        remembered: canonCapture.canonSnapshot.references,
-        avatarReferences: canonCapture.references,
-        priorScene: referenceCandidates.filter((candidate) => candidate.role === 'legacy-previous'),
-        includeDescriptions: settingsSnapshot.include_descriptions === true,
-    }).map((candidate) => ({
-        ...candidate,
-        ...(canonCapture.canonSnapshot.assets?.[candidate.assetId]?.url ? { thumbnail: canonCapture.canonSnapshot.assets[candidate.assetId].url } : {}),
-    }));
-    const continuityReferencePlan = projectContinuityShelf({
-        identities: appearanceIdentities,
-        truths: appearanceTruthEntries,
-        candidates: continuityCandidates,
-        modelLimit: capability?.maxCount,
-        outfitCatalog: settingsSnapshot.rp_outfits,
-        outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
-        includeDescriptions: settingsSnapshot.include_descriptions === true,
-        includeAvatars: settingsSnapshot.use_avatars === true,
-    });
-    const activeOutfits = continuityReferencePlan.identities
-        .filter((entry) => entry.activeOutfit)
-        .map((entry) => ({ identityId: entry.identityId, identityLabel: entry.identityLabel, outfit: entry.activeOutfit }));
-    const outfitText = buildOutfitPrompt(activeOutfits);
-    const rawAppearanceDescription = appearanceTruthEntries
-        .filter((entry) => entry.description?.text)
-        .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
-        .join('\n\n');
-    if (rawAppearanceDescription && settingsSnapshot.include_descriptions === true) descriptionText = [descriptionText, rawAppearanceDescription].filter(Boolean).join('\n\n');
     const sceneSnapshot = buildSceneGenerationSnapshot({
         selectedPassage: focusText,
         clickedMessage: { name: sender || '', mes: prompt },
@@ -1804,13 +1761,12 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
-        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText, intent: 'scene' },
+        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText: '', intent: 'scene' },
         scene: scenePlan,
-        canonSnapshot: canonCapture.canonSnapshot,
+        canonSnapshot: { references: [], assets: {}, omissions: [] },
         identities: appearanceIdentities,
-        references: canonCapture.references,
-        referencePlan: continuityReferencePlan,
-        activeOutfits,
+        references: [],
+        activeOutfits: [],
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
         options: {
             aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
@@ -1821,30 +1777,14 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     };
     return Object.freeze({
         planInput, providerRoute: cloneSnapshot(providerRoute), routeModel: cloneSnapshot(routeModel), settingsSnapshot,
-        apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', gallerySnapshot: continuationGallery,
-        referenceAssets: canonCapture.canonSnapshot.assets,
-        referenceCandidates: [...canonCapture.canonSnapshot.references, ...canonCapture.references],
+        apiKey: getProviderApiKey(settingsSnapshot, providerId), reverseProxy: oai_settings.reverse_proxy || '', previousImageGallery,
+        referencesEnabled: Boolean(capability), avatarEnabled: settingsSnapshot.use_avatars === true,
+        previousImageEnabled, savedAppearanceEnabled,
+        appearanceIdentities,
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
-        continuityCandidates,
         storyMemoryContinuation: continuationIsCurrent ? cloneSnapshot(continuation) : null,
     });
-}
-
-async function materializeSnapshotAssets(snapshot) {
-    const assets = {
-        ...(snapshot.referenceAssets || {}),
-        ...await materializeHostAvatarReferenceAssets({
-            references: snapshot.referenceCandidates,
-            getCharacterAvatar,
-            getUserAvatar,
-        }),
-    };
-    if (snapshot.referenceCandidates.some((reference) => reference.id === 'legacy:previous')) {
-        const dataUrl = await galleryItemToDataUrl(snapshot.gallerySnapshot[0]);
-        if (dataUrl) assets['asset:previous'] = { url: dataUrl, mimeType: 'image/png' };
-    }
-    return assets;
 }
 
 async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation, plan = null, referenceAssets = {}) {
@@ -1895,17 +1835,111 @@ async function captureSceneGenerationRequest(request) {
     return Object.freeze({ ...snapshot, request, storyMemoryFeatureForGeneration });
 }
 
+const avatarReferenceContributor = createAvatarReferenceContributor({
+    enabled: (snapshot) => snapshot.referencesEnabled === true,
+    contribute: async (snapshot) => {
+        const identities = snapshot.appearanceIdentities || [];
+        const context = getContext();
+        const activeCharacter = context.characters?.[context.characterId];
+        const references = snapshot.avatarEnabled
+            ? resolveHostAvatarIdentityReferences({
+                identities,
+                activeCharacterAvatar: activeCharacter?.avatar,
+                personaAvatar: identities.find((identity) => identity.kind === 'user')?.hostKey || user_avatar,
+                groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
+                sourcePreferences: appearanceSourcePreferences(),
+            })
+            : [];
+        return {
+            references,
+            assets: await materializeHostAvatarReferenceAssets({ references, getCharacterAvatar, getUserAvatar }),
+            truths: continuityTruths(identities),
+            omissions: [],
+            notices: [],
+        };
+    },
+});
+
+const previousImageReferenceContributor = createPreviousImageReferenceContributor({
+    contribute: async (snapshot) => {
+        const gallery = snapshot.previousImageGallery || [];
+        if (!gallery.length) return { references: [], assets: {}, truths: [], omissions: [], notices: [] };
+        const dataUrl = await galleryItemToDataUrl(gallery[0]);
+        return {
+            references: [{ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:previous', label: snapshot.storyMemoryContinuation ? 'selected story scene' : 'previous image' }],
+            assets: dataUrl ? { 'asset:previous': { url: dataUrl, mimeType: 'image/png' } } : {},
+            truths: [],
+            omissions: dataUrl ? [] : [{ id: 'legacy:previous', reason: 'asset-unavailable' }],
+            notices: [],
+        };
+    },
+});
+
+const savedAppearanceReferenceContributor = createSavedAppearanceReferenceContributor({
+    contribute: async (snapshot) => {
+        const canonCapture = captureCanonForGeneration({
+            library: extension_settings[extensionName]?.rp_library,
+            gallery: snapshot.previousImageGallery || [],
+            chatState: chat_metadata[CHAT_CANON_KEY],
+            identities: snapshot.appearanceIdentities || [],
+        });
+        return {
+            references: canonCapture.canonSnapshot.references,
+            assets: canonCapture.canonSnapshot.assets,
+            truths: continuityTruths(snapshot.appearanceIdentities || []),
+            omissions: canonCapture.canonSnapshot.omissions,
+            notices: [],
+        };
+    },
+});
+
+const referenceContributorPipeline = createReferenceContributorPipeline([
+    avatarReferenceContributor,
+    previousImageReferenceContributor,
+    savedAppearanceReferenceContributor,
+]);
+
 async function collectSceneGenerationReferences(snapshot) {
         const { prompt, sender = null, messageId = null, focusText = null, target = null, source: invocation } = snapshot.request;
-        notifyBrokenCanon(snapshot.planInput.canonSnapshot?.omissions, (message) => toastr.info(message, 'Context Image Generation'));
-        const materializedAssets = await materializeSnapshotAssets(snapshot);
-        const capturedBaseReferences = [
-            ...(snapshot.planInput.references || []),
-            ...(snapshot.planInput.canonSnapshot?.references || []),
-        ].filter((reference, index, all) => all.findIndex((candidate) => candidate.id === reference.id) === index);
+        const contributed = await referenceContributorPipeline.collect(snapshot, snapshot.request);
+        notifyBrokenCanon(contributed.omissions, (message) => toastr.info(message, 'Context Image Generation'));
+        for (const notice of contributed.notices) toastr.info(notice.message || 'An optional reference was unavailable.', 'Context Image Generation');
+        const appearanceTruths = [...new Map(contributed.truths.map((truth) => [truth.identityId, truth])).values()];
+        const remembered = contributed.references.filter((reference) => reference.role === 'identity-look');
+        const avatarReferences = contributed.references.filter((reference) => reference.role === 'host-avatar');
+        const priorScene = contributed.references.filter((reference) => reference.role === 'legacy-previous' || reference.role === 'prior-scene');
+        const continuityCandidates = buildContinuityReferenceCandidates({
+            identities: snapshot.appearanceIdentities,
+            truths: appearanceTruths,
+            remembered,
+            avatarReferences,
+            priorScene,
+            includeDescriptions: snapshot.settingsSnapshot.include_descriptions === true,
+        }).map((candidate) => ({
+            ...candidate,
+            ...(contributed.assets?.[candidate.assetId]?.url ? { thumbnail: contributed.assets[candidate.assetId].url } : {}),
+        }));
+        const continuityReferencePlan = projectContinuityShelf({
+            identities: snapshot.appearanceIdentities,
+            truths: appearanceTruths,
+            candidates: continuityCandidates,
+            modelLimit: snapshot.planInput.provider.capabilities?.referenceImages?.maxCount,
+            outfitCatalog: snapshot.settingsSnapshot.rp_outfits,
+            outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
+            includeDescriptions: snapshot.settingsSnapshot.include_descriptions === true,
+            includeAvatars: snapshot.avatarEnabled,
+        });
+        const activeOutfits = continuityReferencePlan.identities
+            .filter((entry) => entry.activeOutfit)
+            .map((entry) => ({ identityId: entry.identityId, identityLabel: entry.identityLabel, outfit: entry.activeOutfit }));
+        const appearanceDescription = appearanceTruths
+            .filter((entry) => entry.description?.text)
+            .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
+            .join('\n\n');
+        const capturedBaseReferences = contributed.references;
         const dispatchPolicy = enforcePreviousImagePolicy({
             references: capturedBaseReferences,
-            assets: materializedAssets,
+            assets: contributed.assets,
             enabled: snapshot.settingsSnapshot.use_previous_image === true,
         });
         const assets = dispatchPolicy.assets;
@@ -1913,16 +1947,27 @@ async function collectSceneGenerationReferences(snapshot) {
         const policyCanonSnapshot = {
             ...(snapshot.planInput.canonSnapshot || {}),
             assets: dispatchPolicy.assets,
-            references: dispatchPolicy.references,
+            references: dispatchPolicy.references.filter((reference) => reference.role === 'identity-look'),
+            omissions: contributed.omissions,
         };
         const policyPlanInput = {
             ...snapshot.planInput,
             canonSnapshot: policyCanonSnapshot,
+            references: dispatchPolicy.references,
+            referencePlan: continuityReferencePlan,
+            activeOutfits,
+            prompt: {
+                ...snapshot.planInput.prompt,
+                descriptionText: snapshot.settingsSnapshot.include_descriptions === true
+                    ? [snapshot.planInput.prompt.descriptionText, appearanceDescription].filter(Boolean).join('\n\n')
+                    : snapshot.planInput.prompt.descriptionText,
+                outfitText: buildOutfitPrompt(activeOutfits),
+            },
         };
         const availableReferences = policyReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
         const missingReferenceOmissions = policyReferences.filter((reference) => reference.assetId && !assets[reference.assetId]).map((reference) => ({ id: reference.id, reason: 'asset-unavailable' }));
         const availableReferenceIds = availableReferences.map((reference) => reference.id);
-        const plan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: missingReferenceOmissions });
+        const plan = createGenerationPlan({ ...policyPlanInput, references: availableReferences, availableReferenceIds, referenceOmissions: [...contributed.omissions, ...missingReferenceOmissions] });
         const selectedProjection = projectSelectedReferenceAssets({ references: plan.references, assets });
         const dispatchCanonSnapshot = { ...policyCanonSnapshot, references: selectedProjection.references, assets: selectedProjection.assets };
         const dispatchPlanInput = {

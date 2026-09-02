@@ -211,10 +211,10 @@ test('production Story Memory wires preview, explicit opt-in, clear, and request
 
 test('a staged Story Memory continuation projects only its selected image, not the rest of the gallery', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const continuationBlock = index.match(/const continuationGallery = previousImageEnabled[\s\S]*?const appearanceIdentities/u)?.[0] || '';
+    const continuationBlock = index.match(/const previousImageGallery = previousImageEnabled[\s\S]*?const appearanceIdentities/u)?.[0] || '';
     assert.match(continuationBlock, /\[\{ id: `story-memory:\$\{continuation\.artifactId\}`[\s\S]*?\}\]/u);
     assert.doesNotMatch(continuationBlock, /\}, \.\.\.gallerySnapshot/u);
-    assert.match(index, /materializeSnapshotAssets[\s\S]*?snapshot\.gallerySnapshot\[0\]/u);
+    assert.match(index, /const previousImageReferenceContributor[\s\S]*?const gallery = snapshot\.previousImageGallery \|\| \[\][\s\S]*?gallery\[0\]/u);
 });
 
 test('Story Memory continuation is cleared only after an attached completion, never before dispatch', async () => {

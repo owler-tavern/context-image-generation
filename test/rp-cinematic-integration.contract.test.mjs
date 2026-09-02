@@ -83,12 +83,12 @@ test('previous image is a strict opt-in at capture and pending continuation is c
     assert.match(index, /if \(!hadExplicitPreviousImageOptIn\) \{[\s\S]*?cigSettings\.use_previous_image = false;[\s\S]*?cigSettings\.previous_image_opt_in_version = 1;/u);
     assert.match(index, /const previousImageEnabled = settingsSnapshot\.use_previous_image === true/u);
     assert.match(index, /settingsSnapshot\.gallery\.filter\(\(item\) => currentChatId && String\(item\?\.chatId \|\| ''\) === currentChatId\)/u);
-    assert.match(index, /const continuationGallery = previousImageEnabled[\s\S]*?: \[\]/u);
-    assert.match(index, /if \(capability && previousImageEnabled && continuationGallery\.length > 0\) referenceCandidates\.push\(\{ id: 'legacy:previous'/u);
+    assert.match(index, /const previousImageGallery = previousImageEnabled[\s\S]*?: \[\]/u);
+    assert.match(index, /const previousImageReferenceContributor[\s\S]*?id: 'legacy:previous'/u);
     assert.match(index, /if \(!extension_settings\[extensionName\]\.use_previous_image\) \{[\s\S]*?pendingStoryMemoryContinuation = null;/u);
     assert.match(index, /extension_settings\[extensionName\]\.previous_image_opt_in_version = 1/u);
     assert.match(index, /assetId: 'asset:previous'/u);
-    assert.match(index, /assets\['asset:previous'\]/u);
+    assert.match(index, /assets: dataUrl \? \{ 'asset:previous':/u);
     assert.doesNotMatch(index, /asset:legacy-previous/u);
     assert.match(index, /buildReferenceMessageParts\(plan, referenceAssets\)/u);
 });

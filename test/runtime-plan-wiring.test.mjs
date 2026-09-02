@@ -50,7 +50,7 @@ test('runtime dispatch does not reference a removed SillyTavern request callback
 
 test('runtime snapshots resolve adapter IDs through the shared route contract', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const snapshot = index.slice(index.indexOf('function captureGenerationSnapshot'), index.indexOf('async function materializeSnapshotAssets'));
+    const snapshot = index.slice(index.indexOf('function captureGenerationSnapshot'), index.indexOf('async function captureSceneGenerationRequest'));
     assert.match(snapshot, /resolveAdapterId\(legacyTransport\)/);
     assert.doesNotMatch(snapshot, /openAiImages:\s*'openai-images'/);
 });
@@ -77,12 +77,23 @@ test('captured continuity metadata remains available to Settings and Story Memor
     assert.doesNotMatch(source, /function renderSceneInspection/);
 });
 
-test('captured avatar and description options gate both candidates and prompt content', async () => {
+test('contributor wiring gates avatar candidates while the captured settings retain description preference', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const snapshot = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function materializeSnapshotAssets'));
-    assert.match(snapshot, /if \(capability && settingsSnapshot\.use_avatars\)/);
-    assert.match(snapshot, /includeDescriptions: settingsSnapshot\.include_descriptions === true/);
-    assert.match(snapshot, /rawAppearanceDescription && settingsSnapshot\.include_descriptions === true/);
+    const snapshot = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function collectSceneGenerationReferences'));
+    const contributors = source.slice(source.indexOf('const avatarReferenceContributor'), source.indexOf('async function collectSceneGenerationReferences'));
+    assert.match(contributors, /const references = snapshot\.avatarEnabled/);
+    assert.match(snapshot, /settings: settingsSnapshot/);
+    assert.match(source, /descriptionText: snapshot\.settingsSnapshot\.include_descriptions === true/u);
+});
+
+test('saved appearance storage is owned by the contributor rather than kernel capture', async () => {
+    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const capture = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function captureSceneGenerationRequest'));
+    const collection = source.slice(source.indexOf('const savedAppearanceReferenceContributor'), source.indexOf('async function collectSceneGenerationReferences'));
+    assert.doesNotMatch(capture, /rp_library|captureCanonForGeneration|referenceCandidates/u);
+    assert.match(source, /createReferenceContributorPipeline\(\[\s*avatarReferenceContributor,\s*previousImageReferenceContributor,\s*savedAppearanceReferenceContributor,/u);
+    assert.match(collection, /library: extension_settings\[extensionName\]\?\.rp_library/u);
+    assert.match(collection, /chatState: chat_metadata\[CHAT_CANON_KEY\]/u);
 });
 
 test('outfit persistence queues durable pending state and saves only through the captured target gate', async () => {
