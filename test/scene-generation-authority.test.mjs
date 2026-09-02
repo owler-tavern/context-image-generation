@@ -10,6 +10,8 @@ import { handleImageArrowNavigation } from '../lib/rp/image-navigation.js';
 import { createCinematicUiController } from '../lib/rp/cinematic-ui.js';
 import { sanitizeIterationArtifactForStorage } from '../lib/rp/iteration-domain.js';
 
+const productionGenerationAuthorityCall = /productionGenerationEntrypoints\s*\.\s*generateFrom(?:Wand|Slash)\s*\(/u;
+
 function createAuthorityHarness(fakeKernel) {
     const fakeMessageDelivery = { deliver: async () => true };
     const fakePreviewDelivery = { deliver: async ({ artifact }) => `data:${artifact.mimeType};base64,${artifact.imageData}` };
@@ -85,9 +87,18 @@ test('only wand and slash actions reach the injected generation authority', asyn
     assert.match(renderedMessageBody, /injectMessageButton\(messageId\)/u);
     assert.match(settingsBody, /\$\('#cig_provider'\)/u);
     assert.match(settingsBody, /\$\('#cig_use_previous_image'\)/u);
+    // The real authority is exposed as source-specific methods, so the guard
+    // must reject those calls even though they do not use the generic
+    // `.generate(` spelling used by the injected kernel.
     for (const body of [renderedMessageBody, settingsBody]) {
         assert.doesNotMatch(body, /sceneGenerationKernel|dispatchProviderRoute|createProductionGenerationEntrypoints|cigMessageButton|\.generate\(/u);
+        assert.doesNotMatch(body, productionGenerationAuthorityCall);
     }
+});
+
+test('production authority blacklist catches both source-specific entrypoint calls', () => {
+    assert.match('productionGenerationEntrypoints.generateFromWand(request)', productionGenerationAuthorityCall);
+    assert.match('productionGenerationEntrypoints . generateFromSlash(request)', productionGenerationAuthorityCall);
 });
 
 test('wand and slash each reach the fake kernel exactly once', async () => {
