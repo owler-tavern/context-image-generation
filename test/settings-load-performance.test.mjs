@@ -2,11 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const [indexSource, attachmentSource, sceneGenerationSource, castSettingsSource] = await Promise.all([
+const [indexSource, attachmentSource, sceneGenerationSource, castSettingsSource, generationPlanSource] = await Promise.all([
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
     readFile(new URL('../lib/rp-attachment.js', import.meta.url), 'utf8'),
     readFile(new URL('../lib/rp/scene-generation.js', import.meta.url), 'utf8'),
     readFile(new URL('../lib/rp/cast-settings-ui.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/generation-plan.js', import.meta.url), 'utf8'),
 ]);
 
 test('stable settings load does not delete and recreate retired director sessions', () => {
@@ -142,4 +143,5 @@ test('core generation and settings modules do not eagerly import optional iterat
     assert.doesNotMatch(attachmentSource, /^import .*iteration-domain\.js/mu);
     assert.doesNotMatch(sceneGenerationSource, /^import .*director-cast\.js/mu);
     assert.doesNotMatch(castSettingsSource, /^import .*director-cast\.js/mu);
+    assert.doesNotMatch(generationPlanSource, /^import .*director-cast\.js/mu);
 });
