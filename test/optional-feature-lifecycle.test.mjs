@@ -66,3 +66,58 @@ test('a rejected load is reported, does not escape callers, and can retry', asyn
     assert.deepEqual(reported, ['load failed']);
     assert.equal(loads, 2);
 });
+
+test('re-enable while stale setup is pending waits for a fresh setup after it settles', async () => {
+    const firstSetupStarted = deferred();
+    const firstSetup = deferred();
+    let setups = 0;
+    const lifecycle = createOptionalFeatureLifecycle({
+        load: async () => ({ name: 'cinematic' }),
+        setup: async () => {
+            setups += 1;
+            if (setups === 1) {
+                firstSetupStarted.resolve();
+                await firstSetup.promise;
+            }
+        },
+    });
+
+    const firstEnable = lifecycle.enable();
+    await firstSetupStarted.promise;
+    const disabling = lifecycle.disable();
+    const reenabling = lifecycle.enable();
+    firstSetup.resolve();
+
+    assert.deepEqual(await firstEnable, { status: 'disabled' });
+    assert.deepEqual(await reenabling, { status: 'ready' });
+    assert.deepEqual(await disabling, { status: 'disabled' });
+    assert.equal(setups, 2);
+});
+
+test('re-enable during teardown waits for release before creating a fresh resource', async () => {
+    const teardownStarted = deferred();
+    const teardown = deferred();
+    let setups = 0;
+    const lifecycle = createOptionalFeatureLifecycle({
+        load: async () => ({ name: 'storyMemory' }),
+        setup: () => { setups += 1; },
+        teardown: async () => {
+            teardownStarted.resolve();
+            await teardown.promise;
+        },
+    });
+
+    assert.deepEqual(await lifecycle.enable(), { status: 'ready' });
+    const disabling = lifecycle.disable();
+    await teardownStarted.promise;
+    const reenabling = lifecycle.enable();
+    let reenableSettled = false;
+    reenabling.then(() => { reenableSettled = true; });
+    await Promise.resolve();
+    assert.equal(reenableSettled, false);
+
+    teardown.resolve();
+    assert.deepEqual(await reenabling, { status: 'ready' });
+    assert.deepEqual(await disabling, { status: 'disabled' });
+    assert.equal(setups, 2);
+});
