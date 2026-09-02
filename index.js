@@ -93,23 +93,35 @@ const STORY_MEMORY_SETTINGS_KEY = 'story_memory';
 const CINEMATIC_AUTOMATION_KEY = 'cinematicAutomation';
 const DIRECTOR_STATE_KEY = 'director';
 const optionalFeatureLoader = createOptionalFeatureLoader({
-    iteration: async () => ({
-        ...(await import('./lib/rp/iteration-domain.js')),
-        ...(await import('./lib/rp/iteration-ui.js')),
-    }),
-    storyMemory: async () => ({
-        ...(await import('./lib/rp/story-memory-ui.js')),
-        ...(await import('./lib/rp/story-memory-runtime.js')),
-    }),
-    cinematic: async () => ({
-        ...(await import('./lib/rp/cinematic-runtime.js')),
-        ...(await import('./lib/rp/cinematic-ui.js')),
-    }),
-    director: async () => ({
-        ...(await import('./lib/rp/director-runtime.js')),
-        ...(await import('./lib/rp/director-ui.js')),
-        ...(await import('./lib/rp/director-cast.js')),
-    }),
+    iteration: async () => {
+        const [domain, ui] = await Promise.all([
+            import('./lib/rp/iteration-domain.js'),
+            import('./lib/rp/iteration-ui.js'),
+        ]);
+        return { ...domain, ...ui };
+    },
+    storyMemory: async () => {
+        const [ui, runtime] = await Promise.all([
+            import('./lib/rp/story-memory-ui.js'),
+            import('./lib/rp/story-memory-runtime.js'),
+        ]);
+        return { ...ui, ...runtime };
+    },
+    cinematic: async () => {
+        const [runtime, ui] = await Promise.all([
+            import('./lib/rp/cinematic-runtime.js'),
+            import('./lib/rp/cinematic-ui.js'),
+        ]);
+        return { ...runtime, ...ui };
+    },
+    director: async () => {
+        const [runtime, ui, cast] = await Promise.all([
+            import('./lib/rp/director-runtime.js'),
+            import('./lib/rp/director-ui.js'),
+            import('./lib/rp/director-cast.js'),
+        ]);
+        return { ...runtime, ...ui, ...cast };
+    },
 });
 let iterationFeature = null;
 let storyMemoryFeature = null;
@@ -3842,7 +3854,7 @@ async function persistIterationArtifact({ artifact, originalArtifact, plan }) {
         ...(Array.isArray(artifact.__cigStoryMemoryFacts) && artifact.__cigStoryMemoryFacts.length ? { storyMemoryFacts: cloneSnapshot(artifact.__cigStoryMemoryFacts) } : {}),
         source: 'iteration', chatId: target.chatId, messageId,
     });
-    renderIterationActionSurface(messageElement, message);
+    await renderIterationActionSurface(messageElement, message);
     return { status: 'confirmed', artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId };
 }
 
@@ -4019,7 +4031,7 @@ function cigImageArrows(messageElement) {
 
 function configureCigImageArrows(messageElement) {
     if (!imageNavigationContext(messageElement)) return;
-    renderIterationActionSurface(messageElement);
+    void renderIterationActionSurface(messageElement);
     messageElement.find('.mes_img_swipe_left')
         .attr({ tabindex: '0', role: 'button', title: 'Previous image', 'aria-label': 'Previous image' })
         .addClass('cig_image_navigation');
