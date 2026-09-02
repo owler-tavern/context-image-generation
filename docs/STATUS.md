@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 7 correction round 1 — release-documentation verification boundary and approved D4 appearance-memory wording reconciled; ready for Task 8 deterministic regression.
+Task 8 — deterministic regression and independent critique completed; deterministic acceptance record ready to commit.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -31,6 +31,8 @@ Task 7 correction round 1 — release-documentation verification boundary and ap
 - Reconciled PRODUCT, README, DEVELOPER_GUIDE, and ROADMAP with the two-entry v2.5 boundary; added `docs/V2_5_RELEASE_NOTES.md` with evidence and deferrals. Approved pre-existing README/DEVELOPER_GUIDE opening and ownership hunks remain unchanged.
 - Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
 - Corrected the Task 7 review finding: README and DEVELOPER_GUIDE now distinguish catalog discovery from route/image-generation verification, and DEVELOPER_GUIDE carries the approved D4 appearance-memory wording.
+- Task 8 deterministic acceptance found no demonstrated regression requiring a product-code fix.
+- Independent Task 8 critique found no P0 or P1 issue against the ADR-002 acceptance rubric; all eight criteria have deterministic contract or source evidence.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -62,12 +64,13 @@ Task 7 correction round 1 — release-documentation verification boundary and ap
 - Task 7 correction round 1 RED — the new release-documentation contract failed because README and DEVELOPER_GUIDE did not state the discovery/verification boundary.
 - Task 7 correction round 1 focused settings/provider/documentation suite — 41 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs`.
 - Task 7 correction round 1 `git diff --check` — passed before final allowlist staging.
+- Task 8 syntax checks — `node --check index.js` plus every `lib/**/*.js` file passed: 1 index file + 81 library files, process exit 0.
+- Task 8 complete repository suite — 106 test files, 884 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo: `$tests = Get-ChildItem test -File -Filter '*.test.mjs' | ForEach-Object { $_.FullName }; node --test $tests`; process exit 0.
+- Task 8 independent rubric critique — PASS with no P0/P1 findings. Deterministic evidence covers two-source authority, shared kernel, configuration-only Settings, optional references, appearance-boundary isolation, inert legacy outfits, non-deletion/preservation, and release-documentation alignment.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
-- Independent re-review of the Task 6 correction is outstanding.
-- Full Task 8 deterministic regression is outstanding.
 - Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
 
 ## Decisions
@@ -78,4 +81,4 @@ Task 7 correction round 1 — release-documentation verification boundary and ap
 - v2.5 documentation names only wand and slash as generation entry points; cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances are staging/configuration surfaces.
 
 ## Next action
-Run Task 8 syntax/full deterministic regression and independent critique; keep live provider generation out of scope unless separately authorized.
+Commit the Task 8 deterministic acceptance/status record. Task 9 live no-spend UAT remains separate; keep live provider generation out of scope unless separately authorized.
