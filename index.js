@@ -1693,8 +1693,9 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         descriptionText = descriptionText.trim();
     }
     // Optional image sources are collected after this capture through the
-    // contributor pipeline. This snapshot intentionally contains no saved
-    // appearance library or per-chat appearance binding data.
+    // contributor pipeline. Saved appearance library and binding data are
+    // excluded from the core/settings/plan snapshot and remain isolated in
+    // opaque contributor-owned input.
     const capability = getReferenceImageCapability(providerId, modelId);
     const settingsSnapshot = createGenerationSettingsSnapshot(settings);
     const chatPreferences = chatWandPreferences();
