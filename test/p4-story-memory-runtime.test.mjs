@@ -219,7 +219,7 @@ test('a staged Story Memory continuation projects only its selected image, not t
 
 test('Story Memory continuation is cleared only after an attached completion, never before dispatch', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const block = index.match(/async function attachGeneratedImage\([\s\S]*?\nfunction isCigOwnedMedia/u)?.[0] || '';
+    const block = index.match(/async function cigMessageButton\([\s\S]*?\nfunction createMessageDeliveryDependencies/u)?.[0] || '';
     assert.match(block, /stagedContinuationAtStart/u);
     assert.match(block, /if \(attached === true[\s\S]*pendingStoryMemoryContinuation = null/u);
     assert.doesNotMatch(index, /snapshot\.storyMemoryContinuation\) pendingStoryMemoryContinuation = null/u);
@@ -228,8 +228,8 @@ test('Story Memory continuation is cleared only after an attached completion, ne
 test('a staged Story Memory continuation is reserved for the next wand invocation', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(index, /const continuationIsCurrent = invocation === 'wand' && previousImageEnabled/u);
-    assert.match(index, /attached === true && invocation === 'wand' && stagedContinuationAtStart/u);
-    assert.match(index, /invocation === 'wand'/u);
+    assert.match(index, /registerWand: \(generate\) => \$\(document\)\.on\('click', '\.cig_message_gen', function \(event\) \{[\s\S]*?cigMessageButton\(\$\(event\.currentTarget\), \{ generate \}\)/u);
+    assert.match(index, /attached === true && stagedContinuationAtStart/u);
 });
 
 test('continuation settlement is bound to a unique stage nonce, not only artifact identity', async () => {
@@ -370,9 +370,10 @@ test('story cards expose named collection assignment controls', () => {
     assert.doesNotMatch(html, />canon-id</u);
 });
 
-test('inline opener follows the active media index rather than the first CIG media', async () => {
+test('existing-image navigation follows the active media index without restoring iteration actions', async () => {
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(index, /const activeMedia = activeMediaForMessage\(message\)/u);
-    assert.match(index, /activeMedia\?\.item/u);
+    assert.match(index, /isCigOwnedMedia\(activeMedia\.item\)/u);
+    assert.doesNotMatch(index, /renderIterationActionSurface/u);
     assert.doesNotMatch(index, /message\?\.extra\?\.media\?\.find\(\(item\) => isCigOwnedMedia\(item\)\)/u);
 });

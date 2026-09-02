@@ -1,9 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    createSlashEntryAdapter,
-    createWandEntryAdapter,
-} from '../lib/scene-generation/delivery.js';
+    createProductionGenerationEntrypoints,
+    registerProductionGenerationEntrypoints,
+} from '../lib/scene-generation/production-entrypoints.js';
 import { normalizeGenerationRequest } from '../lib/scene-generation/contracts.js';
 import { handleImageArrowNavigation } from '../lib/rp/image-navigation.js';
 import { createCinematicUiController } from '../lib/rp/cinematic-ui.js';
@@ -12,8 +12,20 @@ import { sanitizeIterationArtifactForStorage } from '../lib/rp/iteration-domain.
 function createAuthorityHarness(fakeKernel) {
     const fakeMessageDelivery = { deliver: async () => true };
     const fakePreviewDelivery = { deliver: async ({ artifact }) => `data:${artifact.mimeType};base64,${artifact.imageData}` };
-    const wand = createWandEntryAdapter({ kernel: fakeKernel, delivery: fakeMessageDelivery });
-    const slash = createSlashEntryAdapter({ kernel: fakeKernel, delivery: fakePreviewDelivery });
+    const rendered = [];
+    const handlers = {};
+    const entrypoints = createProductionGenerationEntrypoints({
+        kernel: fakeKernel,
+        messageDelivery: fakeMessageDelivery,
+        previewGalleryDelivery: fakePreviewDelivery,
+        onMessageRendered: async (messageId) => { rendered.push(messageId); },
+    });
+    registerProductionGenerationEntrypoints(entrypoints, {
+        registerWand: (handler) => { handlers.wand = handler; },
+        registerSlash: (handler) => { handlers.slash = handler; },
+        registerCharacterMessageRendered: (handler) => { handlers.characterRendered = handler; },
+        registerUserMessageRendered: (handler) => { handlers.userRendered = handler; },
+    });
     const staged = [];
     const cinematic = createCinematicUiController({
         getSuggestion: () => ({ suggestionId: 'suggestion:1', proposedShot: 'Moonlit courtyard' }),
@@ -28,14 +40,19 @@ function createAuthorityHarness(fakeKernel) {
     };
 
     return {
-        clickWand: () => wand.generate({ prompt: 'current scene', sender: 'Mira', messageId: 2, focusText: null, target: { chatId: 'chat', messageId: 2, messageFingerprint: 'fp' } }),
-        runSlash: (prompt) => slash.generate(prompt),
-        openSettings: async () => ({ configured: true }),
+        clickWand: () => handlers.wand({ prompt: 'current scene', sender: 'Mira', messageId: 2, focusText: null, target: { chatId: 'chat', messageId: 2, messageFingerprint: 'fp' } }),
+        runSlash: (prompt) => handlers.slash(prompt),
+        openSettings: async () => ({ configured: true, generationHandler: handlers.settings }),
         navigatePastLastImage: async () => handleImageArrowNavigation({ owned: true, direction: 'next', currentIndex: 1, mediaLength: 2 }),
-        renderMessageWithAutoPreviouslyEnabled: async () => ({ auto_generate: 'all', dispatched: false }),
+        renderMessageWithAutoPreviouslyEnabled: async () => {
+            await handlers.characterRendered(7);
+            await handlers.userRendered(8);
+            return { auto_generate: 'all', dispatched: false };
+        },
         stageCinematicSuggestion: async () => cinematic.action('stage'),
         openHistoricalIterationArtifact: async () => sanitizeIterationArtifactForStorage(historical),
         staged,
+        rendered,
     };
 }
 
@@ -47,13 +64,15 @@ test('only wand and slash actions reach the injected generation authority', asyn
 
     await harness.clickWand();
     await harness.runSlash('a moonlit castle');
-    await harness.openSettings();
+    const settings = await harness.openSettings();
     await harness.navigatePastLastImage();
     await harness.renderMessageWithAutoPreviouslyEnabled();
     await harness.stageCinematicSuggestion();
     const historical = await harness.openHistoricalIterationArtifact();
 
     assert.deepEqual(dispatched, ['wand', 'slash']);
+    assert.equal(settings.generationHandler, undefined);
+    assert.deepEqual(harness.rendered, [7, 8]);
     assert.deepEqual(harness.staged, ['suggestion:1']);
     assert.equal(historical.artifactId, 'artifact:old');
     assert.equal(historical.recipeAvailable, true);

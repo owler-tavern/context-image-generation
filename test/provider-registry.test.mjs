@@ -108,11 +108,11 @@ test('resolves a declarative OpenAI Images fixture without a provider-name branc
     }
 
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const start = index.indexOf('async function generateImageFromPrompt');
-    const end = index.indexOf('// Resolve the <img> src', start);
+    const start = index.indexOf('function captureGenerationSnapshot');
+    const end = index.indexOf('async function materializeSnapshotAssets', start);
     const generation = index.slice(start, end);
-    assert.match(generation, /let providerRoute = resolveProviderRoute\(selectedProvider, settings\.model\);/);
-    assert.doesNotMatch(generation, /selectedProvider === 'tokenreply'/);
+    assert.match(generation, /resolveProviderRoute\(providerId, modelId\)/u);
+    assert.doesNotMatch(generation, /providerId === 'tokenreply'|providerId === 'fixture'/u);
 });
 
 test('does not turn unlisted LinkAPI catalog IDs into curated models', () => {

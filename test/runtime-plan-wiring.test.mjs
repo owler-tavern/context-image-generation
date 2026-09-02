@@ -24,14 +24,22 @@ test('Appearance UI exposes per-chat use and lock actions', async () => {
 });
 
 test('wand and slash are the only production adapters into one scene-generation kernel', async () => {
-    const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const [index, entrypoints] = await Promise.all([
+        readFile(new URL('../index.js', import.meta.url), 'utf8'),
+        readFile(new URL('../lib/scene-generation/production-entrypoints.js', import.meta.url), 'utf8'),
+    ]);
     assert.match(index, /createSceneGenerationKernel\(/);
-    assert.match(index, /createWandEntryAdapter\(/);
-    assert.match(index, /createSlashEntryAdapter\(/);
+    assert.match(index, /createProductionGenerationEntrypoints\(/u);
+    assert.match(index, /registerProductionGenerationEntrypoints\(/u);
+    assert.match(entrypoints, /createWandEntryAdapter\(/u);
+    assert.match(entrypoints, /createSlashEntryAdapter\(/u);
     assert.match(index, /createGenerationPlan\(/);
     assert.match(index, /buildReferenceMessageParts\(/);
-    assert.match(index, /wandGenerationEntry\.generate\(/u);
-    assert.match(index, /slashGenerationEntry\.generate\(/u);
+    assert.match(entrypoints, /generateFromWand: \(input\) => wand\.generate\(input\)/u);
+    assert.match(entrypoints, /generateFromSlash: \(prompt\) => slash\.generate\(prompt\)/u);
+    assert.match(index, /registerWand: \(generate\)/u);
+    assert.match(index, /registerSlash: \(generate\)/u);
+    assert.doesNotMatch(index, /wandGenerationEntry|slashGenerationEntry/u);
     assert.doesNotMatch(index, /invocation:\s*'automation'|'swipe'\s*,\s*\)|'director'\s*,\s*\{/u);
 });
 

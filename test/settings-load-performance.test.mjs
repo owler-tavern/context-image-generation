@@ -127,16 +127,15 @@ test('optional story features are dynamically loaded before their exports are us
         assert.doesNotMatch(indexSource, new RegExp(`^import .*${path.replaceAll('.', '\\.')}`, 'mu'));
     }
 
-    for (const feature of ['iteration', 'storyMemory', 'cinematic', 'director']) {
+    for (const feature of ['storyMemory', 'cinematic']) {
         assert.match(indexSource, new RegExp(`${feature}: async \\(\\) =>`, 'u'));
         assert.match(indexSource, new RegExp(`async function ensure${feature[0].toUpperCase()}${feature.slice(1)}Feature\\(\\)`, 'u'));
     }
 
     assert.match(indexSource, /storyMemoryLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureStoryMemoryFeature[\s\S]*?setup: \(feature\) => createStoryMemorySurface\(feature\)/u);
     assert.match(indexSource, /cinematicLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureCinematicFeature[\s\S]*?setup: \(feature\) => createCinematicSurface\(feature\)/u);
-    assert.match(indexSource, /async function createDirectorSurface\(\)[\s\S]*?await ensureDirectorFeature\(\)[\s\S]*?createDirectorRuntime\(/u);
-    assert.match(indexSource, /iterationLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureIterationFeature/u);
-    assert.match(indexSource, /async function renderIterationActionSurface\([\s\S]*?await iterationLifecycle\.enable\(\)[\s\S]*?mountIterationSurface\(/u);
+    assert.doesNotMatch(indexSource, /iteration: async \(\) =>|ensureIterationFeature|renderIterationActionSurface/u);
+    assert.doesNotMatch(indexSource, /director: async \(\) =>|ensureDirectorFeature|createDirectorSurface/u);
 });
 
 test('core generation and settings modules do not eagerly import optional iteration or director code', () => {

@@ -37,7 +37,8 @@ import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
-import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter, createSlashEntryAdapter, createWandEntryAdapter } from './lib/scene-generation/delivery.js';
+import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter } from './lib/scene-generation/delivery.js';
+import { createProductionGenerationEntrypoints, registerProductionGenerationEntrypoints } from './lib/scene-generation/production-entrypoints.js';
 import { buildGenerationKey, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
@@ -3355,7 +3356,7 @@ function renderAppearanceList(lifecycleView = null) {
     }
 }
 
-async function cigMessageButton($icon, { captureSelection = true, generationInput = null } = {}) {
+async function cigMessageButton($icon, { captureSelection = true, generationInput = null, generate } = {}) {
     const context = getContext();
 
     if ($icon.hasClass('cig_busy')) {
@@ -3397,7 +3398,7 @@ async function cigMessageButton($icon, { captureSelection = true, generationInpu
     $icon.removeClass('fa-wand-magic-sparkles').addClass('fa-spinner fa-spin');
 
     try {
-        const attached = await wandGenerationEntry.generate({
+        const attached = await generate({
             prompt,
             sender,
             messageId,
@@ -3531,7 +3532,6 @@ function createMessageDeliveryDependencies(request) {
 const wandGenerationDelivery = {
     deliver: (result) => createMessageDeliveryAdapter(createMessageDeliveryDependencies(result.request)).deliver(result),
 };
-const wandGenerationEntry = createWandEntryAdapter({ kernel: sceneGenerationKernel, delivery: wandGenerationDelivery });
 
 function isCigOwnedMedia(media) {
     return media?.cig_owner === extensionName
@@ -3639,9 +3639,14 @@ const slashGenerationDelivery = createPreviewGalleryDeliveryAdapter({
         $('#cig_preview_container').prop('hidden', false);
     },
 });
-const slashGenerationEntry = createSlashEntryAdapter({ kernel: sceneGenerationKernel, delivery: slashGenerationDelivery });
+const productionGenerationEntrypoints = createProductionGenerationEntrypoints({
+    kernel: sceneGenerationKernel,
+    messageDelivery: wandGenerationDelivery,
+    previewGalleryDelivery: slashGenerationDelivery,
+    onMessageRendered: onCigMessageRendered,
+});
 
-async function slashCommandHandler(args, prompt) {
+async function slashCommandHandler(args, prompt, generate) {
     const trimmedPrompt = String(prompt).trim();
 
     if (!trimmedPrompt) {
@@ -3650,7 +3655,7 @@ async function slashCommandHandler(args, prompt) {
     }
 
     try {
-        return await slashGenerationEntry.generate(trimmedPrompt);
+        return await generate(trimmedPrompt);
     } catch (error) {
         showGenerationError(error, 'Slash command generation');
     }
@@ -3859,6 +3864,11 @@ function visibleCanonMediaTarget(messageId, mediaUrl) {
     const item = media.find((entry) => entry?.url === mediaUrl);
     if (!item) return null;
     return { messageId: Number(messageId), mediaUrl, artifactId: buildVisibleCanonMediaArtifactId({ messageId, media: item }) };
+}
+
+async function onCigMessageRendered(messageId) {
+    injectMessageButton(messageId);
+    if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => observeCinematicMessage(messageId));
 }
 
 jQuery(async () => {
@@ -4284,10 +4294,6 @@ jQuery(async () => {
         } catch (error) { showGenerationError(error, 'Create outfit'); }
     });
 
-    $(document).on('click', '.cig_message_gen', function (e) {
-        cigMessageButton($(e.currentTarget));
-    });
-
     $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {
         e.preventDefault();
         e.stopPropagation();
@@ -4310,11 +4316,6 @@ jQuery(async () => {
     document.addEventListener('swiped-right', onCigImageGesture, true);
     document.addEventListener('click', onCigImageArrowClick, true);
 
-    async function onCigMessageRendered(messageId) {
-        injectMessageButton(messageId);
-        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => observeCinematicMessage(messageId));
-    }
-
     eventSource.on(event_types.CHAT_CHANGED, async () => {
         chatLifecycleEpoch.advance();
         if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
@@ -4324,14 +4325,6 @@ jQuery(async () => {
             markImagesCastSettingsStale();
             schedulePendingRecovery();
         }, 100);
-    });
-
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
-        await onCigMessageRendered(messageId);
-    });
-
-    eventSource.on(event_types.USER_MESSAGE_RENDERED, async (messageId) => {
-        await onCigMessageRendered(messageId);
     });
 
     eventSource.on(event_types.CHAT_CREATED, async () => {
@@ -4345,20 +4338,27 @@ jQuery(async () => {
         injectAllMessageButtons();
     }, 500);
 
-    SlashCommandParser.addCommandObject(SlashCommand.fromProps({
-        name: 'proimagine',
-        returns: 'URL of the generated image, or an empty string if generation failed',
-        callback: slashCommandHandler,
-        aliases: ['proimg', 'geminiimg'],
-        unnamedArgumentList: [
-            SlashCommandArgument.fromProps({
-                description: 'Prompt for image generation',
-                typeList: [ARGUMENT_TYPE.STRING],
-                isRequired: true,
-            }),
-        ],
-        helpString: 'Generate an image using Gemini Pro image generation. Example: /proimagine a beautiful sunset over mountains',
-    }));
+    registerProductionGenerationEntrypoints(productionGenerationEntrypoints, {
+        registerWand: (generate) => $(document).on('click', '.cig_message_gen', function (event) {
+            void cigMessageButton($(event.currentTarget), { generate });
+        }),
+        registerSlash: (generate) => SlashCommandParser.addCommandObject(SlashCommand.fromProps({
+            name: 'proimagine',
+            returns: 'URL of the generated image, or an empty string if generation failed',
+            callback: (args, prompt) => slashCommandHandler(args, prompt, generate),
+            aliases: ['proimg', 'geminiimg'],
+            unnamedArgumentList: [
+                SlashCommandArgument.fromProps({
+                    description: 'Prompt for image generation',
+                    typeList: [ARGUMENT_TYPE.STRING],
+                    isRequired: true,
+                }),
+            ],
+            helpString: 'Generate an image using Gemini Pro image generation. Example: /proimagine a beautiful sunset over mountains',
+        })),
+        registerCharacterMessageRendered: (handler) => eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, handler),
+        registerUserMessageRendered: (handler) => eventSource.on(event_types.USER_MESSAGE_RENDERED, handler),
+    });
 
     console.log(`[${extensionName}] Extension loaded successfully!`);
 });

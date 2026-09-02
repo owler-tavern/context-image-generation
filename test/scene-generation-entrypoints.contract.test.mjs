@@ -27,10 +27,11 @@ test('ADR-002 removes every known secondary generation dispatcher atomically', (
     assert.doesNotMatch(cinematicUi, /\bapprove\b/u);
 });
 
-test('wand and slash remain registered through the shared kernel entry adapters', () => {
+test('wand and slash remain registered through the shared production entry-point seam', () => {
     assert.match(index, /createSceneGenerationKernel\(/u);
-    assert.match(index, /createWandEntryAdapter\(/u);
-    assert.match(index, /createSlashEntryAdapter\(/u);
+    assert.match(index, /createProductionGenerationEntrypoints\(/u);
+    assert.match(index, /registerProductionGenerationEntrypoints\(/u);
+    assert.doesNotMatch(index, /createWandEntryAdapter\(|createSlashEntryAdapter\(/u);
     assert.match(index, /on\('click',\s*'\.cig_message_gen'/u);
     assert.match(index, /name:\s*'proimagine'/u);
     assert.match(index, /aliases:\s*\['proimg',\s*'geminiimg'\]/u);
