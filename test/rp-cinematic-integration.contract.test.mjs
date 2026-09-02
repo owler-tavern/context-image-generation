@@ -2,11 +2,12 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 
-const [index, settings, style, cinematicUi] = await Promise.all([
+const [index, settings, style, cinematicUi, referenceContributors] = await Promise.all([
     readFile(new URL('../index.js', import.meta.url), 'utf8'),
     readFile(new URL('../settings.html', import.meta.url), 'utf8'),
     readFile(new URL('../style.css', import.meta.url), 'utf8'),
     readFile(new URL('../lib/rp/cinematic-ui.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/scene-generation/reference-contributors.js', import.meta.url), 'utf8'),
 ]);
 
 test('cinematic automation is mounted into real chat lifecycle hooks and uses story interpretation', () => {
@@ -84,11 +85,11 @@ test('previous image is a strict opt-in at capture and pending continuation is c
     assert.match(index, /const previousImageEnabled = settingsSnapshot\.use_previous_image === true/u);
     assert.match(index, /settingsSnapshot\.gallery\.filter\(\(item\) => currentChatId && String\(item\?\.chatId \|\| ''\) === currentChatId\)/u);
     assert.match(index, /const previousImageGallery = previousImageEnabled[\s\S]*?: \[\]/u);
-    assert.match(index, /const previousImageReferenceContributor[\s\S]*?id: 'legacy:previous'/u);
+    assert.match(index, /previous:\s*\{[\s\S]*?item: previousImageGallery\[0\] \|\| null/u);
     assert.match(index, /if \(!extension_settings\[extensionName\]\.use_previous_image\) \{[\s\S]*?pendingStoryMemoryContinuation = null;/u);
     assert.match(index, /extension_settings\[extensionName\]\.previous_image_opt_in_version = 1/u);
-    assert.match(index, /assetId: 'asset:previous'/u);
-    assert.match(index, /assets: dataUrl \? \{ 'asset:previous':/u);
+    assert.match(referenceContributors, /assetId: 'asset:previous'/u);
+    assert.match(referenceContributors, /assets: dataUrl \? \{ 'asset:previous':/u);
     assert.doesNotMatch(index, /asset:legacy-previous/u);
     assert.match(index, /buildReferenceMessageParts\(plan, referenceAssets\)/u);
 });

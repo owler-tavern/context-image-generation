@@ -7,8 +7,8 @@ const settings = await readFile(new URL('../settings.html', import.meta.url), 'u
 
 test('uses one avatar-reference setting while keeping legacy swipe generation inert', () => {
     assert.match(index, /use_avatars:\s*false/);
-    assert.match(index, /const avatarReferenceContributor = createAvatarReferenceContributor\(/u);
-    assert.match(index, /const references = snapshot\.avatarEnabled/u);
+    assert.match(index, /captureReferenceContributorSnapshot\(\{[\s\S]*?avatarEnabled: settingsSnapshot\.use_avatars === true/u);
+    assert.match(index, /createCapturedReferenceContributors\(\{[\s\S]*?resolveAvatarReferences/u);
     assert.match(index, /cigSettings\.use_char_avatar \|\| cigSettings\.use_user_avatar/);
     assert.match(index, /delete cigSettings\.use_char_avatar/);
     assert.match(index, /delete cigSettings\.use_user_avatar/);

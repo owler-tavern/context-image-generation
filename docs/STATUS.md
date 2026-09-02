@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 5 — optional-reference contributor pipeline implemented and verified; awaiting independent review.
+Task 5 correction round 1 — immutable optional-reference capture implemented and verified; awaiting independent re-review.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -17,6 +17,9 @@ Task 5 — optional-reference contributor pipeline implemented and verified; awa
 - Removed automatic, overswipe, iteration, Director, and cinematic provider dispatch while preserving legacy preferences and historical artifacts as inert/readable data.
 - Added a deterministic optional-reference contributor pipeline in avatar, previous-image, saved-appearance order. Contributor failures are non-blocking notices; duplicate reference or asset IDs fail before planning.
 - Moved saved appearance library, tombstone, chat-pin, and appearance-asset resolution out of kernel capture and behind the explicitly enabled saved-appearance contributor.
+- Corrected the contributor boundary so disabled Appearance Memory cannot affect identities, cast truths, prompt descriptions, avatar policy, or saved-reference planning.
+- Captured avatar, previous-image, saved-appearance, and outfit inputs once before asynchronous materialization, preventing delayed work from mixing chats.
+- Decoupled saved-appearance asset resolution from the previous-image toggle and its selected Gallery item.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -27,10 +30,14 @@ Task 5 — optional-reference contributor pipeline implemented and verified; awa
 - Full repository suite — 856 passed, 0 failed: `node --test test/*.mjs`.
 - Task 5 focused contributor/kernel/reference suite — 40 passed, 0 failed.
 - Task 5 full repository suite — 864 passed, 0 failed: `node --test test/*.mjs`.
+- Task 5 correction RED — the production-boundary contract failed because `index.js` had no immutable contributor-capture assembly; deterministic race and disabled-appearance tests were added before production changes.
+- Task 5 correction focused contributor/kernel/reference suite — 43 passed, 0 failed.
+- Task 5 correction full repository suite — 867 passed, 0 failed: `node --test test/*.mjs`.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
+- Independent re-review of the Task 5 correction is outstanding.
 
 ## Decisions
 - Settings is configuration-only.
@@ -38,4 +45,4 @@ Task 5 — optional-reference contributor pipeline implemented and verified; awa
 - Saved appearance contributes only when Appearance Memory is explicitly enabled; avatar, previous image, and saved appearance can all be absent without blocking a text-only plan.
 
 ## Next action
-Obtain independent review of Task 5 before beginning outfit retirement.
+Obtain independent re-review of the Task 5 correction before beginning outfit retirement.

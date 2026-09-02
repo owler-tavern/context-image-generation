@@ -214,7 +214,7 @@ test('a staged Story Memory continuation projects only its selected image, not t
     const continuationBlock = index.match(/const previousImageGallery = previousImageEnabled[\s\S]*?const appearanceIdentities/u)?.[0] || '';
     assert.match(continuationBlock, /\[\{ id: `story-memory:\$\{continuation\.artifactId\}`[\s\S]*?\}\]/u);
     assert.doesNotMatch(continuationBlock, /\}, \.\.\.gallerySnapshot/u);
-    assert.match(index, /const previousImageReferenceContributor[\s\S]*?const gallery = snapshot\.previousImageGallery \|\| \[\][\s\S]*?gallery\[0\]/u);
+    assert.match(index, /previous:\s*\{[\s\S]*?item: previousImageGallery\[0\] \|\| null/u);
 });
 
 test('Story Memory continuation is cleared only after an attached completion, never before dispatch', async () => {

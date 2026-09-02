@@ -39,7 +39,7 @@ import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
 import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter } from './lib/scene-generation/delivery.js';
 import { createProductionGenerationEntrypoints, registerProductionGenerationEntrypoints } from './lib/scene-generation/production-entrypoints.js';
-import { createAvatarReferenceContributor, createPreviousImageReferenceContributor, createReferenceContributorPipeline, createSavedAppearanceReferenceContributor } from './lib/scene-generation/reference-contributors.js';
+import { captureReferenceContributorSnapshot, createCapturedReferenceContributors, createReferenceContributorPipeline } from './lib/scene-generation/reference-contributors.js';
 import { buildGenerationKey, getMessageFingerprint, validateMessageTarget } from './lib/rp-target.js';
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
@@ -1514,56 +1514,18 @@ function updateSizeDropdown(imageSizeOptions, selectedValue = extension_settings
     $sizeSelect.val(selectedValue);
 }
 
-async function getUserAvatar(avatarIdentityId = null) {
+async function materializeCapturedAvatarSource(source) {
+    if (!source?.url) return null;
     try {
-        const avatarKey = String(avatarIdentityId || '').replace(/^user:/u, '') || user_avatar;
-        let avatarUrl = getAvatarPath(avatarKey);
-        if (!avatarUrl) return null;
-
-        const response = await fetch(avatarUrl);
+        const response = await fetch(source.url);
         if (!response.ok) return null;
-
         const blob = await response.blob();
         const base64 = await getBase64Async(blob);
         const parts = base64.split(',');
         const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || 'image/png';
-        const data = parts[1] || base64;
-        const userName = name1 || 'User';
-
-        return { mimeType, data, role: 'user', name: userName };
+        return { mimeType, data: parts[1] || base64, role: source.role, name: source.name };
     } catch (error) {
-        console.warn(`[${extensionName}] Error fetching user avatar:`, error);
-        return null;
-    }
-}
-
-async function getCharacterAvatar(identityId = null) {
-    const context = getContext();
-    const characters = Array.isArray(context.characters) ? context.characters : Object.values(context.characters || {});
-    const identityKey = String(identityId || '').replace(/^character:/u, '');
-    const character = identityKey
-        ? characters.find((entry) => String(entry?.avatar || '') === identityKey || String(entry?.id || '') === identityKey)
-        : context.characters[context.characterId];
-    if (!character?.avatar) return null;
-
-    try {
-        const avatarUrl = `/characters/${encodeURIComponent(character.avatar)}`;
-        const response = await fetch(avatarUrl);
-        if (!response.ok) return null;
-
-        const blob = await response.blob();
-        const base64 = await getBase64Async(blob);
-        const parts = base64.split(',');
-        const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || 'image/png';
-
-        return {
-            mimeType,
-            data: parts[1] || base64,
-            role: 'character',
-            name: context.name2 || 'Character',
-        };
-    } catch (error) {
-        console.warn(`[${extensionName}] Error fetching character avatar:`, error);
+        console.warn(`[${extensionName}] Error fetching captured avatar:`, error);
         return null;
     }
 }
@@ -1615,6 +1577,35 @@ function createGenerationSettingsSnapshot(settings) {
     const snapshot = cloneSnapshot(settings) || {};
     delete snapshot.rp_library;
     return snapshot;
+}
+
+function captureHostReferenceState(hostContext) {
+    const identities = getAppearanceIdentityChoices({ includeSavedAppearance: false, hostContext });
+    return {
+        identities,
+        truths: continuityTruths(identities, { hostContext, allowAppearanceState: false }),
+        activeCharacterAvatar: hostContext.activeCharacterAvatar,
+        personaAvatar: hostContext.personaAvatar,
+        groupCharacterAvatars: hostContext.groupCharacterAvatars,
+        assetSources: hostContext.assetSources,
+    };
+}
+
+function captureSavedAppearanceContributorState(settings, hostContext, gallerySnapshot) {
+    const library = cloneSnapshot(settings?.rp_library);
+    const chatState = cloneSnapshot(chat_metadata?.[CHAT_CANON_KEY]);
+    const identities = getAppearanceIdentityChoices({
+        includeSavedAppearance: true,
+        hostContext,
+        libraryValue: library,
+        chatStateValue: chatState,
+    });
+    return {
+        identities,
+        truths: continuityTruths(identities, { hostContext, chatState, allowAppearanceState: true }),
+        sourcePreferences: cloneSnapshot(appearanceSourcePreferences(chatState)),
+        savedInput: { library, gallery: cloneSnapshot(gallerySnapshot), chatState, identities: cloneSnapshot(identities) },
+    };
 }
 
 async function confirmCustomConnectionRoute(settings, invocation) {
@@ -1732,7 +1723,24 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
             ? [{ id: `story-memory:${continuation.artifactId}`, url: continuation.selectedImage.url, mimeType: continuation.selectedImage.mimeType || 'image/png', chatId: continuation.chatId }]
             : gallerySnapshot)
         : [];
-    const appearanceIdentities = getAppearanceIdentityChoices();
+    const hostAppearanceContext = captureHostAppearanceContext();
+    const hostReferenceState = captureHostReferenceState(hostAppearanceContext);
+    const appearanceReferenceState = savedAppearanceEnabled
+        ? captureSavedAppearanceContributorState(settings, hostAppearanceContext, gallerySnapshot)
+        : null;
+    const referenceContributorSnapshot = captureReferenceContributorSnapshot({
+        referencesEnabled: Boolean(capability),
+        avatarEnabled: settingsSnapshot.use_avatars === true,
+        previousImageEnabled,
+        savedAppearanceEnabled,
+        host: hostReferenceState,
+        previous: {
+            item: previousImageGallery[0] || null,
+            label: continuationIsCurrent ? 'selected story scene' : 'previous image',
+        },
+        appearance: appearanceReferenceState,
+    });
+    const appearanceIdentities = referenceContributorSnapshot.identities;
     const sceneSnapshot = buildSceneGenerationSnapshot({
         selectedPassage: focusText,
         clickedMessage: { name: sender || '', mes: prompt },
@@ -1767,7 +1775,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         identities: appearanceIdentities,
         references: [],
         activeOutfits: [],
-        referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender) },
+        referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender, appearanceIdentities, hostAppearanceContext) },
         options: {
             aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
             thinkingLevel: settingsSnapshot.thinking_level, useGoogleSearch: settingsSnapshot.use_google_search,
@@ -1781,6 +1789,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         referencesEnabled: Boolean(capability), avatarEnabled: settingsSnapshot.use_avatars === true,
         previousImageEnabled, savedAppearanceEnabled,
         appearanceIdentities,
+        referenceContributorSnapshot,
+        outfitStateSnapshot: cloneSnapshot(chat_metadata?.[CHAT_CANON_KEY]?.outfitState),
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
         storyMemoryContinuation: continuationIsCurrent ? cloneSnapshot(continuation) : null,
@@ -1799,15 +1809,16 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     return [{ role: 'user', content: contentParts }];
 }
 
-function getStableSpeakerIdentityId(sender) {
-    const context = getContext();
-    if (String(sender || '').startsWith('{{user}}')) return user_avatar ? `user:${user_avatar}` : 'user:display';
+function getStableSpeakerIdentityId(sender, capturedIdentities = null, hostContext = null) {
+    const context = hostContext || captureHostAppearanceContext();
+    if (String(sender || '').startsWith('{{user}}')) return context.personaAvatar ? `user:${context.personaAvatar}` : 'user:display';
     const senderName = String(sender || '').match(/\(([^()]*)\)\s*$/u)?.[1]?.trim();
     if (senderName) {
-        const matches = getAppearanceIdentityChoices().filter((identity) => identity.label.trim().toLocaleLowerCase('und') === senderName.toLocaleLowerCase('und'));
+        const identities = capturedIdentities || getAppearanceIdentityChoices();
+        const matches = identities.filter((identity) => identity.label.trim().toLocaleLowerCase('und') === senderName.toLocaleLowerCase('und'));
         if (matches.length === 1) return matches[0].id;
     }
-    const character = context.characters?.[context.characterId];
+    const character = context.activeCharacter || context.characters?.[context.characterId];
     return character?.avatar ? `character:${character.avatar}` : null;
 }
 
@@ -1835,73 +1846,26 @@ async function captureSceneGenerationRequest(request) {
     return Object.freeze({ ...snapshot, request, storyMemoryFeatureForGeneration });
 }
 
-const avatarReferenceContributor = createAvatarReferenceContributor({
-    enabled: (snapshot) => snapshot.referencesEnabled === true,
-    contribute: async (snapshot) => {
-        const identities = snapshot.appearanceIdentities || [];
-        const context = getContext();
-        const activeCharacter = context.characters?.[context.characterId];
-        const references = snapshot.avatarEnabled
-            ? resolveHostAvatarIdentityReferences({
-                identities,
-                activeCharacterAvatar: activeCharacter?.avatar,
-                personaAvatar: identities.find((identity) => identity.kind === 'user')?.hostKey || user_avatar,
-                groupCharacterAvatars: context.groups?.find((entry) => String(entry.id) === String(context.groupId))?.members || [],
-                sourcePreferences: appearanceSourcePreferences(),
-            })
-            : [];
-        return {
-            references,
-            assets: await materializeHostAvatarReferenceAssets({ references, getCharacterAvatar, getUserAvatar }),
-            truths: continuityTruths(identities),
-            omissions: [],
-            notices: [],
-        };
-    },
-});
-
-const previousImageReferenceContributor = createPreviousImageReferenceContributor({
-    contribute: async (snapshot) => {
-        const gallery = snapshot.previousImageGallery || [];
-        if (!gallery.length) return { references: [], assets: {}, truths: [], omissions: [], notices: [] };
-        const dataUrl = await galleryItemToDataUrl(gallery[0]);
-        return {
-            references: [{ id: 'legacy:previous', role: 'legacy-previous', assetId: 'asset:previous', label: snapshot.storyMemoryContinuation ? 'selected story scene' : 'previous image' }],
-            assets: dataUrl ? { 'asset:previous': { url: dataUrl, mimeType: 'image/png' } } : {},
-            truths: [],
-            omissions: dataUrl ? [] : [{ id: 'legacy:previous', reason: 'asset-unavailable' }],
-            notices: [],
-        };
-    },
-});
-
-const savedAppearanceReferenceContributor = createSavedAppearanceReferenceContributor({
-    contribute: async (snapshot) => {
-        const canonCapture = captureCanonForGeneration({
-            library: extension_settings[extensionName]?.rp_library,
-            gallery: snapshot.previousImageGallery || [],
-            chatState: chat_metadata[CHAT_CANON_KEY],
-            identities: snapshot.appearanceIdentities || [],
-        });
-        return {
-            references: canonCapture.canonSnapshot.references,
-            assets: canonCapture.canonSnapshot.assets,
-            truths: continuityTruths(snapshot.appearanceIdentities || []),
-            omissions: canonCapture.canonSnapshot.omissions,
-            notices: [],
-        };
-    },
-});
-
-const referenceContributorPipeline = createReferenceContributorPipeline([
-    avatarReferenceContributor,
-    previousImageReferenceContributor,
-    savedAppearanceReferenceContributor,
-]);
+const referenceContributorPipeline = createReferenceContributorPipeline(createCapturedReferenceContributors({
+    resolveAvatarReferences: (input) => resolveHostAvatarIdentityReferences({
+        identities: input.identities || [],
+        activeCharacterAvatar: input.activeCharacterAvatar,
+        personaAvatar: input.personaAvatar,
+        groupCharacterAvatars: input.groupCharacterAvatars || [],
+        sourcePreferences: input.sourcePreferences || {},
+    }),
+    materializeAvatarAssets: (input, references) => materializeHostAvatarReferenceAssets({
+        references,
+        getCharacterAvatar: (identityId) => materializeCapturedAvatarSource(input.assetSources?.[identityId]),
+        getUserAvatar: (identityId) => materializeCapturedAvatarSource(input.assetSources?.[identityId]),
+    }),
+    materializePreviousImage: (item) => galleryItemToDataUrl(item),
+    resolveSavedAppearance: (input) => captureCanonForGeneration(input).canonSnapshot,
+}));
 
 async function collectSceneGenerationReferences(snapshot) {
         const { prompt, sender = null, messageId = null, focusText = null, target = null, source: invocation } = snapshot.request;
-        const contributed = await referenceContributorPipeline.collect(snapshot, snapshot.request);
+        const contributed = await referenceContributorPipeline.collect(snapshot.referenceContributorSnapshot, snapshot.request);
         notifyBrokenCanon(contributed.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         for (const notice of contributed.notices) toastr.info(notice.message || 'An optional reference was unavailable.', 'Context Image Generation');
         const appearanceTruths = [...new Map(contributed.truths.map((truth) => [truth.identityId, truth])).values()];
@@ -1925,7 +1889,7 @@ async function collectSceneGenerationReferences(snapshot) {
             candidates: continuityCandidates,
             modelLimit: snapshot.planInput.provider.capabilities?.referenceImages?.maxCount,
             outfitCatalog: snapshot.settingsSnapshot.rp_outfits,
-            outfitState: chat_metadata[CHAT_CANON_KEY]?.outfitState,
+            outfitState: snapshot.outfitStateSnapshot,
             includeDescriptions: snapshot.settingsSnapshot.include_descriptions === true,
             includeAvatars: snapshot.avatarEnabled,
         });
@@ -2259,28 +2223,52 @@ function renderGallery() {
     }
 }
 
-function getAppearanceIdentityChoices() {
-    const context = getContext();
-    const character = context.characters?.[context.characterId] || null;
-    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
-    const groupMembers = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
-    const library = extension_settings[extensionName]?.rp_library;
-    const chatIdentities = Object.values(library?.identities || {})
-        .filter((identity) => identity.kind === 'npc' && identity.durable === false);
-    const choices = listAppearanceIdentityChoices({
+function captureHostAppearanceContext(contextValue = getContext()) {
+    const context = contextValue || {};
+    const characters = Array.isArray(context.characters) ? context.characters : Object.values(context.characters || {});
+    const character = context.characters?.[context.characterId] || characters.find((entry) => String(entry?.id || '') === String(context.characterId)) || null;
+    const group = (Array.isArray(context.groups) ? context.groups : Object.values(context.groups || {})).find((entry) => String(entry.id) === String(context.groupId));
+    const groupMembers = (group?.members || []).map((avatar) => characters.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
+    const persona = { avatar: user_avatar, name: name1 || 'User', description: power_user.persona_description || '', kind: 'user' };
+    const assetSources = {};
+    for (const entry of [character, ...groupMembers].filter((item) => item?.avatar)) {
+        assetSources[`character:${entry.avatar}`] = { url: `/characters/${encodeURIComponent(entry.avatar)}`, role: 'character', name: entry.name || context.name2 || 'Character' };
+    }
+    if (user_avatar) assetSources[`user:${user_avatar}`] = { url: getAvatarPath(user_avatar), role: 'user', name: persona.name };
+    return cloneSnapshot({
+        currentChatId: context.chatId,
         activeCharacter: character,
-        persona: { avatar: user_avatar, name: name1 || 'User' },
+        persona,
         groupMembers,
+        activeCharacterAvatar: character?.avatar || '',
+        personaAvatar: user_avatar || '',
+        groupCharacterAvatars: groupMembers.map((entry) => entry?.avatar).filter(Boolean),
+        assetSources,
+    });
+}
+
+function getAppearanceIdentityChoices({ includeSavedAppearance = true, hostContext = null, libraryValue, chatStateValue } = {}) {
+    const host = hostContext || captureHostAppearanceContext();
+    const library = includeSavedAppearance ? (libraryValue ?? extension_settings[extensionName]?.rp_library) : undefined;
+    const chatState = includeSavedAppearance ? (chatStateValue ?? chat_metadata?.[CHAT_CANON_KEY]) : undefined;
+    const chatIdentities = includeSavedAppearance
+        ? Object.values(library?.identities || {}).filter((identity) => identity.kind === 'npc' && identity.durable === false)
+        : [];
+    const choices = listAppearanceIdentityChoices({
+        activeCharacter: host.activeCharacter,
+        persona: host.persona,
+        groupMembers: host.groupMembers,
         chatIdentities,
         library,
-        currentChatId: context.chatId,
-        chatState: chat_metadata?.[CHAT_CANON_KEY],
+        currentChatId: host.currentChatId,
+        chatState,
     });
+    if (!includeSavedAppearance) return choices;
     // A persona avatar key is part of the stable identity ID. If this chat
     // already pinned a prior persona, keep that exact identity in the active
     // catalogue until the player deliberately replaces it.
-    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
-    const currentPersonaId = user_avatar ? `user:${user_avatar}` : 'user:display';
+    const canon = migrateChatCanon(chatState);
+    const currentPersonaId = host.personaAvatar ? `user:${host.personaAvatar}` : 'user:display';
     const pinnedPersona = Object.values(canon.identityPins || {}).find((pin) => pin?.role === 'persona') || null;
     if (pinnedPersona && pinnedPersona.identityId !== currentPersonaId && !choices.some((identity) => identity.id === pinnedPersona.identityId)) {
         const pinnedHostKey = String(pinnedPersona.sourceId || pinnedPersona.identityId).replace(/^user:/u, '');
@@ -2291,49 +2279,44 @@ function getAppearanceIdentityChoices() {
     return choices;
 }
 
-function continuityHostSources() {
-    const context = getContext();
-    const character = context.characters?.[context.characterId] || null;
-    const group = context.groups?.find((entry) => String(entry.id) === String(context.groupId));
-    const groupMembers = (group?.members || []).map((avatar) => context.characters?.find((entry) => entry.avatar === avatar) || { avatar, name: avatar });
-    const records = [
-        character,
-        ...groupMembers,
-        { avatar: user_avatar, name: name1 || 'User', description: power_user.persona_description || '', kind: 'user' },
-    ].filter(Boolean);
-    return records;
+function continuityHostSources(hostContext = null) {
+    const host = hostContext || captureHostAppearanceContext();
+    return [host.activeCharacter, ...(host.groupMembers || []), host.persona].filter(Boolean);
 }
 
-function identityHostRecord(identity) {
+function identityHostRecord(identity, { hostContext = null, chatState = null, allowAppearanceState = true } = {}) {
+    const effectiveHostContext = hostContext || captureHostAppearanceContext();
+    const effectiveChatState = allowAppearanceState ? (chatState ?? chat_metadata?.[CHAT_CANON_KEY]) : null;
     const id = String(identity?.id || '');
     const hostKey = String(identity?.hostKey || id.replace(/^(?:character|user):/u, '')).trim();
-    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
-    const source = getChatAppearanceSource(canon, id, identity?.kind === 'user' ? 'persona' : '');
-    const pin = getChatIdentityPin(canon, id, identity?.kind === 'user' ? 'persona' : identity?.kind);
+    const canon = allowAppearanceState ? migrateChatCanon(effectiveChatState) : null;
+    const pin = allowAppearanceState ? getChatIdentityPin(canon, id, identity?.kind === 'user' ? 'persona' : identity?.kind) : null;
     const pinnedHostKey = pin?.sourceId === id ? String(pin.sourceId).replace(/^(?:character|user):/u, '') : '';
-    const current = continuityHostSources().find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey);
+    const current = continuityHostSources(effectiveHostContext).find((record) => String(record.avatar || record.hostKey || '').trim() === hostKey);
     if (current) return current;
     if (pin?.identityId === id) return pinnedHostKey ? { avatar: pinnedHostKey } : null;
-    return identity?.kind === 'user' ? { description: power_user.persona_description || '' } : null;
+    return identity?.kind === 'user' ? { description: effectiveHostContext.persona?.description || '' } : null;
 }
 
-function continuityTruths(identities) {
+function continuityTruths(identities, { hostContext = null, chatState = null, allowAppearanceState = true } = {}) {
+    const effectiveHostContext = hostContext || captureHostAppearanceContext();
+    const effectiveChatState = allowAppearanceState ? (chatState ?? chat_metadata?.[CHAT_CANON_KEY]) : null;
     return buildAppearanceTruths({
         identities,
         sources: (identity) => {
-            const record = identityHostRecord(identity);
+            const record = identityHostRecord(identity, { hostContext: effectiveHostContext, chatState: effectiveChatState, allowAppearanceState });
             if (!record) return {};
             const avatar = record.avatar
                 ? { path: identity.kind === 'character' ? `/characters/${encodeURIComponent(record.avatar)}` : getAvatarPath(record.avatar), characterId: identity.id }
                 : null;
-            const source = getChatAppearanceSource(migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]), identity.id, identity.kind === 'user' ? 'persona' : '');
+            const source = allowAppearanceState ? getChatAppearanceSource(migrateChatCanon(effectiveChatState), identity.id, identity.kind === 'user' ? 'persona' : '') : null;
             return { avatar, description: record.description || '', sourcePreference: source?.sourceType || 'auto' };
         },
     });
 }
 
-function appearanceSourcePreferences() {
-    const canon = migrateChatCanon(chat_metadata?.[CHAT_CANON_KEY]);
+function appearanceSourcePreferences(chatState = chat_metadata?.[CHAT_CANON_KEY]) {
+    const canon = migrateChatCanon(chatState);
     return canon.appearanceSources || {};
 }
 

@@ -77,23 +77,27 @@ test('captured continuity metadata remains available to Settings and Story Memor
     assert.doesNotMatch(source, /function renderSceneInspection/);
 });
 
-test('contributor wiring gates avatar candidates while the captured settings retain description preference', async () => {
+test('production passes captured avatar and description preferences into the contributor boundary', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     const snapshot = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function collectSceneGenerationReferences'));
-    const contributors = source.slice(source.indexOf('const avatarReferenceContributor'), source.indexOf('async function collectSceneGenerationReferences'));
-    assert.match(contributors, /const references = snapshot\.avatarEnabled/);
+    assert.match(snapshot, /captureReferenceContributorSnapshot\(\{/u);
+    assert.match(snapshot, /avatarEnabled: settingsSnapshot\.use_avatars === true/u);
+    assert.match(snapshot, /host: hostReferenceState/u);
     assert.match(snapshot, /settings: settingsSnapshot/);
     assert.match(source, /descriptionText: snapshot\.settingsSnapshot\.include_descriptions === true/u);
 });
 
-test('saved appearance storage is owned by the contributor rather than kernel capture', async () => {
+test('saved appearance storage is captured by the contributor boundary and never read during async collection', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     const capture = source.slice(source.indexOf('function captureGenerationSnapshot'), source.indexOf('async function captureSceneGenerationRequest'));
-    const collection = source.slice(source.indexOf('const savedAppearanceReferenceContributor'), source.indexOf('async function collectSceneGenerationReferences'));
+    const contributorAssembly = source.slice(source.indexOf('const referenceContributorPipeline'), source.indexOf('async function collectSceneGenerationReferences'));
+    const collection = source.slice(source.indexOf('async function collectSceneGenerationReferences'), source.indexOf('const sceneGenerationDispatchContexts'));
     assert.doesNotMatch(capture, /rp_library|captureCanonForGeneration|referenceCandidates/u);
-    assert.match(source, /createReferenceContributorPipeline\(\[\s*avatarReferenceContributor,\s*previousImageReferenceContributor,\s*savedAppearanceReferenceContributor,/u);
-    assert.match(collection, /library: extension_settings\[extensionName\]\?\.rp_library/u);
-    assert.match(collection, /chatState: chat_metadata\[CHAT_CANON_KEY\]/u);
+    assert.match(source, /captureReferenceContributorSnapshot\(/u);
+    assert.match(contributorAssembly, /createCapturedReferenceContributors\(/u);
+    assert.doesNotMatch(contributorAssembly, /getContext\(|chat_metadata|extension_settings/u);
+    assert.doesNotMatch(collection, /getContext\(|chat_metadata|extension_settings/u);
+    assert.match(collection, /referenceContributorSnapshot/u);
 });
 
 test('outfit persistence queues durable pending state and saves only through the captured target gate', async () => {
