@@ -452,3 +452,26 @@ test('runtime accepts the real scene interpretation delta, not a message counter
     assert.equal(result.suggestion.kind, 'location');
     assert.match(result.suggestion.whyFired.text, /accepted location change/i);
 });
+
+test('Cinematic reloads an evicted inactive chat from durable state after visiting more than 32 chats', () => {
+    const states = new Map();
+    let chatId = 'chat-0';
+    let epoch = 1;
+    for (let index = 0; index <= 32; index += 1) states.set(`chat-${index}`, { storyState: { marker: `stored-${index}` } });
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => chatId,
+        getEpoch: () => epoch,
+        readState: ({ chatId: requested } = {}) => states.get(requested || chatId) || {},
+    });
+    for (let index = 0; index <= 32; index += 1) {
+        chatId = `chat-${index}`;
+        epoch += 1;
+        runtime.load({ chatId, epoch });
+    }
+    states.set('chat-0', { storyState: { marker: 'reloaded-after-eviction' } });
+    chatId = 'chat-0';
+    epoch += 1;
+    runtime.load({ chatId, epoch });
+    assert.equal(runtime.getState().storyState.marker, 'reloaded-after-eviction');
+});

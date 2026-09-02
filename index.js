@@ -4048,6 +4048,7 @@ async function renderIterationActionSurface(messageElement, messageOverride = nu
             allowUnquotedSingle: true,
             supportedCanonicalRoles: ['activeLook'],
             reserveInvocation: (invocationId) => { if (iterationInvocations.has(invocationId)) return false; iterationInvocations.add(invocationId); return true; },
+            releaseInvocation: (invocationId) => iterationInvocations.delete(invocationId),
             verifyGenerationPlan: (candidate) => candidate.planId === generationPlan?.planId && candidate.revision === generationPlan?.revision && generationPlan?.routeConfirmationAccepted === true
                 ? { status: 'verified', planId: candidate.planId, revision: candidate.revision, authorityToken: generationPlan.planId, routeResolved: true, capabilities: generationPlan.capabilities || {} } : { status: 'unverified' },
             dispatchCoordinator: iterationDispatchCoordinator(sourceArtifact),

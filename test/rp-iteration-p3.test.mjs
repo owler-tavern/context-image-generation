@@ -40,6 +40,66 @@ test('production single-output submit dispatches without a paid quote', async ()
     assert.equal(calls.length, 1);
 });
 
+test('iteration reservations block overlapping duplicates and release after every terminal dispatch outcome', async () => {
+    const reservations = new Set();
+    const released = [];
+    let dispatchCount = 0;
+    let settleDispatch;
+    let dispatchedPlan;
+    const controller = createIterationSurfaceController({
+        ...common,
+        allowUnquotedSingle: true,
+        reserveInvocation: (id) => {
+            if (reservations.has(id)) return false;
+            reservations.add(id);
+            return true;
+        },
+        releaseInvocation: (id) => { released.push(id); reservations.delete(id); },
+        dispatchCoordinator: (plan) => {
+            dispatchCount += 1;
+            dispatchedPlan = plan;
+            return new Promise((resolve) => { settleDispatch = resolve; });
+        },
+        persistArtifact: async () => ({ status: 'saved' }),
+        readbackArtifact: async ({ artifact, plan }) => ({ status: 'confirmed', artifactId: artifact.artifactId, planId: plan.planId, invocationId: plan.invocationId }),
+        readbackOriginalArtifact: async ({ originalArtifact, plan }) => ({ status: 'confirmed', artifactId: originalArtifact.artifactId, planId: plan.planId, invocationId: plan.invocationId }),
+    });
+    const first = controller.submit({ action: 'reuse-recipe', invocationId: 'terminal-id' });
+    const duplicate = await controller.submit({ action: 'reuse-recipe', invocationId: 'terminal-id' });
+    assert.equal(duplicate.status, 'error');
+    assert.equal(dispatchCount, 1);
+    settleDispatch({ status: 'completed', planId: dispatchedPlan.planId, invocationId: 'terminal-id', outputCount: 1, artifacts: dispatchedPlan.artifacts });
+    const settled = await first;
+    assert.equal(settled.status, 'completed');
+    assert.deepEqual(released, ['terminal-id']);
+    assert.equal(reservations.has('terminal-id'), false);
+});
+
+test('iteration releases reservations when dispatch is stale, cancelled, or throws', async () => {
+    for (const outcome of [
+        () => ({ status: 'stale' }),
+        () => ({ status: 'cancelled' }),
+        () => { throw new Error('provider failed'); },
+    ]) {
+        const reservations = new Set();
+        const released = [];
+        const controller = createIterationSurfaceController({
+            ...common,
+            allowUnquotedSingle: true,
+            reserveInvocation: (id) => { if (reservations.has(id)) return false; reservations.add(id); return true; },
+            releaseInvocation: (id) => { released.push(id); reservations.delete(id); },
+            dispatchCoordinator: async () => outcome(),
+            persistArtifact: async () => ({ status: 'saved' }),
+            readbackArtifact: async () => ({ status: 'confirmed' }),
+            readbackOriginalArtifact: async () => ({ status: 'confirmed' }),
+        });
+        const invocationId = `terminal-${released.length}-${outcome.name || 'outcome'}`;
+        assert.equal((await controller.submit({ action: 'reuse-recipe', invocationId })).status, 'error');
+        assert.deepEqual(released, [invocationId]);
+        assert.equal(reservations.has(invocationId), false);
+    }
+});
+
 test('production two-up is unavailable even when a caller supplies a finite quote', async () => {
     const controller = createIterationSurfaceController({ ...common, twoUpAvailable: false, estimateCost: async () => ({ quoteId: 'q', amount: 0.08, currency: 'USD', expiresAt: '2999-01-01' }) });
     const result = await controller.submit({ action: 'reuse-recipe', twoUp: true, invocationId: 'p3-two-up', consent: { approved: true, outputCount: 2, quoteId: 'q', amount: 0.08, currency: 'USD', expiresAt: '2999-01-01' } });

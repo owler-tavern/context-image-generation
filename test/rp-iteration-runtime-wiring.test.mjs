@@ -31,6 +31,8 @@ test('iteration submit is distinct from action selection and uses coordinator/pe
     assert.match(source, /verifyCanonicalEligibility/);
     assert.match(source, /readbackCanonical/);
     assert.match(source, /cig_iteration_persistence/);
+    assert.match(source, /reserveInvocation:/);
+    assert.match(source, /releaseInvocation:/);
 });
 
 test('iteration dispatch reuses the outer coordinator signal instead of nesting a target run', async () => {
