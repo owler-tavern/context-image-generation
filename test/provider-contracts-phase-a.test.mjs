@@ -260,10 +260,13 @@ test('accepts a resolved schema-2 input and keeps options immutable', () => {
 });
 
 test('loads the additive provider migration at the existing settings boundary', async () => {
-    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+    const [source, recordStore] = await Promise.all([
+        readFile(new URL('../index.js', import.meta.url), 'utf8'),
+        readFile(new URL('../lib/providers/model-record-store.js', import.meta.url), 'utf8'),
+    ]);
     assert.match(source, /migrateProviderSettings/);
     assert.match(source, /migratedProviderSettings\s*=\s*migrateProviderSettings\(existingProviderSettings\)/);
-    assert.match(source, /settings\.model_records/);
+    assert.match(recordStore, /settings\.model_records/);
     assert.match(source, /mergeDiscoveryModelRecords/);
     assert.match(source, /setProviderModelRecords/);
 });

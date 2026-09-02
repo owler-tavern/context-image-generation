@@ -29,8 +29,10 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
 import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
-import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectModelSelectorLists, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
-import { mergeFetchedModelEntries, updateLocalModelEntries, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
+import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
+import { mergeFetchedModelEntries, updateLocalModelEntries, mergeCustomDiscoveryModelRecords, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords } from './lib/providers/model-manager.js';
+import { getProviderModelEntries, setProviderModelRecords } from './lib/providers/model-record-store.js';
+import { bindModelSelectorUi, renderManagedModelSelector, renderSetupModelSelector } from './lib/providers/model-selector-ui.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
@@ -48,7 +50,7 @@ import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, in
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, loadExtensionSettings, persistExtensionSettings, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
-import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
+import { connectionRevision, createCustomConnectionId, customCredentialRef, isCurrentCustomDiscoveryCompletion, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { canIncrementallyPrependGalleryItem, createGalleryRenderState, reindexGalleryTileActionTargets } from './lib/gallery-render-state.js';
@@ -364,15 +366,6 @@ function projectSelectedProviderUi(settings, providerId = settings?.provider || 
     return projectProviderUi(providerId, modelId, options);
 }
 
-function getProviderModelEntries(settings, providerId) {
-    const custom = getCustomConnectionStore(settings);
-    if (custom.connections[providerId]) return custom.models[providerId] || [];
-    const records = settings.model_records?.[providerId];
-    if (Array.isArray(records)) return records;
-    const entries = settings.provider_models?.[providerId];
-    return Array.isArray(entries) ? entries : [];
-}
-
 function getSelectedModelRoute(settings, modelId = settings.model) {
     const providerId = settings.provider || 'makersuite';
     const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
@@ -431,18 +424,6 @@ function renderExperimentalPreflight(settings, modelId = settings.model) {
     $('#cig_experimental_preflight_warning')
         .text('Endpoint/model is unverified; optional features are disabled.')
         .toggle(showExperimentalPreflight);
-}
-
-function setProviderModelRecords(settings, providerId, records) {
-    const custom = getCustomConnectionStore(settings);
-    if (custom.connections[providerId]) {
-        settings.custom_connections = migrateCustomConnections({ ...custom, models: { ...custom.models, [providerId]: records } });
-        return;
-    }
-    if (!settings.model_records || typeof settings.model_records !== 'object' || Array.isArray(settings.model_records)) settings.model_records = {};
-    if (!settings.provider_models || typeof settings.provider_models !== 'object' || Array.isArray(settings.provider_models)) settings.provider_models = {};
-    settings.model_records[providerId] = records;
-    settings.provider_models[providerId] = toLegacyModelEntries(records);
 }
 
 function getProviderDiscoveryState(settings, providerId) {
@@ -603,11 +584,12 @@ async function fetchManagedProviderModels() {
         return;
     }
 
+    const customConnection = getCustomConnection(settings, providerId);
+    const capturedCustomRevision = customConnection ? connectionRevision(customConnection) : '';
     const refreshToken = ++modelDiscoveryUiSequence;
     const fetchButtons = $('#cig_model_refresh');
     setBusyState(fetchButtons, true, { busyTitle: 'Refreshing models…' });
     try {
-        const customConnection = getCustomConnection(settings, providerId);
         const result = customConnection
             ? await discoverCustomConnectionModels({
                 connection: customConnection,
@@ -619,10 +601,18 @@ async function fetchManagedProviderModels() {
             })
             : await modelDiscoveryCoordinator.refresh(providerId, { apiKey: key });
         const currentSettings = extension_settings[extensionName];
-        if (result?.stale || (currentSettings.provider || 'makersuite') !== providerId) return;
+        const currentProviderId = currentSettings.provider || 'makersuite';
+        if (result?.stale || refreshToken !== modelDiscoveryUiSequence || currentProviderId !== providerId) return;
+        if (customConnection && !isCurrentCustomDiscoveryCompletion({
+            providerId,
+            capturedRevision: capturedCustomRevision,
+            result,
+            currentProviderId,
+            currentConnection: getCustomConnection(currentSettings, providerId),
+        })) return;
         setProviderDiscoveryState(currentSettings, providerId, result);
         setProviderModelRecords(currentSettings, providerId, customConnection
-            ? result.models
+            ? mergeCustomDiscoveryModelRecords(getProviderModelEntries(currentSettings, providerId), result, customConnection)
             : mergeDiscoveryModelRecords(getProviderModelEntries(currentSettings, providerId), result, providerId));
         updateModelDropdown();
         renderModelManager();
@@ -773,6 +763,7 @@ function saveCustomConnectionFromEditor() {
     const draft = readCustomConnectionDraft();
     const validation = validateCustomConnection(draft);
     if (!validation.valid) throw new TypeError(validation.errors[0]?.message || 'Invalid custom connection.');
+    cancelModelDiscovery(validation.connection.id);
     settings.custom_connections = upsertCustomConnection(getCustomConnectionStore(settings), validation.connection);
     if (!settings.custom_connection_keys || typeof settings.custom_connection_keys !== 'object' || Array.isArray(settings.custom_connection_keys)) settings.custom_connection_keys = {};
     const enteredKey = String($('#cig_custom_connection_key').val() || '');
@@ -792,6 +783,8 @@ async function testCustomConnectionFromEditor() {
     try { connection = saveCustomConnectionFromEditor(); }
     catch (error) { toastr.warning(error.message, 'Context Image Generation'); return; }
     const settings = extension_settings[extensionName];
+    const capturedRevision = connectionRevision(connection);
+    const testToken = ++modelDiscoveryUiSequence;
     const control = $('#cig_custom_connection_test');
     setBusyState(control, true, { busyTitle: 'Testing connection…' });
     try {
@@ -804,15 +797,27 @@ async function testCustomConnectionFromEditor() {
             savedModels: store.models[connection.id] || [],
             fetchImpl: fetch,
         });
-        setProviderModelRecords(settings, connection.id, result.models);
-        setProviderDiscoveryState(settings, connection.id, result);
+        const currentSettings = extension_settings[extensionName];
+        if (testToken !== modelDiscoveryUiSequence || !isCurrentCustomDiscoveryCompletion({
+            providerId: connection.id,
+            capturedRevision,
+            result,
+            currentConnection: getCustomConnection(currentSettings, connection.id),
+        })) return;
+        const mergedModels = mergeCustomDiscoveryModelRecords(
+            getProviderModelEntries(currentSettings, connection.id), result, connection,
+        );
+        setProviderDiscoveryState(currentSettings, connection.id, result);
+        setProviderModelRecords(currentSettings, connection.id, mergedModels);
         if (!result.warning || result.warning.code === 'DISCOVERY_EMPTY') {
-            settings.provider = connection.id;
-            settings.model = result.models[0]?.id || settings.model;
+            currentSettings.provider = connection.id;
+            currentSettings.model = mergedModels.some((model) => model.id === currentSettings.model)
+                ? currentSettings.model
+                : mergedModels[0]?.id || currentSettings.model;
             toastr.success(getCustomCatalogRefreshMessage(result.models), 'Context Image Generation');
         } else toastr.warning(result.warning.userMessage, 'Context Image Generation');
         renderProviderDropdown();
-        $('#cig_provider').val(settings.provider);
+        $('#cig_provider').val(currentSettings.provider);
         refreshManagedModels();
         renderCustomConnectionEditor();
         saveSettingsDebounced();
@@ -871,12 +876,7 @@ function updateModelDropdown() {
     settings.model = getCustomConnection(settings, providerId)
         ? ui.selectedModelId || settings.model || ''
         : getModelFallback(providerId, settings.model, localEntries);
-    const $modelSelect = $('#cig_model').empty();
-    const { setup: setupModels } = projectModelSelectorLists({ models: ui.models });
-    for (const model of setupModels) {
-        $modelSelect.append($('<option>').val(model.id).text(model.label));
-    }
-    $modelSelect.val(settings.model);
+    renderSetupModelSelector($, { models: ui.models, selectedModelId: settings.model });
     const discovery = ui.modelDiscovery;
     const statusParts = [];
     if (ui.available === false) statusParts.push(ui.unavailableReason || 'This provider is unavailable until a server adapter is available.');
@@ -1369,16 +1369,12 @@ function renderModelManager() {
     });
     if (!ui) return;
 
-    const { managed: managedModels } = projectModelSelectorLists({
+    renderManagedModelSelector($, {
         models: ui.models,
-        managedSearch: $('#cig_model_search').val(),
+        selectedModelId: settings.model,
+        search: $('#cig_model_search').val(),
+        labelForModel: (model) => `${model.label}${localEntries.some((entry) => entry.id === model.id) ? ' (local)' : ' (built-in)'}`,
     });
-    const $list = $('#cig_managed_model_list').empty();
-    for (const model of managedModels) {
-        const isLocal = localEntries.some((entry) => entry.id === model.id);
-        $list.append($('<option>').val(model.id).text(`${model.label}${isLocal ? ' (local)' : ' (built-in)'}`));
-    }
-    $list.val(settings.model);
     $('#cig_managed_model_id').val(settings.model || '');
     const customConnection = getCustomConnection(settings, providerId);
     const provider = getProviderDefinition(providerId) || (customConnection ? { id: providerId, transports: customConnection.protocol === 'gemini-compatible' ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } } : { openAiImages: { baseUrl: customConnection.baseUrl } }, models: [] } : undefined);
@@ -1471,6 +1467,20 @@ function toggleImageSizeVisibility() {
     $('#cig_model_note').text(ui.modelNote || '').toggle(Boolean(ui.modelNote));
     renderReferenceCapabilityControls(ui.supportsReferenceImages);
     if (imageSizePreference.showControl) updateSizeDropdown(ui.imageSizeOptions, imageSizePreference.selectedValue);
+}
+
+function selectSetupModel(modelId) {
+    const settings = extension_settings[extensionName];
+    const previousProvider = settings.provider || 'makersuite';
+    const previousRoute = getSelectedModelRoute(settings, settings.model);
+    cancelModelDiscovery(previousProvider);
+    clearExperimentalPreflightForRoute(settings, previousRoute);
+    settings.model = modelId;
+    clearSetupRuntimeIssue();
+    toggleImageSizeVisibility();
+    renderModelManager();
+    renderChatAppearanceSources();
+    saveSettingsDebounced();
 }
 
 function renderReferenceCapabilityControls(supportsReferenceImages) {
@@ -3816,8 +3826,11 @@ jQuery(async () => {
     $('#cig_custom_connection_test').on('click', testCustomConnectionFromEditor);
     $('#cig_custom_connection_delete').on('click', deleteSelectedCustomConnection);
 
-    $('#cig_model_refresh').on('click', fetchManagedProviderModels);
-    $('#cig_model_search').on('input', renderModelManager);
+    bindModelSelectorUi($, {
+        onRefresh: fetchManagedProviderModels,
+        onManagedSearch: renderModelManager,
+        onModelChange: selectSetupModel,
+    });
     $('#cig_managed_model_list').on('change', function () {
         const selectedId = $(this).val() || '';
         $('#cig_managed_model_id').val(selectedId);
@@ -3854,20 +3867,6 @@ jQuery(async () => {
     $('#cig_add_model').on('click', () => saveManagedModel('add'));
     $('#cig_save_model').on('click', () => saveManagedModel('save'));
     $('#cig_remove_model').on('click', removeManagedModel);
-
-    $('#cig_model').on('change', function () {
-        const settings = extension_settings[extensionName];
-        const previousProvider = settings.provider || 'makersuite';
-        const previousRoute = getSelectedModelRoute(settings, settings.model);
-        cancelModelDiscovery(previousProvider);
-        clearExperimentalPreflightForRoute(settings, previousRoute);
-        settings.model = $(this).val();
-        clearSetupRuntimeIssue();
-        toggleImageSizeVisibility();
-        renderModelManager();
-        renderChatAppearanceSources();
-        saveSettingsDebounced();
-    });
 
     $('#cig_aspect_ratio').on('change', function () {
         extension_settings[extensionName].aspect_ratio = $(this).val();
