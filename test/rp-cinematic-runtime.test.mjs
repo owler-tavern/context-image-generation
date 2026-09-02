@@ -475,3 +475,52 @@ test('Cinematic reloads an evicted inactive chat from durable state after visiti
     runtime.load({ chatId, epoch });
     assert.equal(runtime.getState().storyState.marker, 'reloaded-after-eviction');
 });
+
+test('Cinematic protects an interpreting source through more than 32 chat visits and settles it without replacing the active chat', async () => {
+    const states = new Map();
+    let resolveInterpretation;
+    let interpretationStarted;
+    const started = new Promise((resolve) => { interpretationStarted = resolve; });
+    let chatId = 'chat-a';
+    let epoch = 1;
+    const runtime = createCinematicRuntime({
+        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
+        getChatId: () => chatId,
+        getEpoch: () => epoch,
+        readState: ({ chatId: requested } = {}) => states.get(requested || chatId) || { storyState: { schema: 1, sceneFacts: {} } },
+        writeState: (value, { chatId: requested } = {}) => states.set(requested || chatId, structuredClone(value)),
+        saveChat: async () => {},
+        interpret: async () => {
+            interpretationStarted();
+            return new Promise((resolve) => { resolveInterpretation = resolve; });
+        },
+    });
+    runtime.load({ chatId, epoch });
+    const observing = runtime.observe({ chatId, epoch, messageId: 1, message: { mes: 'Ava enters the library.' } });
+    await started;
+    for (let index = 0; index <= 32; index += 1) {
+        chatId = `chat-${index}`;
+        epoch += 1;
+        runtime.load({ chatId, epoch });
+    }
+    resolveInterpretation(interpretationDelta({ location: 'library' }));
+    const result = await observing;
+    assert.equal(result.status, 'ordinary-chat');
+    assert.equal(runtime.getState().chatId, 'chat-32');
+    assert.equal(states.get('chat-a').cinematicAutomation.session.reservedGenerationCount, 0);
+    assert.equal(Object.keys(states.get('chat-a').cinematicAutomation.session.pendingSuggestions).length, 0);
+});
+
+test('Cinematic approval persistence rejection settles the reservation before returning failure', async () => {
+    let failSave = false;
+    const { runtime } = setup({
+        saveDurableState: async () => { if (failSave) throw new Error('durable save failed'); },
+    });
+    await runtime.load({ chatId: 'chat-a', epoch: 1 });
+    const card = await runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 1, message: { mes: 'Ava enters the library.' }, acceptedSceneDelta: interpretationDelta({ location: 'library' }) });
+    failSave = true;
+    const result = await runtime.approve(card.suggestion.suggestionId);
+    assert.equal(result.status, 'failed');
+    assert.equal(runtime.getState().session.reservedGenerationCount, 0);
+    assert.equal(Object.keys(runtime.getState().session.reservations).length, 0);
+});

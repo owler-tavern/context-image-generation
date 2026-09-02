@@ -19,8 +19,24 @@ const common = {
     sourceArtifact: source,
     generationPlan,
     reserveInvocation: () => true,
+    releaseInvocation: () => {},
     verifyGenerationPlan: ({ planId, revision }) => ({ status: 'verified', planId, revision, authorityToken: 'a', routeResolved: true, capabilities: { imageGeneration: true } }),
 };
+
+test('iteration blocks submission when reservation release ownership is absent', async () => {
+    const controller = createIterationSurfaceController({
+        ...common,
+        allowUnquotedSingle: true,
+        releaseInvocation: undefined,
+        dispatchCoordinator: async () => ({ status: 'completed' }),
+        persistArtifact: async () => ({ status: 'saved' }),
+        readbackArtifact: async () => ({ status: 'confirmed' }),
+        readbackOriginalArtifact: async () => ({ status: 'confirmed' }),
+    });
+    const result = await controller.submit({ action: 'reuse-recipe', invocationId: 'missing-release' });
+    assert.equal(result.status, 'error');
+    assert.match(result.error, /releaseInvocation/);
+});
 
 test('production single-output submit dispatches without a paid quote', async () => {
     const calls = [];
@@ -185,6 +201,7 @@ test('save/reload persistence sanitizes both chat media and Gallery iteration re
         sourceArtifact: reloaded,
         invocationId: 'reload-reuse',
         reserveInvocation: () => true,
+        releaseInvocation: () => {},
         allowUnquotedSingle: true,
         generationPlan: { planId: 'plan:p3', revision: 'route:r1', capabilities: { imageGeneration: true } },
         verifyGenerationPlan: ({ planId, revision }) => ({ status: 'verified', planId, revision, authorityToken: 'a', routeResolved: true, capabilities: { imageGeneration: true } }),

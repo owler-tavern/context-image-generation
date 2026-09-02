@@ -216,3 +216,45 @@ test('Director reloads an evicted inactive chat from durable state after visitin
     runtime.load({ chatId, epoch });
     assert.equal(runtime.getState().options.visualDirection, 'reloaded-after-eviction');
 });
+
+test('Director clears in-flight ownership when route validation rejects', async () => {
+    let routeChecks = 0;
+    const { runtime } = setup({
+        validateRoute: async () => { routeChecks += 1; throw new Error('route failed'); },
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    await runtime.open({ chatId: 'chat-a', epoch: 1, messageId: 1, message: { mes: 'A scene.' } });
+    assert.equal((await runtime.generate()).status, 'failed');
+    assert.equal((await runtime.generate()).status, 'failed');
+    assert.equal(routeChecks, 2);
+});
+
+test('Director protects an in-flight source through more than 32 chat visits and settles it durably', async () => {
+    const durable = new Map();
+    let resolveDispatch;
+    let chatId = 'chat-a';
+    let epoch = 1;
+    const runtime = createDirectorRuntime({
+        getChatId: () => chatId,
+        getEpoch: () => epoch,
+        readState: ({ chatId: requested } = {}) => durable.get(requested || chatId) || {},
+        readDurableState: ({ chatId: requested } = {}) => durable.get(requested || chatId) || null,
+        writeDurableState: (value, { chatId: requested } = {}) => durable.set(requested || chatId, structuredClone(value)),
+        saveDurableState: async () => {},
+        buildPreview: async () => ({ moment: 'A scene.' }),
+        dispatch: () => new Promise((resolve) => { resolveDispatch = resolve; }),
+    });
+    runtime.load({ chatId, epoch });
+    await runtime.open({ chatId, epoch, messageId: 1, message: { mes: 'A scene.' } });
+    const pending = runtime.generate();
+    await new Promise((resolve) => setTimeout(resolve, 1));
+    for (let index = 0; index <= 32; index += 1) {
+        chatId = `chat-${index}`;
+        epoch += 1;
+        runtime.load({ chatId, epoch });
+    }
+    resolveDispatch({ status: 'completed' });
+    assert.equal((await pending).status, 'completed');
+    assert.equal(runtime.getState().chatId, 'chat-32');
+    assert.equal(durable.get('chat-a').director.lastStatus, 'generated');
+});
