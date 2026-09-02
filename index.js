@@ -29,7 +29,7 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
 import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
-import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
+import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectModelSelectorLists, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords, toLegacyModelEntries } from './lib/providers/model-manager.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
@@ -872,14 +872,8 @@ function updateModelDropdown() {
         ? ui.selectedModelId || settings.model || ''
         : getModelFallback(providerId, settings.model, localEntries);
     const $modelSelect = $('#cig_model').empty();
-    const query = String($('#cig_model_search').val() || '').trim().toLowerCase();
-    const filteredModels = query
-        ? ui.models.filter((model) => `${model.id} ${model.label}`.toLowerCase().includes(query))
-        : ui.models;
-    const visibleModels = filteredModels.some((model) => model.id === settings.model) || !settings.model
-        ? filteredModels
-        : [...filteredModels, ...ui.models.filter((model) => model.id === settings.model)];
-    for (const model of visibleModels) {
+    const { setup: setupModels } = projectModelSelectorLists({ models: ui.models });
+    for (const model of setupModels) {
         $modelSelect.append($('<option>').val(model.id).text(model.label));
     }
     $modelSelect.val(settings.model);
@@ -1375,8 +1369,12 @@ function renderModelManager() {
     });
     if (!ui) return;
 
+    const { managed: managedModels } = projectModelSelectorLists({
+        models: ui.models,
+        managedSearch: $('#cig_model_search').val(),
+    });
     const $list = $('#cig_managed_model_list').empty();
-    for (const model of ui.models) {
+    for (const model of managedModels) {
         const isLocal = localEntries.some((entry) => entry.id === model.id);
         $list.append($('<option>').val(model.id).text(`${model.label}${isLocal ? ' (local)' : ' (built-in)'}`));
     }
@@ -3819,7 +3817,7 @@ jQuery(async () => {
     $('#cig_custom_connection_delete').on('click', deleteSelectedCustomConnection);
 
     $('#cig_model_refresh').on('click', fetchManagedProviderModels);
-    $('#cig_model_search').on('input', updateModelDropdown);
+    $('#cig_model_search').on('input', renderModelManager);
     $('#cig_managed_model_list').on('change', function () {
         const selectedId = $(this).val() || '';
         $('#cig_managed_model_id').val(selectedId);
