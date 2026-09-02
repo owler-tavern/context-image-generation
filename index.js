@@ -1340,7 +1340,18 @@ async function observeCinematicMessage(messageId) {
     if (result.status !== 'stale') refreshCinematicSurface();
 }
 
+function hasPendingRecoveryWork() {
+    const settings = extension_settings[extensionName] || {};
+    const hasEntries = (value) => Boolean(value && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length);
+    return hasEntries(settings.rp_library?.operations)
+        || hasEntries(settings.visible_canon_pending)
+        || hasEntries(chat_metadata?.[CHAT_CANON_KEY]?.visibleCanonPending)
+        || hasEntries(settings.outfit_pending?.pending)
+        || hasEntries(settings.scene_state_pending?.pending);
+}
+
 function schedulePendingRecovery() {
+    if (!hasPendingRecoveryWork()) return false;
     if (pendingRecoveryScheduled) return false;
     pendingRecoveryScheduled = true;
     const run = async () => {

@@ -68,3 +68,12 @@ test('ordinary chat typing has no document-level CIG keyboard handler', () => {
     assert.doesNotMatch(indexSource, /document\.addEventListener\('keydown',\s*onCigImageArrowKeydown/u);
     assert.match(indexSource, /\.on\('keydown\.cigImageNavigation',\s*onCigImageArrowKeydown\)/u);
 });
+
+test('normal chats schedule no deferred recovery timer when no work is pending', () => {
+    const start = indexSource.indexOf('function schedulePendingRecovery()');
+    const end = indexSource.indexOf('function imagesCastSettingsAreVisible()', start);
+    const scheduler = start >= 0 && end > start ? indexSource.slice(start, end) : '';
+
+    assert.ok(scheduler, 'pending recovery scheduler should be available');
+    assert.match(scheduler, /if \(!hasPendingRecoveryWork\(\)\) return false;/u);
+});
