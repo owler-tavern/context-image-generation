@@ -2,12 +2,7 @@
 
 This is the standing technical reference for people and agents maintaining this extension. It describes the code currently in this repository; it does not replace SillyTavern's own extension API documentation.
 
-Research and planned features are deliberately separate from current behavior:
-
-- [PRODUCT.md](PRODUCT.md) is the durable product authority: primary user, one-click North Star, hosted-provider scope, and simplicity constraints.
-- [docs/EXTERNAL_EXTENSION_RESEARCH.md](docs/EXTERNAL_EXTENSION_RESEARCH.md) records reviewed projects, international findings, evidence boundaries, and lessons.
-- [docs/ROADMAP.md](docs/ROADMAP.md) maps those lessons to versioned features, dependencies, acceptance evidence, and explicit deferrals.
-- [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md) remains authoritative for current provider release status.
+This guide documents current behavior and maintenance boundaries only. Private research and planning notes are intentionally excluded from the public repository. [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md) remains authoritative for current provider release status and verification evidence.
 
 ## Purpose and ownership
 
@@ -20,13 +15,13 @@ This repository is a fork of [elouannd/context-image-generation](https://github.
 | `origin` (`owler-tavern/context-image-generation`) | This fork; changes should target here. |
 | `upstream` (`elouannd/context-image-generation`) | Original project; use for selectively reviewing or bringing in upstream work. |
 
-The manifest version is **1.7.1**. Treat the version comment at the top of `index.js` as stale historical text, not as the release version.
+The manifest currently remains **1.8.0** because no exact semantic v2.5 release version was approved. Treat the version comment at the top of `index.js` as stale historical text, not as the release version. The v2.5 scope is documented in `docs/V2_5_RELEASE_NOTES.md`; update the manifest only with an explicitly approved semantic version.
 
 ## Repository map
 
 | File | Responsibility |
 | --- | --- |
-| `index.js` | SillyTavern integration: settings, prompt construction, adapter dispatch, gallery, message controls, auto-generation, and slash commands. |
+| `index.js` | SillyTavern integration: settings, prompt construction, shared generation dispatch, gallery, message controls, and slash commands. |
 | `lib/providers/registry.js` | Curated provider/model metadata and adapter transport selection. |
 | `lib/providers/openai-images.js` | Pure OpenAI Images request/response helpers. |
 | `lib/providers/gemini-proxy.js` | Pure Gemini-compatible SillyTavern proxy request builder. |
@@ -44,7 +39,7 @@ SillyTavern loads `index.js` as a browser-side extension. At initialization it:
 1. Fetches and appends `settings.html` to `#extensions_settings`.
 2. Merges `defaultSettings` into `extension_settings['context-image-generation']`.
 3. Migrates retired split `use_char_avatar` and `use_user_avatar` settings back to one `use_avatars` setting; either prior enabled preference enables the combined setting.
-4. Wires settings events, message controls, slash commands, and chat events.
+4. Wires configuration events, the message wand, slash commands, and provider-free optional story tools.
 
 Settings are saved through SillyTavern's `saveSettingsDebounced()`. Provider credentials are stored in `provider_keys` within the user's SillyTavern extension settings; they are not persisted by this repository or sent to a separate extension server. The compatibility migration creates `provider_keys` when absent and copies a non-empty legacy `linkapi_key` to `provider_keys.linkapi`. Editing the LinkAPI credential mirrors it to both locations during this release, so rollback to the pre-adapter version remains possible.
 
@@ -71,7 +66,7 @@ The LinkAPI Gemini route is intentionally shaped as a Gemini/MakerSuite request 
 The direct OpenAI Images route starts with the minimal `{ model, prompt }` payload. It adds `size`, `n`, or `response_format` only when the selected model's normalized capability evidence positively supports that field. It accepts either `b64_json` or a returned URL; a returned URL is fetched and converted to base64 before the extension continues. TokenReply deliberately has no size metadata until live evidence confirms its accepted field.
 The normal adapter route adds `size` only when the selected model metadata declares `supportsSize: true`; it is capability-gated, not endpoint-wide. Unknown models send only the minimal text prompt, while positive model evidence enables individual optional fields. The retained legacy LinkAPI Images recovery route intentionally maps and sends `size` unconditionally to preserve the pre-adapter request shape. Keep that distinction documented and do not use legacy behavior as evidence that a new provider accepts `size`.
 
-Unknown manual or fetched image models require an explicit **Allow experimental text-only generation** confirmation in Manage models. The warning states that the endpoint/model is unverified and optional features are disabled; the confirmation is stored only under the exact provider/model/transport tuple. Without confirmation, ordinary wand and automation runs fail closed and direct the user to Advanced → Manage models without opening a modal during roleplay.
+Unknown manual or fetched image models require an explicit **Allow experimental text-only generation** confirmation in Manage models. The warning states that the endpoint/model is unverified and optional features are disabled; the confirmation is stored only under the exact provider/model/transport tuple. Without confirmation, ordinary wand and slash runs fail closed and direct the user to Advanced → Manage models without opening a modal during roleplay.
 
 
 ### Important endpoint distinction
@@ -80,7 +75,7 @@ The implemented Gemini-compatible proxy is `https://api.linkapi.ai`, while the i
 
 ## Models and UI behavior
 
-`PROVIDER_MODELS` is the built-in allowlist displayed before a model fetch. LinkAPI adds a default `gpt-image-2-c` option. The **Fetch models** control calls `https://linkapi.ai/v1/models`, keeps only IDs beginning with `gpt-image` or `dall-e`, and adds them to the LinkAPI selector for the current page session.
+`PROVIDER_MODELS` is the built-in allowlist displayed before discovery. LinkAPI adds a default `gpt-image-2-c` option. The **Refresh Models** control calls the selected provider's model catalog, keeps existing local IDs when discovery is empty or fails, and adds accepted discovered IDs to the selector for the current page session.
 
 `resolveProviderRoute(providerId, modelId)` is the routing boundary for adapter dispatch. It resolves the curated model metadata (including the LinkAPI `gpt-image`/`dall-e` fallback) and transport; do not make new provider routes depend on the UI-only `isOpenAiImageModel()` predicate. Keep each model capability, including `supportsReferenceImages`, aligned with the controls in `settings.html`.
 
@@ -96,11 +91,15 @@ Gemini image-size, thinking-level, and Google Search controls retain their exist
 
 ## Image and gallery lifecycle
 
-Generated image data returns from either provider path as `{ imageData, mimeType }`. The extension then uses SillyTavern utilities to attach media to a chat message and to save gallery images as files.
+Generated image data returns from either provider path as `{ imageData, mimeType }`. The shared Scene Generation kernel is entered only by the message wand or slash command. The wand delivery adapter uses SillyTavern utilities to attach media to its captured chat message; the slash delivery adapter saves a preview/Gallery item without attaching to a chat message.
 
 New gallery entries keep file URLs, not full-resolution base64, in extension settings. `galleryItemSrc()` supports both those current `{ url }` items and legacy `{ imageData }` items. `galleryItemToDataUrl()` fetches file-backed items only when an inline data URL is needed (for example, as a previous-image reference). Preserve both paths until a deliberate, user-visible migration is completed.
 
 The gallery is limited to `MAX_GALLERY_SIZE` (50). Prompt text is rendered with text-safe DOM APIs; retain that property when changing gallery markup.
+
+Appearance memory currently stores metadata that resolves its image through a Gallery artifact. The testing branch therefore clears dependent appearance records when the user confirms **Clear Gallery**, avoiding broken `Unavailable` looks. This is an interim safety behavior, not the target storage model.
+
+Before this branch is eligible for `main`, implement the accepted direction in [ADR-001](docs/decisions/ADR-001-separate-gallery-and-appearance-assets.md): Gallery remains disposable history, while **Remember appearance** promotes the chosen image into an appearance-owned asset store. Character/persona looks may be durable across chats; named NPC metadata remains chat-scoped. Clearing Gallery must not remove or disable any remembered look.
 
 ## Security and data-handling rules
 
@@ -141,7 +140,7 @@ No live-provider request was performed while writing this document. Before claim
 
 ## Historical implementation milestones
 
-The LinkAPI fork began with Gemini-compatible proxy support (`0d90a1f`). Direct OpenAI Images API support and safe helpers followed (`e06d3a8`, `4eeb2ac`, `2b95ede`), then model discovery, reload preservation, and logging (`6349935`, `2f92489`, `928fb65`). Later fork work added granular avatar toggles, swipe regeneration, and file-backed gallery storage. Refer to Git history for line-level provenance; this guide describes the current combined behavior.
+The LinkAPI fork began with Gemini-compatible proxy support (`0d90a1f`). Direct OpenAI Images API support and safe helpers followed (`e06d3a8`, `4eeb2ac`, `2b95ede`), then model discovery, reload preservation, and logging (`6349935`, `2f92489`, `928fb65`). Later fork work added granular avatar toggles, historical swipe regeneration, and file-backed gallery storage. Swipe regeneration is retired in v2.5; refer to Git history for line-level provenance while this guide describes current behavior.
 
 ## Provider hardening follow-up
 
@@ -151,4 +150,4 @@ TokenReply model discovery keeps only `grok-imagine-image*` IDs. A model-list re
 
 Generation requests are coordinated by their target. Starting the same message or prompt again while it is already in progress is rejected before a second provider request is sent.
 
-RP message generation captures selected plain text synchronously from the existing message wand. The focus limit is 600 normalized characters; cross-message/control selections fall back to whole-message generation. Message attachment uses the current SillyTavern chat ID plus a message fingerprint to reject stale results, retaining an unsafe result in the extension gallery instead of writing another chat. Provider failures use the normalized category/user-message contract and redacted technical diagnostics across wand, settings, slash, auto, swipe, and model discovery paths.
+RP message generation captures selected plain text synchronously from the existing message wand. The focus limit is 600 normalized characters; cross-message/control selections fall back to whole-message generation. Message attachment uses the current SillyTavern chat ID plus a message fingerprint to reject stale results, retaining an unsafe result in the extension gallery instead of writing another chat. Provider failures use the normalized category/user-message contract and redacted technical diagnostics across the wand, slash, Settings, and model-discovery paths. Image navigation, Story Memory, Improve tools, and cinematic suggestions remain provider-free and may only stage context for the next explicit wand or slash request.

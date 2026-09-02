@@ -1,10 +1,8 @@
 # Context Image Generation
 
-A SillyTavern extension that adds scene-image generation with character context and avatar references.
+A SillyTavern extension that turns roleplay moments into scene images using chat context, character details, and optional avatar references.
 
-The product North Star is simple: during roleplay, click the image-generation button and receive a contextually appropriate image. Advanced provider and model complexity stays out of the primary workflow; see [PRODUCT.md](PRODUCT.md).
-
-For provider routing, maintenance guidance, security boundaries, and a verification checklist, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md). The evidence-backed [ecosystem research](docs/EXTERNAL_EXTENSION_RESEARCH.md) and [feature roadmap](docs/ROADMAP.md) record what was learned, what is planned, and what remains unverified.
+For provider routing, maintenance guidance, security boundaries, and verification, see [DEVELOPER_GUIDE.md](DEVELOPER_GUIDE.md).
 
 Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.md](docs/PROVIDER_CATALOG.md). TokenReply and the additional hosted profiles are currently experimental until live evidence is recorded.
 
@@ -12,10 +10,16 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 > **Development note** — This fork is maintained by **BlueOwler** with AI-assisted development using **OpenAI Codex**, with manual direction and review.
 
-## What's New in this Fork (v1.7.1)
+## v2.5 scope
+
+- **Two generation entry points:** use the message wand for a chat attachment or `/proimagine` (plus `/proimg` and `/geminiimg`) for preview/Gallery delivery. Both use the same generation path.
+- **Configuration-only Settings:** choose the provider, model, scene preferences, and optional avatar, previous-image, or saved-appearance references. Settings actions, including **Refresh Models**, never generate an image.
+- **Provider-free story tools:** Cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances can stage context for the next wand or slash command, but cannot start generation themselves.
+- **Inert legacy data:** attire remains prompt/scene content. Retired outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are not exposed; existing legacy outfit data is retained for rollback.
+
+## Historical fork changes (v1.7.1)
 
 - **Single avatar-reference toggle restored** - The character and persona avatars are once again enabled together with one **Use avatar references** setting. Existing split preferences migrate automatically: either prior setting enabled becomes the combined setting enabled.
-- **Swipe regeneration retained** - The opt-in swipe-right regeneration control remains available.
 
 ## Provider adapters and recovery
 
@@ -37,10 +41,10 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
   files. Inline chat images are unaffected (they already used files). Prompt text
   in the gallery is now safely escaped.
 
-## What's New in this Fork (v1.6.0)
+## Historical fork changes (v1.6.0)
 
-- **Regenerate on image swipe** (opt-in) - Swipe right past the last generated
-  image on a message to create a fresh variation, without re-opening the panel.
+- **Regenerate on image swipe** (historical) - This behavior was introduced in
+  v1.6.0 and is retired in v2.5; image navigation now stays navigation-only.
 
 ## What's New in this Fork (v1.5.0)
 
@@ -54,9 +58,10 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 
 - **LinkAPI Provider** - Added LinkAPI as a provider option. Enter a LinkAPI key (used only for image generation) and requests are routed through `https://api.linkapi.ai` without touching your active Chat Completion proxy settings.
 
-## What's New in v1.3.3
+## Historical fork changes (v1.3.3)
 
-- **Auto Generate** - Automatically generate images when messages are received (Off, Bot messages, or All messages)
+- **Auto Generate** (historical) - This behavior was introduced in v1.3.3 and
+  is retired in v2.5; messages never trigger an unrequested provider call.
 
 ## What's New in v1.3.2
 
@@ -90,6 +95,7 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 - **Character Context** - Automatically includes character and user descriptions in prompts
 - **Avatar References** - Uses character and user avatars as visual references for consistent art
 - **Slash Command** - `/proimagine <prompt>` for quick generation
+- **Optional appearance memory** - Remember a generated look for later wand or slash context without making it required.
 
 ## Requirements
 
@@ -106,7 +112,7 @@ Direct LinkAPI Images and TokenReply requests run in the browser. Use browser De
 1. In SillyTavern, open **Extensions** and install this repository.
 2. Open Context Image Generation's settings.
 3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose a direct hosted profile and enter that provider's key in the extension. Future Server Adapter entries are unavailable.
-4. Select a model appropriate to that route, then generate from a message wand or `/proimagine`.
+4. Select a model appropriate to that route, then generate from the message wand or `/proimagine`.
 
 ## Usage
 
@@ -122,7 +128,8 @@ You can select a passage inside the rendered message before clicking its wand. A
 - Select Google AI Studio or OpenRouter to use the active SillyTavern Chat Completion configuration.
 - Select LinkAPI to enter a LinkAPI key, choose Gemini or direct Images models, and manage or fetch additional `gpt-image*`/`dall-e*` models.
 - Select TokenReply (Experimental) to enter its separate key and choose `grok-imagine-image` or `grok-imagine-image-quality`; it is text-only and hides image-size and reference-image controls.
-- Choose aspect ratio and compatible controls for the selected model, toggle descriptions, customize the system instruction, and manage the gallery.
+- Choose aspect ratio and compatible controls for the selected model, toggle descriptions, customize the system instruction, and manage the gallery. Settings is configuration-only; the wand and slash command are the generation actions.
+- Use **Refresh Models** beside Setup → Model to check the selected provider. Existing local model IDs are kept when discovery is empty or fails.
 - Use **Manage models** to add or edit the actual model ID sent to the selected provider. **Fetch models** merges discovered IDs without deleting your local entries. TokenReply discovery is Experimental and may fail safely until its /v1/models behavior is live-verified.
 - For a manual or fetched model whose image-generation capability is unknown, open **Manage models** and explicitly enable **Allow experimental text-only generation** after reviewing the warning. Optional features stay disabled, and generation remains blocked until this confirmation is present.
 
@@ -145,14 +152,15 @@ Aliases: `/proimg`, `/geminiimg`
 | LinkAPI recovery | Advanced, manual-only legacy-routing switch; never an automatic fallback. |
 | Thinking Level | Flash 2 only: Auto, Minimal, Low, Medium, High. |
 | Google Search | Flash 2 only: Enable web search for references. |
-| Auto Generate | Off, Bot messages, or All messages. |
+| Generation actions | Message wand attaches to the captured message; `/proimagine` and its aliases deliver to preview/Gallery. |
 | Message Depth | Number of messages to include as context (1-10). |
-| Regenerate on Image Swipe | Opt-in: swipe right past the last generated image to make a new variation. |
+| Image navigation | Previous/next navigation only; swiping never starts generation. |
 | Include Descriptions | Add character descriptions to the prompt. |
 | System Instruction | Customize instructions for the image model. |
 
 ## Troubleshooting
-- **Regenerate on Image Swipe** is opt-in. When enabled, swipe right past the last Context Image Generation image on a message to create a new variation; other image swipes keep their normal behavior.
+- If a model refresh is empty or fails, existing local model IDs remain available. Check the selected provider and its credentials before trying **Refresh Models** again.
+- No message event, image swipe, Story Memory action, cinematic suggestion, or Improve action starts a provider request. Use the message wand or `/proimagine` when you explicitly want to generate.
 
 
 ## To-Do

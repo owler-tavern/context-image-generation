@@ -66,6 +66,23 @@ test('retired automatic and overswipe values have no visible settings controls',
     assert.match(index, /auto_generate:\s*'off'/u);
 });
 
+test('ADR-002 keeps Settings configuration-only and makes model refresh discoverable', () => {
+    assert.match(settings, /id="cig_provider"/u);
+    assert.match(settings, /id="cig_model"/u);
+    assert.match(settings, /id="cig_model_refresh"[^>]*value="Refresh Models"/u);
+    assert.match(settings, /Refresh Models checks the selected provider and keeps existing local models\./u);
+    for (const id of ['cig_message_depth', 'cig_system_instruction', 'cig_use_avatars', 'cig_use_previous_image', 'cig_extra_appearance_memory']) {
+        assert.match(settings, new RegExp(`id="${id}"`), `${id} remains configurable`);
+    }
+    assert.doesNotMatch(settings, /id="cig_generate_btn"/u);
+    assert.doesNotMatch(settings, /outfit\s+(?:create|creation|select|selection|lock|controls)|attire\s+controls/iu);
+    assert.doesNotMatch(settings, /automatic\s+generation|generate\s+on\s+swipe|automatic story tools/iu);
+    assert.doesNotMatch(settings, /(?:Cinematic|Iteration|Story Memory)[^<]*(?:generation entry|generate from|generation action)/iu);
+    assert.match(settings, /Cinematic suggestions stage context for the next wand or slash command\./u);
+    assert.match(settings, /Suggestions never call a provider\./u);
+    assert.match(settings, /before staging it as context for the next wand or slash command\./u);
+});
+
 test('Images and Cast leads with current chat characters and progressively discloses extras', () => {
     const imagesCast = panelMarkup('cig_settings_panel_images_cast');
     assert.ok(imagesCast.indexOf('id="cig_chat_appearance_sources"') < imagesCast.indexOf('id="cig_extra_story_tools"'));

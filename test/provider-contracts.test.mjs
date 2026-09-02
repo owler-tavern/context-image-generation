@@ -41,3 +41,17 @@ test('user-configured evidence cannot self-attest as verified', () => {
     assert.equal(model.routeEvidence.state, 'configured');
     assert.equal(model.routeEvidence.source, 'user-configured-protocol');
 });
+
+test('provider model contracts remain independent of the ADR-002 entry-point boundary', () => {
+    const model = normalizeModelDefinition({
+        id: 'scene-model', providerId: 'fixture', source: 'manual', transportId: 'openAiImages',
+        routeEvidence: { state: 'verified', source: 'official-docs', observedAt: '2026-08-30T00:00:00.000Z', protocol: 'openai-images', requestShapeRevision: 'openai-images-v1' },
+    }, provider);
+
+    assert.equal(model.transportId, 'openAiImages');
+    assert.deepEqual(model.routeEvidence, {
+        state: 'verified', source: 'official-docs', observedAt: '2026-08-30T00:00:00.000Z',
+        protocol: 'openai-images', requestShapeRevision: 'openai-images-v1',
+    });
+    assert.equal(Object.hasOwn(model, 'generationSource'), false);
+});

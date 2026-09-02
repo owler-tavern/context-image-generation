@@ -131,6 +131,8 @@ test('shared settings focus visibility covers standard form controls', () => {
 test('Refresh Models reports route-aware outcomes and keeps existing models on empty or failed refreshes', () => {
     assert.match(index, /getDiscoveryRefreshMessage\(result\)/);
     assert.match(index, /Your current model list was kept\./);
+    assert.match(settings, /id="cig_model_refresh"[^>]*value="Refresh Models"/u);
+    assert.match(settings, /Refresh Models checks the selected provider and keeps existing local models\./u);
 });
 
 const customConnection = {

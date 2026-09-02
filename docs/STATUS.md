@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 6 correction round 2 — replay and coordinated-save findings fixed; awaiting independent re-review.
+Task 7 — settings, styling, and release-documentation reconciliation complete; ready for Task 8 deterministic regression.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -26,6 +26,10 @@ Task 6 correction round 2 — replay and coordinated-save findings fixed; awaiti
 - Added real extension-settings load/save and historical Story Memory artifact-reader coverage for compatibility preservation.
 - Carried the current opaque `outfitState` through visible-canon replay before its first save and during final cleanup, even when the historical candidate omits the field or contains a stale value.
 - Restored routine chat-canon persistence to SillyTavern's existing `saveChatConditional` coordination path; the preservation seam no longer selects direct one-to-one or group writers.
+- Reconciled Settings copy with ADR-002: provider/model refresh is discoverable, Settings remains configuration-only, and cinematic/Story Memory surfaces only stage context for wand/slash.
+- Removed retired outfit-only CSS selectors while retaining shared layout and cinematic suggestion styling.
+- Reconciled PRODUCT, README, DEVELOPER_GUIDE, and ROADMAP with the two-entry v2.5 boundary; added `docs/V2_5_RELEASE_NOTES.md` with evidence and deferrals. Approved pre-existing README/DEVELOPER_GUIDE opening and ownership hunks remain unchanged.
+- Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -51,17 +55,23 @@ Task 6 correction round 2 — replay and coordinated-save findings fixed; awaiti
 - Task 6 correction round 2 focused suite — 64 passed, 0 failed.
 - Task 6 correction round 2 affected replay/persistence/scene/cinematic/canon/settings/Story Memory suite — 156 passed, 0 failed.
 - Task 6 correction round 2 full repository suite — 874 passed, 0 failed: `node --test test/*.mjs`.
+- Task 7 RED — new ADR-002 settings assertions failed on missing Refresh Models copy and stale cinematic/Story Memory wording before implementation; existing cinematic/Story Memory contracts also caught wording regressions during the green pass.
+- Task 7 focused settings/provider/documentation suite — 76 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs test/p4-story-memory-runtime.test.mjs test/rp-cinematic-integration.contract.test.mjs`.
+- Task 7 `git diff --check` — passed before final allowlist staging.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
 - Independent re-review of the Task 6 correction is outstanding.
+- Full Task 8 deterministic regression is outstanding.
+- Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
 
 ## Decisions
 - Settings is configuration-only.
 - Legacy outfit data is preserved, not purged.
 - Saved appearance contributes only when Appearance Memory is explicitly enabled; avatar, previous image, and saved appearance can all be absent without blocking a text-only plan.
 - Legacy outfit records are preserved as opaque compatibility data; no production path interprets, writes, replays, or injects them into generation.
+- v2.5 documentation names only wand and slash as generation entry points; cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances are staging/configuration surfaces.
 
 ## Next action
-Obtain independent re-review of Task 6 correction round 2, then proceed with the focused settings/documentation alignment task.
+Run Task 8 syntax/full deterministic regression and independent critique; keep live provider generation out of scope unless separately authorized.

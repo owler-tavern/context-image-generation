@@ -123,12 +123,6 @@
 .cig_chat_appearance_row select, .cig_chat_appearance_row button { min-height: 44px; width: 100%; }
 .cig_chat_appearance_row small { display: block; opacity: .75; }
 @media (max-width: 480px) { .cig_chat_appearance_row { grid-template-columns: 1fr; } }
-#cig_chat_outfit_controls { margin-top: .75rem; }
-.cig_chat_outfit_controls h3 { margin: .5rem 0 .25rem; }
-.cig_chat_outfit_row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(8rem, 12rem); gap: .5rem; align-items: center; padding-top: .5rem; }
-.cig_chat_outfit_row :is(select, input, button) { min-height: 44px; width: 100%; min-width: 0; }
-@media (max-width: 480px) { .cig_chat_outfit_row { grid-template-columns: 1fr; } }
-
 #cig_settings .inline-drawer-content {
     display: flex;
     flex-direction: column;
