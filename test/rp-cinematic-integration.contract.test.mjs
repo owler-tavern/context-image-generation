@@ -11,7 +11,7 @@ const [index, settings, style, cinematicUi] = await Promise.all([
 
 test('cinematic automation is mounted into real chat lifecycle hooks and uses story interpretation', () => {
     assert.match(index, /createCinematicRuntime/);
-    assert.match(index, /createCinematicSurface\(\)/);
+    assert.match(index, /cinematicLifecycle\.enable\(\)/);
     assert.match(index, /eventSource\.on\(event_types\.CHARACTER_MESSAGE_RENDERED/);
     assert.match(index, /eventSource\.on\(event_types\.USER_MESSAGE_RENDERED/);
     assert.match(index, /observeCinematicMessage\(messageId\)/);

@@ -2,7 +2,12 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import test from 'node:test';
 
-const indexSource = await readFile(new URL('../index.js', import.meta.url), 'utf8');
+const [indexSource, attachmentSource, sceneGenerationSource, castSettingsSource] = await Promise.all([
+    readFile(new URL('../index.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/rp-attachment.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/rp/scene-generation.js', import.meta.url), 'utf8'),
+    readFile(new URL('../lib/rp/cast-settings-ui.js', import.meta.url), 'utf8'),
+]);
 
 test('stable settings load does not delete and recreate retired director sessions', () => {
     const start = indexSource.indexOf('async function loadSettings()');
@@ -45,7 +50,7 @@ test('startup defers recovery and hidden Characters and Library rendering until 
 
 test('chat lifecycle marks hidden Characters and Library settings stale instead of rebuilding them', () => {
     const eventsStart = indexSource.indexOf('eventSource.on(event_types.CHAT_CHANGED');
-    const eventsEnd = indexSource.indexOf('setTimeout(() => {\n        injectAllMessageButtons();', eventsStart);
+    const eventsEnd = indexSource.indexOf('eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED', eventsStart);
     const chatEvents = eventsStart >= 0 && eventsEnd > eventsStart ? indexSource.slice(eventsStart, eventsEnd) : '';
 
     assert.ok(chatEvents, 'chat lifecycle event source should be available');
@@ -55,7 +60,7 @@ test('chat lifecycle marks hidden Characters and Library settings stale instead 
 
 test('chat switching advances stale-work protection without cloning metadata or updating hidden settings', () => {
     const eventsStart = indexSource.indexOf('eventSource.on(event_types.CHAT_CHANGED');
-    const eventsEnd = indexSource.indexOf('setTimeout(() => {\n        injectAllMessageButtons();', eventsStart);
+    const eventsEnd = indexSource.indexOf('eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED', eventsStart);
     const chatEvents = eventsStart >= 0 && eventsEnd > eventsStart ? indexSource.slice(eventsStart, eventsEnd) : '';
 
     assert.ok(chatEvents, 'chat lifecycle event source should be available');
@@ -98,8 +103,15 @@ test('optional story features are dynamically loaded before their exports are us
         assert.match(indexSource, new RegExp(`async function ensure${feature[0].toUpperCase()}${feature.slice(1)}Feature\\(\\)`, 'u'));
     }
 
-    assert.match(indexSource, /async function createStoryMemorySurface\(\)[\s\S]*?await ensureStoryMemoryFeature\(\)[\s\S]*?createStoryMemoryRuntime\(/u);
-    assert.match(indexSource, /async function createCinematicSurface\(\)[\s\S]*?await ensureCinematicFeature\(\)[\s\S]*?createCinematicRuntime\(/u);
+    assert.match(indexSource, /storyMemoryLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureStoryMemoryFeature[\s\S]*?setup: \(feature\) => createStoryMemorySurface\(feature\)/u);
+    assert.match(indexSource, /cinematicLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureCinematicFeature[\s\S]*?setup: \(feature\) => createCinematicSurface\(feature\)/u);
     assert.match(indexSource, /async function createDirectorSurface\(\)[\s\S]*?await ensureDirectorFeature\(\)[\s\S]*?createDirectorRuntime\(/u);
-    assert.match(indexSource, /async function renderIterationActionSurface\([\s\S]*?await ensureIterationFeature\(\)[\s\S]*?mountIterationSurface\(/u);
+    assert.match(indexSource, /iterationLifecycle = createOptionalFeatureLifecycle\([\s\S]*?load: ensureIterationFeature/u);
+    assert.match(indexSource, /async function renderIterationActionSurface\([\s\S]*?await iterationLifecycle\.enable\(\)[\s\S]*?mountIterationSurface\(/u);
+});
+
+test('core generation and settings modules do not eagerly import optional iteration or director code', () => {
+    assert.doesNotMatch(attachmentSource, /^import .*iteration-domain\.js/mu);
+    assert.doesNotMatch(sceneGenerationSource, /^import .*director-cast\.js/mu);
+    assert.doesNotMatch(castSettingsSource, /^import .*director-cast\.js/mu);
 });

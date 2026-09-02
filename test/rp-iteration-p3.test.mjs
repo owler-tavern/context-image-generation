@@ -109,6 +109,7 @@ test('save/reload persistence sanitizes both chat media and Gallery iteration re
             galleryJson = JSON.stringify(metadata?.iterationArtifact || null);
         },
         notify: () => {},
+        sanitizeIterationArtifact: sanitizeIterationArtifactForStorage,
     });
     assert.equal(attached, true);
     assert.equal(JSON.parse(chatJson).cig_iteration_artifact.recipeAvailable, true);

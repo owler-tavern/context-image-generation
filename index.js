@@ -85,6 +85,7 @@ import { renderCastCorrectionControls, CAST_CORRECTION_SETTINGS_CSS } from './li
 import { projectReferenceReadiness, renderReferenceReadiness, REFERENCE_READINESS_CSS } from './lib/rp/reference-readiness.js';
 import { compactReferenceReceipt, REFERENCE_RECEIPT_CSS } from './lib/rp/reference-receipt.js';
 import { createOptionalFeatureLoader } from './lib/optional-feature-loader.js';
+import { createOptionalFeatureLifecycle } from './lib/optional-feature-lifecycle.js';
 
 const extensionName = 'context-image-generation';
 const extensionFolderPath = `scripts/extensions/third-party/${extensionName}`;
@@ -119,6 +120,25 @@ async function ensureIterationFeature() { iterationFeature = await optionalFeatu
 async function ensureStoryMemoryFeature() { storyMemoryFeature = await optionalFeatureLoader.load('storyMemory'); return storyMemoryFeature; }
 async function ensureCinematicFeature() { cinematicFeature = await optionalFeatureLoader.load('cinematic'); return cinematicFeature; }
 async function ensureDirectorFeature() { directorFeature = await optionalFeatureLoader.load('director'); return directorFeature; }
+const optionalFeatureError = (error, operation) => showGenerationError(error, operation);
+const storyMemoryLifecycle = createOptionalFeatureLifecycle({
+    load: ensureStoryMemoryFeature,
+    setup: (feature) => createStoryMemorySurface(feature),
+    teardown: () => { storyMemorySurfaceMount?.destroy?.(); storyMemorySurfaceMount = null; storyMemoryController = null; pendingStoryMemoryContinuation = null; },
+    onError: (error) => optionalFeatureError(error, 'Load Story Memory'),
+});
+const cinematicLifecycle = createOptionalFeatureLifecycle({
+    load: ensureCinematicFeature,
+    setup: (feature) => createCinematicSurface(feature),
+    teardown: () => { cinematicRuntime?.destroy?.(); cinematicRuntime = null; cinematicUiController = null; $('.cig_cinematic_suggestion').remove(); },
+    onError: (error) => optionalFeatureError(error, 'Load Cinematic'),
+});
+const iterationLifecycle = createOptionalFeatureLifecycle({
+    load: ensureIterationFeature,
+    setup: (feature) => { feature.installIterationSurfaceStyles(document); },
+    teardown: () => { destroyIterationSurfaceMounts(); $('.cig_iteration_entry').remove(); },
+    onError: (error) => optionalFeatureError(error, 'Load Iteration'),
+});
 const DEFAULT_EXTRA_STORY_TOOLS = Object.freeze({ schema: 1, enabled: false, storyMemory: false, appearanceMemory: false, cinematic: false, iteration: false, gallery: false });
 
 function normalizeExtraStoryTools(value) {
@@ -934,15 +954,9 @@ function selectInitialSettingsTab(settings) {
     activateSettingsTab(resolveInitialSettingsTab({ savedTab: settings.ui_last_settings_tab, readiness }), { persist: false });
 }
 
-async function createStoryMemorySurface() {
+async function createStoryMemorySurface(featureOverride = null) {
     if (!extraStoryToolEnabled('storyMemory')) return;
-    let feature;
-    try {
-        feature = await ensureStoryMemoryFeature();
-    } catch (error) {
-        showGenerationError(error, 'Load Story Memory');
-        return;
-    }
+    const feature = featureOverride || await ensureStoryMemoryFeature();
     const settings = extension_settings[extensionName];
     const runtime = feature.createStoryMemoryRuntime({
         extensionName,
@@ -1074,15 +1088,9 @@ function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
     $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
 }
 
-async function createCinematicSurface() {
+async function createCinematicSurface(featureOverride = null) {
     if (!extraStoryToolEnabled('cinematic')) return;
-    let feature;
-    try {
-        feature = await ensureCinematicFeature();
-    } catch (error) {
-        showGenerationError(error, 'Load Cinematic');
-        return;
-    }
+    const feature = featureOverride || await ensureCinematicFeature();
     const settings = extension_settings[extensionName];
     const runtimeSettings = cinematicRuntimeSettings();
     cinematicRuntime = feature.createCinematicRuntime({
@@ -1574,8 +1582,8 @@ async function loadSettings() {
     renderSetupRuntimeIssue();
     renderExtraStoryTools();
     markImagesCastSettingsStale();
-    if (extraStoryToolEnabled('storyMemory')) createStoryMemorySurface();
-    if (extraStoryToolEnabled('cinematic')) createCinematicSurface();
+    if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.enable();
+    if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.enable();
     renderCustomConnectionEditor();
     selectInitialSettingsTab(cigSettings);
 }
@@ -3478,22 +3486,22 @@ function renderExtraStoryTools() {
     $('#cig_extra_story_tools_status').text(extras.enabled ? 'Choose the individual tools you want below.' : 'Extra story tools are off. The wand, visual style, and current chat characters remain available.');
 }
 
-function setExtraStoryTools(patch = {}) {
+async function setExtraStoryTools(patch = {}) {
     const current = extraStoryTools();
     const next = normalizeExtraStoryTools({ ...current, ...patch });
     extension_settings[extensionName].extra_story_tools = next;
     saveSettingsDebounced();
     renderExtraStoryTools();
-    if (extraStoryToolEnabled('storyMemory')) createStoryMemorySurface();
+    if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.enable();
     else {
-        storyMemorySurfaceMount?.destroy?.(); storyMemorySurfaceMount = null; storyMemoryController = null; pendingStoryMemoryContinuation = null;
+        await storyMemoryLifecycle.disable();
     }
-    if (extraStoryToolEnabled('cinematic')) createCinematicSurface();
-    else { cinematicRuntime?.destroy?.(); cinematicRuntime = null; cinematicUiController = null; $('.cig_cinematic_suggestion').remove(); }
-    if (!extraStoryToolEnabled('iteration')) { destroyIterationSurfaceMounts(); $('.cig_iteration_entry').remove(); }
+    if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.enable();
+    else await cinematicLifecycle.disable();
+    if (!extraStoryToolEnabled('iteration')) await iterationLifecycle.disable();
     if (!extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (!extraStoryToolEnabled('gallery')) renderGallery();
-    if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
+    if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
     if (extraStoryToolEnabled('gallery')) renderGallery();
     if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
@@ -3739,6 +3747,10 @@ async function attachGeneratedImage(message, messageElement, prompt, sender, mes
         addToGallery,
         notify: (messageText) => toastr.info(messageText, 'Context Image Generation'),
         rollbackMedia: (rollback) => rollback?.(),
+        sanitizeIterationArtifact: (artifact) => {
+            if (!iterationFeature) throw new Error('Iteration artifact sanitizer is unavailable.');
+            return iterationFeature.sanitizeIterationArtifactForStorage(artifact);
+        },
     });
     if (attached === true && invocation === 'wand' && stagedContinuationAtStart
         && pendingStoryMemoryContinuation?.chatId === stagedContinuationAtStart.chatId
@@ -3932,13 +3944,9 @@ async function renderIterationActionSurface(messageElement, messageOverride = nu
     if (!messageElement?.length) return;
     messageElement.find('.cig_iteration_entry').remove();
     if (!extraStoryToolEnabled('iteration')) return;
-    let feature;
-    try {
-        feature = await ensureIterationFeature();
-    } catch (error) {
-        showGenerationError(error, 'Load Iteration');
-        return;
-    }
+    const lifecycle = await iterationLifecycle.enable();
+    if (lifecycle.status !== 'ready' || !extraStoryToolEnabled('iteration')) return;
+    const feature = iterationFeature;
     const messageId = Number(messageElement.attr('mesid'));
     const message = messageOverride || getContext().chat?.[messageId];
     const activeMedia = activeMediaForMessage(message);
@@ -3985,7 +3993,6 @@ async function renderIterationActionSurface(messageElement, messageOverride = nu
         const mount = feature.mountIterationSurface(host[0], controller);
         iterationSurfaceMounts.set(key, { controller, destroy: mount.destroy });
     });
-    feature.installIterationSurfaceStyles(document);
 }
 
 function destroyIterationSurfaceMounts() {
@@ -4427,7 +4434,7 @@ jQuery(async () => {
     });
 
     $('#cig_settings > .inline-drawer > .inline-drawer-toggle').on('click', () => {
-        setTimeout(() => {
+        setTimeout(async () => {
             const selectedTab = $('#cig_settings [data-cig-tab][aria-selected="true"]').attr('data-cig-tab');
             if (selectedTab === 'images-cast') renderImagesCastSettings();
             if (selectedTab === 'preferences') syncChatWandPreferenceControls();
@@ -4603,8 +4610,8 @@ jQuery(async () => {
         saveSettingsDebounced();
     });
 
-    $('#cig_extra_story_tools_enabled').on('change', function () {
-        setExtraStoryTools({ enabled: $(this).prop('checked') });
+    $('#cig_extra_story_tools_enabled').on('change', async function () {
+        await setExtraStoryTools({ enabled: $(this).prop('checked') });
     });
     const extraToolControls = {
         '#cig_extra_story_memory': 'storyMemory',
@@ -4614,10 +4621,10 @@ jQuery(async () => {
         '#cig_extra_gallery': 'gallery',
     };
     for (const [selector, key] of Object.entries(extraToolControls)) {
-        $(selector).on('change', function () { setExtraStoryTools({ [key]: $(this).prop('checked') }); });
+        $(selector).on('change', async function () { await setExtraStoryTools({ [key]: $(this).prop('checked') }); });
     }
-    $('#cig_extra_story_tools_disable_all').on('click', function () {
-        setExtraStoryTools({ enabled: false });
+    $('#cig_extra_story_tools_disable_all').on('click', async function () {
+        await setExtraStoryTools({ enabled: false });
     });
 
     $('#cig_auto_generate').on('change', function () {
@@ -4840,49 +4847,47 @@ jQuery(async () => {
     document.addEventListener('swiped-right', onCigImageGesture, true);
     document.addEventListener('click', onCigImageArrowClick, true);
 
-    function onCigMessageRendered(messageId) {
+    async function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);
         const messageElement = $(`.mes[mesid="${messageId}"]`);
-        if (extraStoryToolEnabled('iteration')) renderIterationActionSurface(messageElement);
-        if (extraStoryToolEnabled('cinematic')) void observeCinematicMessage(messageId);
+        if (extraStoryToolEnabled('iteration')) await renderIterationActionSurface(messageElement);
+        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => observeCinematicMessage(messageId));
     }
 
-    eventSource.on(event_types.CHAT_CHANGED, () => {
+    eventSource.on(event_types.CHAT_CHANGED, async () => {
         chatLifecycleEpoch.advance();
-        if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
-        if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
+        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
+        if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
         destroyIterationSurfaceMounts();
-        setTimeout(() => {
+        setTimeout(async () => {
             injectAllMessageButtons();
             markImagesCastSettingsStale();
-            if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
+            if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
             schedulePendingRecovery();
         }, 100);
     });
 
-    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, (messageId) => {
-        onCigMessageRendered(messageId);
+    eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED, async (messageId) => {
+        await onCigMessageRendered(messageId);
         autoGenerateForMessage(messageId);
     });
 
-    eventSource.on(event_types.USER_MESSAGE_RENDERED, (messageId) => {
-        onCigMessageRendered(messageId);
+    eventSource.on(event_types.USER_MESSAGE_RENDERED, async (messageId) => {
+        await onCigMessageRendered(messageId);
         autoGenerateForMessage(messageId);
     });
 
-    eventSource.on(event_types.CHAT_CREATED, () => {
+    eventSource.on(event_types.CHAT_CREATED, async () => {
         chatLifecycleEpoch.advance();
-        if (extraStoryToolEnabled('cinematic')) cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() });
-        if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
-        if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
+        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
+        if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
         destroyIterationSurfaceMounts();
-        setTimeout(() => { injectAllMessageButtons(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); }); }, 100);
+        setTimeout(async () => { injectAllMessageButtons(); markImagesCastSettingsStale(); if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element)); }, 100);
     });
 
-    setTimeout(() => {
+    setTimeout(async () => {
         injectAllMessageButtons();
-        if (extraStoryToolEnabled('iteration')) $('.mes').each(function () { renderIterationActionSurface($(this)); });
+        if (extraStoryToolEnabled('iteration')) for (const element of $('.mes').toArray()) await renderIterationActionSurface($(element));
     }, 500);
 
     SlashCommandParser.addCommandObject(SlashCommand.fromProps({
