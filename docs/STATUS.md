@@ -4,17 +4,20 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 2 — dormant scene-generation kernel.
+Task 3 — dormant delivery and entry adapters.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
 - Generation source and delivery destination contracts implemented.
 - Extracted a dependency-injected scene-generation kernel without production wiring.
 - Defined the Task 4 composition seams for capture, reference materialization, plan/message construction, provider dispatch, and coordination.
+- Added dormant, dependency-injected message and preview/Gallery delivery adapters without production wiring.
+- Added pure wand and slash request factories plus thin entry adapters; Task 4 remains responsible for composing them into `index.js`.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
 - `node --test test/scene-generation-kernel.test.mjs` — 7 passed after the expected missing-module red run.
+- `node --test test/scene-generation-delivery.test.mjs` — 5 passed after the expected missing-module red run.
 - Focused kernel parity suite — 54 passed: `scene-generation-kernel`, `generation-plan`, `generation-coordinator`, `provider-dispatch`, `run-coordinator-phase-c`, and `no-spend-uat`.
 
 ## Failures / open issues
@@ -26,4 +29,4 @@ Task 2 — dormant scene-generation kernel.
 - Legacy outfit data is preserved, not purged.
 
 ## Next action
-Add dormant wand/slash delivery adapters, then atomically wire the approved entry points in Task 4.
+Atomically wire the approved entry points in Task 4.
