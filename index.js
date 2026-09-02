@@ -3951,6 +3951,9 @@ function configureCigImageArrows(messageElement) {
     messageElement.find('.mes_img_swipe_right')
         .attr({ tabindex: '0', role: 'button', title: 'Next image', 'aria-label': 'Next image' })
         .addClass('cig_image_navigation');
+    cigImageArrows(messageElement)
+        .off('keydown.cigImageNavigation')
+        .on('keydown.cigImageNavigation', onCigImageArrowKeydown);
 }
 
 function setCigImageArrowBusy(messageElement, busy) {
@@ -4768,7 +4771,6 @@ jQuery(async () => {
     document.addEventListener('swiped-left', onCigImageGesture, true);
     document.addEventListener('swiped-right', onCigImageGesture, true);
     document.addEventListener('click', onCigImageArrowClick, true);
-    document.addEventListener('keydown', onCigImageArrowKeydown, true);
 
     function onCigMessageRendered(messageId) {
         injectMessageButton(messageId);

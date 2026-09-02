@@ -63,3 +63,8 @@ test('chat switching advances stale-work protection without cloning metadata or 
     assert.match(chatEvents, /chatLifecycleEpoch\.advance\(\)/u);
     assert.doesNotMatch(chatEvents, /removeRetiredMessageSurfaces|syncChatWandPreferenceControls/u);
 });
+
+test('ordinary chat typing has no document-level CIG keyboard handler', () => {
+    assert.doesNotMatch(indexSource, /document\.addEventListener\('keydown',\s*onCigImageArrowKeydown/u);
+    assert.match(indexSource, /\.on\('keydown\.cigImageNavigation',\s*onCigImageArrowKeydown\)/u);
+});
