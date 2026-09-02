@@ -2298,15 +2298,10 @@ function chatCastPreferences() {
 }
 
 async function persistCurrentChatCanon(candidate) {
-    const context = getContext();
     return persistChatCanonMetadata({
         metadata: chat_metadata,
         candidate,
-        groupId: context.groupId || null,
-        chatName: context.chatId,
-        chatData: cloneSnapshot(context.chat || []),
-        saveOneToOne: saveChat,
-        saveGroup: saveGroupChat,
+        save: saveChatConditional,
     });
 }
 
@@ -2793,7 +2788,11 @@ async function resumePendingVisibleCanonLinks() {
         const currentCanon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
         const currentFingerprint = chatCanonRevisionFingerprint(currentCanon, link.identityId);
         if (currentFingerprint !== link.expectedFingerprint && currentCanon.revision !== link.candidate.revision) return { status: 'confirmed' };
-        const replayCandidate = { ...link.candidate, visibleCanonPending: pendingState.pending };
+        const replayCandidate = finalizeVisibleCanonPendingReplay({
+            currentCanon,
+            replayedCanon: link.candidate,
+            activePending: pendingState.pending,
+        });
         chat_metadata[CHAT_CANON_KEY] = replayCandidate;
         const result = await reconcileVisibleCanonPendingLink(link, {
             isCurrent,

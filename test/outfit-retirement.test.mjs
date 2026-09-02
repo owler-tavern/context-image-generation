@@ -18,6 +18,7 @@ import * as persistenceVerifier from '../lib/rp/persistence-verifier.js';
 import { deriveCinematicEvents } from '../lib/rp/cinematic-automation.js';
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata } from '../lib/rp/scene-generation.js';
 import { buildStoryMemoryFactSnapshot, collectStoryMemoryMedia } from '../lib/rp/story-memory-runtime.js';
+import { finalizeVisibleCanonPendingReplay } from '../lib/rp/visible-canon-persistence.js';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import * as settingsMigrationChange from '../lib/settings-migration-change.js';
 
@@ -72,25 +73,46 @@ test('every ordinary chat-canon writer preserves realistic opaque legacy outfit 
     assert.deepEqual(migrateChatCanon({ outfitState: largeLegacyOutfitState }).outfitState, largeLegacyOutfitState);
 });
 
-test('real one-to-one and group metadata writer/save seams preserve large opaque legacy outfit state', async () => {
+test('the coordinated chat save seam preserves large opaque legacy outfit state', async () => {
     assert.equal(typeof persistenceVerifier.persistChatCanonMetadata, 'function');
-    for (const groupId of [null, 'group-1']) {
-        const calls = [];
-        const metadata = { contextImageGeneration: { outfitState: largeLegacyOutfitState } };
-        const candidate = setChatWandPreferences(metadata.contextImageGeneration, { framing: 'wide' });
-        await persistenceVerifier.persistChatCanonMetadata({
-            metadata,
-            candidate,
-            groupId,
-            chatName: 'chat-1',
-            chatData: [{ mes: 'current scene' }],
-            saveOneToOne: async (payload) => calls.push(['one-to-one', structuredClone(payload)]),
-            saveGroup: async (id, withMetadata) => calls.push(['group', id, withMetadata, structuredClone(metadata)]),
-        });
-        assert.deepEqual(metadata.contextImageGeneration.outfitState, largeLegacyOutfitState);
-        assert.equal(calls[0][0], groupId ? 'group' : 'one-to-one');
-        const savedMetadata = groupId ? calls[0][3] : calls[0][1].withMetadata;
-        assert.deepEqual(savedMetadata.contextImageGeneration.outfitState, largeLegacyOutfitState);
+    const metadata = { contextImageGeneration: { outfitState: largeLegacyOutfitState } };
+    const candidate = setChatWandPreferences(metadata.contextImageGeneration, { framing: 'wide' });
+    let coordinatedSaveCalls = 0;
+    let directHostSaveCalls = 0;
+    let savedMetadata = null;
+    await persistenceVerifier.persistChatCanonMetadata({
+        metadata,
+        candidate,
+        save: async () => {
+            coordinatedSaveCalls += 1;
+            savedMetadata = structuredClone(metadata);
+        },
+        saveOneToOne: async () => { directHostSaveCalls += 1; },
+    });
+    assert.equal(coordinatedSaveCalls, 1);
+    assert.equal(directHostSaveCalls, 0);
+    assert.deepEqual(metadata.contextImageGeneration.outfitState, largeLegacyOutfitState);
+    assert.deepEqual(savedMetadata.contextImageGeneration.outfitState, largeLegacyOutfitState);
+});
+
+test('visible-canon replay carries current 17KB opaque outfit state through the first writer and final cleanup', () => {
+    assert.ok(JSON.stringify(largeLegacyOutfitState).length > 17000);
+    const currentCanon = {
+        schema: 1,
+        revision: 'chat-canon:current',
+        bindings: { ava: { activeLookId: 'look:current' } },
+        outfitState: largeLegacyOutfitState,
+    };
+    for (const replayedCanon of [
+        { schema: 1, revision: 'chat-canon:replay-omitted', bindings: { ava: { activeLookId: 'look:replayed' } } },
+        { schema: 1, revision: 'chat-canon:replay-stale', bindings: { ava: { activeLookId: 'look:replayed' } }, outfitState: { schema: 1, bindings: { stale: true } } },
+    ]) {
+        const firstWriter = finalizeVisibleCanonPendingReplay({ currentCanon, replayedCanon, activePending: { pending: { artifactId: 'artifact:1', chatId: 'chat-1' } } });
+        assert.equal(firstWriter.revision, replayedCanon.revision);
+        assert.deepEqual(firstWriter.outfitState, largeLegacyOutfitState);
+        const finalCleanup = finalizeVisibleCanonPendingReplay({ currentCanon: firstWriter, replayedCanon: firstWriter, activePending: {} });
+        assert.deepEqual(finalCleanup.outfitState, largeLegacyOutfitState);
+        assert.deepEqual(finalCleanup.visibleCanonPending, {});
     }
 });
 
@@ -158,6 +180,8 @@ test('production code has no outfit controls, prompt projection, persistence imp
     assert.doesNotMatch(index, /createOutfit\(|selectChatOutfit\(|setChatOutfitLock\(|persistChatOutfitState\(/);
     assert.match(index, /loadExtensionSettings\(defaultSettings, persistedSettings\)/u);
     assert.match(index, /persistExtensionSettings\(cigSettings, saveSettingsDebounced\)/u);
-    assert.match(index, /persistChatCanonMetadata\(\{/u);
+    assert.match(index, /const replayCandidate = finalizeVisibleCanonPendingReplay\(\{[\s\S]{0,300}currentCanon,[\s\S]{0,300}replayedCanon: link\.candidate/u);
+    assert.match(index, /function persistCurrentChatCanon\(candidate\) \{[\s\S]{0,500}save: saveChatConditional/u);
+    assert.doesNotMatch(index, /function persistCurrentChatCanon\(candidate\) \{[\s\S]{0,500}(?:saveOneToOne|saveGroup)/u);
     assert.doesNotMatch(cinematicRuntimeSource, /event\?\.kind === 'outfit'/u);
 });

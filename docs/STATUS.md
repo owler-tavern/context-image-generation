@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 6 correction round 1 — reviewer findings fixed; awaiting independent re-review.
+Task 6 correction round 2 — replay and coordinated-save findings fixed; awaiting independent re-review.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -22,8 +22,10 @@ Task 6 correction round 1 — reviewer findings fixed; awaiting independent re-r
 - Decoupled saved-appearance asset resolution from the previous-image toggle and its selected Gallery item.
 - Retired outfit UI, handlers, prompt projection, plan/provenance fields, settings normalization, and pending-recovery scheduling. Legacy `rp_outfits`, `outfit_pending`, chat `outfitState`, and historical `activeOutfits` artifacts remain inert and structurally preserved.
 - Removed the remaining scene and cinematic outfit-state architecture. Current attire remains ordinary source text only; non-outfit scene facts remain available.
-- Preserved realistic opaque legacy `outfitState` values larger than 8192 bytes across every ordinary chat-canon writer and real one-to-one/group metadata save seam without weakening the generic unknown-field budget.
+- Preserved realistic opaque legacy `outfitState` values larger than 8192 bytes across every ordinary chat-canon writer and the coordinated host metadata save seam without weakening the generic unknown-field budget.
 - Added real extension-settings load/save and historical Story Memory artifact-reader coverage for compatibility preservation.
+- Carried the current opaque `outfitState` through visible-canon replay before its first save and during final cleanup, even when the historical candidate omits the field or contains a stale value.
+- Restored routine chat-canon persistence to SillyTavern's existing `saveChatConditional` coordination path; the preservation seam no longer selects direct one-to-one or group writers.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -45,6 +47,10 @@ Task 6 correction round 1 — reviewer findings fixed; awaiting independent re-r
 - Task 6 correction focused suite — 63 passed, 0 failed.
 - Task 6 correction affected scene/cinematic/canon/settings/Story Memory suite — 122 passed, 0 failed.
 - Task 6 correction full repository suite — 873 passed, 0 failed: `node --test test/*.mjs`.
+- Task 6 correction round 2 RED — the retirement suite reported 5 passed and 3 failed for coordinated-save bypass, 17KB replay loss, and missing production wiring.
+- Task 6 correction round 2 focused suite — 64 passed, 0 failed.
+- Task 6 correction round 2 affected replay/persistence/scene/cinematic/canon/settings/Story Memory suite — 156 passed, 0 failed.
+- Task 6 correction round 2 full repository suite — 874 passed, 0 failed: `node --test test/*.mjs`.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
@@ -58,4 +64,4 @@ Task 6 correction round 1 — reviewer findings fixed; awaiting independent re-r
 - Legacy outfit records are preserved as opaque compatibility data; no production path interprets, writes, replays, or injects them into generation.
 
 ## Next action
-Obtain independent re-review of Task 6 correction round 1, then proceed with the focused settings/documentation alignment task.
+Obtain independent re-review of Task 6 correction round 2, then proceed with the focused settings/documentation alignment task.
