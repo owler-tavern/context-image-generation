@@ -75,7 +75,7 @@ The implemented Gemini-compatible proxy is `https://api.linkapi.ai`, while the i
 
 ## Models and UI behavior
 
-`PROVIDER_MODELS` is the built-in allowlist displayed before discovery. LinkAPI adds a default `gpt-image-2-c` option. The **Refresh Models** control calls the selected provider's model catalog, keeps existing local IDs when discovery is empty or fails, and adds accepted discovered IDs to the selector for the current page session.
+`PROVIDER_MODELS` is the built-in allowlist displayed before discovery. LinkAPI adds a default `gpt-image-2-c` option. The **Refresh Models** control calls the selected provider's model catalog, keeps existing local IDs when discovery is empty or fails, and adds accepted discovered IDs to the selector for the current page session. Catalog discovery only lists model IDs; it does not verify the selected route or image generation. Live generation verification is separate.
 
 `resolveProviderRoute(providerId, modelId)` is the routing boundary for adapter dispatch. It resolves the curated model metadata (including the LinkAPI `gpt-image`/`dall-e` fallback) and transport; do not make new provider routes depend on the UI-only `isOpenAiImageModel()` predicate. Keep each model capability, including `supportsReferenceImages`, aligned with the controls in `settings.html`.
 
@@ -97,9 +97,9 @@ New gallery entries keep file URLs, not full-resolution base64, in extension set
 
 The gallery is limited to `MAX_GALLERY_SIZE` (50). Prompt text is rendered with text-safe DOM APIs; retain that property when changing gallery markup.
 
-Appearance memory currently stores metadata that resolves its image through a Gallery artifact. The testing branch therefore clears dependent appearance records when the user confirms **Clear Gallery**, avoiding broken `Unavailable` looks. This is an interim safety behavior, not the target storage model.
+Appearance memory is an optional continuity capability. **Remember appearance** promotes the selected generated image into an appearance-owned asset store; it does not depend on Gallery remaining intact. Character/persona appearance assets may persist across chats, while named-NPC metadata remains chat-scoped. Clearing disposable Gallery history must not delete or disable remembered appearances.
 
-Before this branch is eligible for `main`, implement the accepted direction in [ADR-001](docs/decisions/ADR-001-separate-gallery-and-appearance-assets.md): Gallery remains disposable history, while **Remember appearance** promotes the chosen image into an appearance-owned asset store. Character/persona looks may be durable across chats; named NPC metadata remains chat-scoped. Clearing Gallery must not remove or disable any remembered look.
+Legacy appearance and outfit-related records remain inertly retained for rollback and migration safety. No v2.5 generation path reads persisted outfit state as authoritative attire; attire comes from the current scene, prompt, and ordinary character context.
 
 ## Security and data-handling rules
 

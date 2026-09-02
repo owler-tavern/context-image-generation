@@ -6,6 +6,8 @@ const settings = await readFile(new URL('../settings.html', import.meta.url), 'u
 const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
 const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 const referenceReadiness = await readFile(new URL('../lib/rp/reference-readiness.js', import.meta.url), 'utf8');
+const readme = await readFile(new URL('../README.md', import.meta.url), 'utf8');
+const developerGuide = await readFile(new URL('../DEVELOPER_GUIDE.md', import.meta.url), 'utf8');
 
 function panelMarkup(id) {
     const opening = settings.match(new RegExp(`<section\\b[^>]*id="${id}"[^>]*>`));
@@ -81,6 +83,13 @@ test('ADR-002 keeps Settings configuration-only and makes model refresh discover
     assert.match(settings, /Cinematic suggestions stage context for the next wand or slash command\./u);
     assert.match(settings, /Suggestions never call a provider\./u);
     assert.match(settings, /before staging it as context for the next wand or slash command\./u);
+});
+
+test('Refresh Models discovery is not generation verification in release docs', () => {
+    for (const [name, document] of [['README', readme], ['DEVELOPER_GUIDE', developerGuide]]) {
+        assert.match(document, /Catalog discovery only lists model IDs; it does not verify the selected route or image generation\./u, `${name} states the discovery boundary`);
+        assert.match(document, /Live generation verification is separate\./u, `${name} states separate live verification`);
+    }
 });
 
 test('Images and Cast leads with current chat characters and progressively discloses extras', () => {

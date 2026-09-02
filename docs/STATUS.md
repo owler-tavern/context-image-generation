@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 7 — settings, styling, and release-documentation reconciliation complete; ready for Task 8 deterministic regression.
+Task 7 correction round 1 — release-documentation verification boundary and approved D4 appearance-memory wording reconciled; ready for Task 8 deterministic regression.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -30,6 +30,7 @@ Task 7 — settings, styling, and release-documentation reconciliation complete;
 - Removed retired outfit-only CSS selectors while retaining shared layout and cinematic suggestion styling.
 - Reconciled PRODUCT, README, DEVELOPER_GUIDE, and ROADMAP with the two-entry v2.5 boundary; added `docs/V2_5_RELEASE_NOTES.md` with evidence and deferrals. Approved pre-existing README/DEVELOPER_GUIDE opening and ownership hunks remain unchanged.
 - Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
+- Corrected the Task 7 review finding: README and DEVELOPER_GUIDE now distinguish catalog discovery from route/image-generation verification, and DEVELOPER_GUIDE carries the approved D4 appearance-memory wording.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -58,6 +59,9 @@ Task 7 — settings, styling, and release-documentation reconciliation complete;
 - Task 7 RED — new ADR-002 settings assertions failed on missing Refresh Models copy and stale cinematic/Story Memory wording before implementation; existing cinematic/Story Memory contracts also caught wording regressions during the green pass.
 - Task 7 focused settings/provider/documentation suite — 76 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs test/p4-story-memory-runtime.test.mjs test/rp-cinematic-integration.contract.test.mjs`.
 - Task 7 `git diff --check` — passed before final allowlist staging.
+- Task 7 correction round 1 RED — the new release-documentation contract failed because README and DEVELOPER_GUIDE did not state the discovery/verification boundary.
+- Task 7 correction round 1 focused settings/provider/documentation suite — 41 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs`.
+- Task 7 correction round 1 `git diff --check` — passed before final allowlist staging.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
