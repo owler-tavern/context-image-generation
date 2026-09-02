@@ -55,16 +55,13 @@ test('runtime snapshots resolve adapter IDs through the shared route contract', 
     assert.doesNotMatch(snapshot, /openAiImages:\s*'openai-images'/);
 });
 
-test('normal inline flow captures outfit/reference evidence without adding a post-image chat shelf', async () => {
+test('normal inline flow captures reference evidence without adding a post-image chat shelf or outfit state', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(source, /projectContinuityShelf/);
     assert.doesNotMatch(source, /renderContinuityShelf/);
-    assert.match(source, /migrateOutfitCatalog/);
-    assert.match(source, /migrateChatOutfitState/);
-    assert.match(source, /buildOutfitPrompt/);
     assert.match(source, /referencePlan/);
     assert.match(source, /saveChatConditional/);
-    assert.match(source, /verifyPersistedChatOutfitState/);
+    assert.doesNotMatch(source, /outfitStateSnapshot|outfitText|activeOutfits/);
 });
 
 test('captured continuity metadata remains available to Settings and Story Memory without a chat shelf', async () => {
@@ -100,16 +97,10 @@ test('saved appearance storage is captured by the contributor boundary and never
     assert.match(collection, /referenceContributorSnapshot/u);
 });
 
-test('outfit persistence queues durable pending state and saves only through the captured target gate', async () => {
+test('production leaves historical outfit persistence modules unreachable', async () => {
     const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const outfit = source.slice(source.indexOf('async function persistChatOutfitState'), source.indexOf('async function activateChatOutfit'));
-    assert.match(outfit, /queueOutfitPending/);
-    assert.match(outfit, /verifyPersistedOutfitPending/);
-    assert.match(outfit, /persistTargetedOutfitMutation/);
-    assert.match(outfit, /saveChatForCapturedTarget/);
-    assert.doesNotMatch(outfit, /saveChatConditional\(\)/);
-    assert.match(source, /resumePendingOutfitState/);
-    assert.match(source, /splitOutfitPendingByChat/);
+    assert.doesNotMatch(source, /outfit-persistence\.js|outfit-lock\.js/);
+    assert.doesNotMatch(source, /persistChatOutfitState|resumePendingOutfitState|queueOutfitPending/);
 });
 
 test('wand integration makes scene interpretation visible, persistent, and chat-scoped', async () => {

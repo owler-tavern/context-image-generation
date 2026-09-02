@@ -32,8 +32,8 @@ test('ordinary chat keeps image navigation clean and does not render post-image 
     assert.doesNotMatch(index, /renderContinuityShelf\(messageElement/);
     assert.doesNotMatch(index, /renderContinuityShelves\(\)/);
     assert.doesNotMatch(index, /renderSceneInspection\(\$\(this\)\)/);
-    assert.match(settings, /id="cig_chat_outfit_controls"/u);
-    assert.match(index, /cig_chat_outfit_select/u);
+    assert.doesNotMatch(settings, /cig_chat_outfit_controls/u);
+    assert.doesNotMatch(index, /cig_chat_outfit_select/u);
     assert.match(index, /function removeRetiredMessageSurfaces\(\)[\s\S]*?\.cig_visible_canon, \.cig_scene_inspection, \.cig_continuity_shelf/u);
     assert.match(index, /Initializing extension[\s\S]*?removeRetiredMessageSurfaces\(\)/u);
     const chatChanged = index.slice(index.indexOf('eventSource.on(event_types.CHAT_CHANGED'), index.indexOf('eventSource.on(event_types.CHARACTER_MESSAGE_RENDERED'));

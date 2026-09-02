@@ -3,7 +3,6 @@ import assert from 'node:assert/strict';
 import {
     buildAppearanceTruths,
     buildContinuityReferenceCandidates,
-    buildOutfitPrompt,
     alignContinuityReferencePlan,
     projectContinuityShelf,
 } from '../lib/rp/continuity-shelf.js';
@@ -57,7 +56,7 @@ test('reference candidates keep each identity separate and expose remembered, av
     ]);
 });
 
-test('shelf projection reports selected and omitted references plus independent named outfits', () => {
+test('shelf projection reports selected and omitted references without outfit state', () => {
     const truths = buildAppearanceTruths({
         identities,
         sources: {
@@ -72,28 +71,12 @@ test('shelf projection reports selected and omitted references plus independent 
             { id: 'host:character:ava', role: 'host-avatar', identityId: 'character:ava', assetId: 'asset:avatar:ava' },
         ] }),
         modelLimit: 1,
-        outfitCatalog: { outfits: [
-            { id: 'outfit:ava:travel', identityId: 'character:ava', name: 'Travel', items: ['blue coat', 'boots'] },
-            { id: 'outfit:leo:formal', identityId: 'character:leo', name: 'Formal', description: 'black suit' },
-        ] },
-        outfitState: { identities: {
-            'character:ava': { activeOutfitId: 'outfit:ava:travel', isLocked: true },
-        } },
     });
     assert.deepEqual(shelf.identities.map(({ identityId, sourceType, thumbnail, selected, omitted }) => [identityId, sourceType, thumbnail, selected.length, omitted.length]), [
         ['character:ava', 'avatar', '/ava.png', 1, 1],
         ['character:leo', 'description', null, 1, 0],
     ]);
-    assert.deepEqual(shelf.identities[0].activeOutfit, { id: 'outfit:ava:travel', name: 'Travel', items: ['blue coat', 'boots'], description: null, isLocked: true });
     assert.equal(shelf.modelLimit.maxReferences, 1);
-});
-
-test('outfit prompt is deterministic and independent for two identities', () => {
-    assert.equal(buildOutfitPrompt([
-        { identityId: 'character:ava', identityLabel: 'Ava', outfit: { name: 'Travel', items: ['blue coat', 'boots'] } },
-        { identityId: 'character:leo', identityLabel: 'Leo', outfit: { name: 'Formal', description: 'black suit' } },
-    ]), '[Active outfits]\nAva — Travel: blue coat, boots.\nLeo — Formal: black suit.');
-    assert.equal(buildOutfitPrompt([]), '');
 });
 
 test('description candidates follow the captured use-descriptions option', () => {

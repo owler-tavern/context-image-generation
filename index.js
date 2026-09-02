@@ -47,7 +47,7 @@ import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generatio
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, outfitCatalogEquivalent, outfitPendingStateEquivalent, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
+import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
@@ -80,10 +80,8 @@ import { runGlobalLookDeletion, runStopUsingInChat } from './lib/rp/appearance-r
 import { runClearGalleryPreservingLooks } from './lib/rp/appearance-migration.js';
 import { buildVisibleCanonMediaArtifactId, linkVisibleCanonGalleryArtifact, linkVisibleCanonMediaArtifact } from './lib/rp/visible-canon.js';
 import { createVisibleCanonPendingState, finalizeVisibleCanonPendingReplay, queueVisibleCanonPending, reconcileVisibleCanonPendingLink, resumeVisibleCanonPending, splitVisibleCanonPendingByChat } from './lib/rp/visible-canon-persistence.js';
-import { buildAppearanceTruths, buildContinuityReferenceCandidates, buildOutfitPrompt, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
+import { buildAppearanceTruths, buildContinuityReferenceCandidates, projectContinuityShelf } from './lib/rp/continuity-shelf.js';
 import { buildSceneGenerationSnapshot, createSceneArtifactMetadata, createSceneStatePending, persistAcceptedSceneState, sceneStatePendingKey, SCENE_STATE_METADATA_KEY } from './lib/rp/scene-generation.js';
-import { createOutfit, migrateOutfitCatalog, migrateChatOutfitState, getChatOutfitBinding, resolveActiveChatOutfit, selectChatOutfit, setChatOutfitLock } from './lib/rp/outfit-lock.js';
-import { createOutfitPendingState, queueOutfitPending, removeOutfitPending, persistTargetedOutfitMutation, resumeOutfitPending, splitOutfitPendingByChat } from './lib/rp/outfit-persistence.js';
 import { saveGroupChat } from '../../../group-chats.js';
 import { renderCastCorrectionControls, CAST_CORRECTION_SETTINGS_CSS } from './lib/rp/cast-settings-ui.js';
 import { projectReferenceReadiness, renderReferenceReadiness, REFERENCE_READINESS_CSS } from './lib/rp/reference-readiness.js';
@@ -187,8 +185,6 @@ const defaultSettings = {
     [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
     visible_canon_pending: {},
     rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
-    rp_outfits: { schema: 1, outfits: [] },
-    outfit_pending: { schema: 1, pending: {} },
     scene_state_pending: { schema: 1, pending: {} },
     cinematic_automation: { schema: 1, enabled: false, mode: 'balanced', budgetType: 'generations', generationLimit: 5, costCeiling: null },
 };
@@ -1186,7 +1182,6 @@ function hasPendingRecoveryWork() {
     return hasEntries(settings.rp_library?.operations)
         || hasEntries(settings.visible_canon_pending)
         || hasEntries(chat_metadata?.[CHAT_CANON_KEY]?.visibleCanonPending)
-        || hasEntries(settings.outfit_pending?.pending)
         || hasEntries(settings.scene_state_pending?.pending);
 }
 
@@ -1199,7 +1194,6 @@ function schedulePendingRecovery() {
         try {
             await enqueueLibraryMutation(() => resumePendingAppearanceOperations());
             await resumePendingVisibleCanonLinks();
-            await resumePendingOutfitState();
             await resumePendingSceneState();
         } catch (error) {
             console.warn(`[${extensionName}] Deferred recovery could not complete.`, error);
@@ -1290,16 +1284,6 @@ async function loadSettings() {
     const appearanceLibraryChange = replaceWhenChanged(cigSettings.rp_library, migrateAppearanceLibrary, appearanceLibraryEquivalent);
     if (appearanceLibraryChange.changed) {
         cigSettings.rp_library = appearanceLibraryChange.value;
-        settingsMigrated = true;
-    }
-    const outfitCatalogChange = replaceWhenChanged(cigSettings.rp_outfits, migrateOutfitCatalog, outfitCatalogEquivalent);
-    if (outfitCatalogChange.changed) {
-        cigSettings.rp_outfits = outfitCatalogChange.value;
-        settingsMigrated = true;
-    }
-    const outfitPendingStateChange = replaceWhenChanged(cigSettings.outfit_pending, createOutfitPendingState, outfitPendingStateEquivalent);
-    if (outfitPendingStateChange.changed) {
-        cigSettings.outfit_pending = outfitPendingStateChange.value;
         settingsMigrated = true;
     }
     if (!cigSettings.provider_keys || typeof cigSettings.provider_keys !== 'object' || Array.isArray(cigSettings.provider_keys)) {
@@ -1770,12 +1754,11 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
-        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, outfitText: '', intent: 'scene' },
+        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         scene: scenePlan,
         canonSnapshot: { references: [], assets: {}, omissions: [] },
         identities: appearanceIdentities,
         references: [],
-        activeOutfits: [],
         referenceContext: { speakerIdentityId: getStableSpeakerIdentityId(sender, appearanceIdentities, hostAppearanceContext) },
         options: {
             aspectRatio: settingsSnapshot.aspect_ratio, imageSize: settingsSnapshot.image_size, systemInstruction: settingsSnapshot.system_instruction,
@@ -1791,7 +1774,6 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         previousImageEnabled, savedAppearanceEnabled,
         appearanceIdentities,
         referenceContributorSnapshot,
-        outfitStateSnapshot: cloneSnapshot(chat_metadata?.[CHAT_CANON_KEY]?.outfitState),
         customConnection: customConnection ? cloneSnapshot(customConnection) : null,
         confirmedRevision: routeConfirmation.confirmedRevision || '',
         storyMemoryContinuation: continuationIsCurrent ? cloneSnapshot(continuation) : null,
@@ -1803,7 +1785,6 @@ async function buildMessages(prompt, sender = null, messageId = null, focusText 
     const contentParts = [];
     if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
     if (plan.prompt.descriptionText) contentParts.push({ type: 'text', text: plan.prompt.descriptionText });
-    if (plan.prompt.outfitText) contentParts.push({ type: 'text', text: plan.prompt.outfitText });
     contentParts.push({ type: 'text', text: plan.prompt.messageContent || plan.prompt.sourceMessage });
     contentParts.push(...buildReferenceMessageParts(plan, referenceAssets));
 
@@ -1889,14 +1870,9 @@ async function collectSceneGenerationReferences(snapshot) {
             truths: appearanceTruths,
             candidates: continuityCandidates,
             modelLimit: snapshot.planInput.provider.capabilities?.referenceImages?.maxCount,
-            outfitCatalog: snapshot.settingsSnapshot.rp_outfits,
-            outfitState: snapshot.outfitStateSnapshot,
             includeDescriptions: snapshot.settingsSnapshot.include_descriptions === true,
             includeAvatars: snapshot.avatarEnabled,
         });
-        const activeOutfits = continuityReferencePlan.identities
-            .filter((entry) => entry.activeOutfit)
-            .map((entry) => ({ identityId: entry.identityId, identityLabel: entry.identityLabel, outfit: entry.activeOutfit }));
         const appearanceDescription = appearanceTruths
             .filter((entry) => entry.description?.text)
             .map((entry) => `[${entry.identity?.label || entry.identityId} Appearance]: ${entry.description.text}`)
@@ -1920,13 +1896,11 @@ async function collectSceneGenerationReferences(snapshot) {
             canonSnapshot: policyCanonSnapshot,
             references: dispatchPolicy.references,
             referencePlan: continuityReferencePlan,
-            activeOutfits,
             prompt: {
                 ...snapshot.planInput.prompt,
                 descriptionText: snapshot.settingsSnapshot.include_descriptions === true
                     ? [snapshot.planInput.prompt.descriptionText, appearanceDescription].filter(Boolean).join('\n\n')
                     : snapshot.planInput.prompt.descriptionText,
-                outfitText: buildOutfitPrompt(activeOutfits),
             },
         };
         const availableReferences = policyReferences.filter((reference) => !reference.assetId || assets[reference.assetId]);
@@ -1967,7 +1941,6 @@ async function collectSceneGenerationReferences(snapshot) {
             identities: dispatchedPlan.identities,
             referencePlan: dispatchedPlan.referencePlan,
             referenceReceipt: compactReferenceReceipt(dispatchedPlan),
-            activeOutfits: dispatchedPlan.activeOutfits,
             scene: createSceneArtifactMetadata(dispatchedPlan.scene),
         });
         // Retain only the redacted Advanced projection; prompt/context/assets
@@ -2494,21 +2467,6 @@ function capturedChatTarget(identityId, expectedRevision, activeLookId, mediaTar
     };
 }
 
-async function verifyPersistedChatOutfitState({ target, expectedState } = {}) {
-    try {
-        const endpoint = target?.groupId ? '/api/chats/group/get' : '/api/chats/get';
-        const response = await fetch(endpoint, { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify(target?.requestBody || { chat_id: target?.chatId }) });
-        if (!response.ok) return { status: 'indeterminate' };
-        const payload = await response.json();
-        const header = Array.isArray(payload) ? payload[0] : payload;
-        const stored = header?.chat_metadata?.contextImageGeneration?.outfitState ?? header?.metadata?.contextImageGeneration?.outfitState;
-        const stable = (value) => JSON.stringify(value || { schema: 1, identities: {} });
-        return { status: stable(stored) === stable(expectedState) ? 'confirmed' : 'confirmed-absent', state: stored || null };
-    } catch (error) {
-        return { status: 'indeterminate', error };
-    }
-}
-
 function normalizeScenePendingStore(value) {
     const pending = value?.pending;
     return pending && typeof pending === 'object' && !Array.isArray(pending)
@@ -2621,18 +2579,6 @@ async function resumePendingSceneState() {
     return { status: 'processed', pending: settings.scene_state_pending };
 }
 
-async function verifyPersistedOutfitPending(entry) {
-    try {
-        const response = await fetch('/api/settings/get', { method: 'POST', headers: getRequestHeaders(), body: JSON.stringify({}) });
-        if (!response.ok) return { status: 'indeterminate' };
-        const payload = await response.json();
-        const raw = typeof payload?.settings === 'string' ? JSON.parse(payload.settings) : payload;
-        const stored = raw?.extension_settings?.[extensionName]?.outfit_pending?.pending?.[outfitPendingKey(entry)] || raw?.settings?.extension_settings?.[extensionName]?.outfit_pending?.pending?.[outfitPendingKey(entry)];
-        const stable = (value) => JSON.stringify(value || null);
-        return { status: stable(stored) === stable(entry) ? 'confirmed' : 'confirmed-absent', entry: stored || null };
-    } catch (error) { return { status: 'indeterminate', error }; }
-}
-
 async function saveChatForCapturedTarget(captured, target) {
     if (!chatCaptureIsCurrent(captured)) return { saved: false, reason: 'chat-changed' };
     const chatData = cloneSnapshot(getContext().chat || target?.chatData || []);
@@ -2640,128 +2586,6 @@ async function saveChatForCapturedTarget(captured, target) {
     if (target?.groupId) await saveGroupChat(target.groupId, true);
     else await saveChat({ chatName: target?.requestBody?.file_name, withMetadata: metadata, chatData });
     return chatCaptureIsCurrent(captured) ? { saved: true, target } : { saved: false, reason: 'chat-changed' };
-}
-
-function outfitPendingKey(entry) {
-    return `${String(entry?.chatId || '')}::${String(entry?.identityId || '')}`;
-}
-
-function scheduleOutfitPendingRetry() {
-    setTimeout(() => { void resumePendingOutfitState(); }, 1500);
-}
-
-async function persistChatOutfitState(identityId, nextState) {
-    const context = getContext();
-    const captured = { chatId: context.chatId, epoch: chatLifecycleEpoch.capture() };
-    const currentCanon = migrateChatCanon(chat_metadata[CHAT_CANON_KEY]);
-    const previous = { canon: currentCanon };
-    const outfitState = { ...migrateChatOutfitState(nextState), revision: `outfit:${crypto.randomUUID()}` };
-    const candidate = { ...currentCanon, outfitState, revision: `chat-canon:${crypto.randomUUID()}` };
-    const target = capturedChatTarget(identityId, candidate.revision, getChatOutfitBinding(outfitState, identityId)?.activeOutfitId || null);
-    const pending = { chatId: captured.chatId, groupId: target.groupId, identityId, canonRevision: candidate.revision, revision: outfitState.revision, state: outfitState };
-    const settings = extension_settings[extensionName];
-    settings.outfit_pending = queueOutfitPending(settings.outfit_pending, pending);
-    try {
-        await saveSettings();
-        const pendingVerification = await verifyPersistedOutfitPending(pending);
-        if (pendingVerification.status !== 'confirmed') {
-            scheduleOutfitPendingRetry();
-            return { status: 'indeterminate', verification: pendingVerification };
-        }
-    } catch (error) {
-        scheduleOutfitPendingRetry();
-        return { status: 'indeterminate', error };
-    }
-    const result = await persistTargetedOutfitMutation({
-        captured,
-        isCurrent: chatCaptureIsCurrent,
-        getState: () => ({ canon: chat_metadata[CHAT_CANON_KEY] }),
-        setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value.canon; },
-        nextState: { canon: candidate },
-        save: (capturedTarget) => saveChatForCapturedTarget(capturedTarget, target),
-        verify: () => verifyPersistedChatOutfitState({ target, expectedState: outfitState }),
-    });
-    if (result.status === 'confirmed') {
-        settings.outfit_pending = removeOutfitPending(settings.outfit_pending, pending);
-        await saveSettings();
-    } else if (result.status === 'confirmed-absent' && chatCaptureIsCurrent(captured) && chat_metadata[CHAT_CANON_KEY]?.outfitState?.revision === outfitState.revision) {
-        chat_metadata[CHAT_CANON_KEY] = previous.canon;
-        scheduleOutfitPendingRetry();
-    } else if (result.status === 'indeterminate') {
-        scheduleOutfitPendingRetry();
-    }
-    renderChatOutfitControls();
-    return result;
-}
-
-async function resumePendingOutfitState() {
-    const settings = extension_settings[extensionName];
-    const currentChatId = getContext().chatId;
-    const pendingState = createOutfitPendingState(settings.outfit_pending);
-    if (!Object.keys(splitOutfitPendingByChat(pendingState, currentChatId).active).length) return { status: 'nothing-to-do' };
-    const resumed = await resumeOutfitPending(pendingState, async (entry) => {
-        const captured = { chatId: currentChatId, epoch: chatLifecycleEpoch.capture() };
-        const target = capturedChatTarget(entry.identityId, entry.canonRevision, getChatOutfitBinding(entry.state, entry.identityId)?.activeOutfitId || null);
-        const candidate = { ...migrateChatCanon(chat_metadata[CHAT_CANON_KEY]), outfitState: migrateChatOutfitState(entry.state), revision: entry.canonRevision };
-        return persistTargetedOutfitMutation({
-            captured,
-            isCurrent: (value) => chatCaptureIsCurrent(value) && String(value.chatId) === String(entry.chatId),
-            getState: () => ({ canon: chat_metadata[CHAT_CANON_KEY] }),
-            setState: (value) => { chat_metadata[CHAT_CANON_KEY] = value.canon; },
-            nextState: { canon: candidate },
-            save: (capturedTarget) => saveChatForCapturedTarget(capturedTarget, target),
-            verify: () => verifyPersistedChatOutfitState({ target, expectedState: entry.state }),
-        });
-    }, { chatId: currentChatId, isCurrent: (entry) => chatCaptureIsCurrent({ chatId: entry.chatId, epoch: chatLifecycleEpoch.capture() }) });
-    if (resumed.state !== pendingState) {
-        settings.outfit_pending = resumed.state;
-        await saveSettings();
-    }
-    renderChatOutfitControls();
-    return resumed;
-}
-
-async function activateChatOutfit(identityId, requestedOutfitId) {
-    const settings = extension_settings[extensionName];
-    const catalog = migrateOutfitCatalog(settings.rp_outfits);
-    const current = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
-    const binding = getChatOutfitBinding(current, identityId);
-    let confirmed = false;
-    if (binding?.isLocked && binding.activeOutfitId !== requestedOutfitId) {
-        confirmed = await confirmDestructiveAction('Replace the locked outfit for this chat?', 'Activate outfit');
-        if (!confirmed) return { status: 'cancelled' };
-    }
-    const selected = selectChatOutfit(current, identityId, requestedOutfitId, { catalog, confirmed, explicitChange: confirmed });
-    if (selected.status !== 'selected') {
-        toastr.info(selected.status === 'confirmation-required' ? 'Unlock the outfit or confirm replacement first.' : 'Outfit unavailable.', 'Context Image Generation');
-        return selected;
-    }
-    const result = await persistChatOutfitState(identityId, selected.state);
-    if (result.status === 'confirmed') toastr.success(`Using ${selected.outfit.name} for ${identityId}.`, 'Context Image Generation');
-    else toastr.info('Outfit selection is pending chat persistence.', 'Context Image Generation');
-    return result;
-}
-
-async function toggleChatOutfitLock(identityId) {
-    const current = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
-    const binding = getChatOutfitBinding(current, identityId);
-    if (!binding) return { status: 'outfit-not-selected' };
-    const result = await persistChatOutfitState(identityId, setChatOutfitLock(current, identityId, !binding.isLocked));
-    if (result.status !== 'confirmed') toastr.info('Outfit lock change is pending chat persistence.', 'Context Image Generation');
-    return result;
-}
-
-async function createChatOutfit(identityId, name, description) {
-    const settings = extension_settings[extensionName];
-    const created = createOutfit({ id: `outfit:${identityId}:${crypto.randomUUID()}`, identityId, name, description });
-    if (created.status !== 'created') {
-        toastr.warning('Enter a name and outfit details first.', 'Context Image Generation');
-        return created;
-    }
-    settings.rp_outfits = { ...migrateOutfitCatalog(settings.rp_outfits), outfits: [...migrateOutfitCatalog(settings.rp_outfits).outfits, created.outfit] };
-    await saveSettings();
-    renderChatOutfitControls();
-    return created;
 }
 
 function chatCaptureIsCurrent(captured) {
@@ -3179,7 +3003,6 @@ function renderChatAppearanceSources() {
         $('<p>').text('No current character or persona identity is available.').appendTo(list);
         castHost.html(renderCastCorrectionControls({ identities: [], overrides: chatCastPreferences() }));
         $('#cig_reference_readiness').empty().prop('hidden', true);
-        renderChatOutfitControls([]);
         return;
     }
     const currentPersonaId = `user:${user_avatar || 'display'}`;
@@ -3244,36 +3067,6 @@ function renderChatAppearanceSources() {
     });
     $('#cig_reference_readiness').html(renderReferenceReadiness(readiness)).prop('hidden', !readiness);
     castHost.html(renderCastCorrectionControls({ identities, overrides: chatCastPreferences() }));
-    renderChatOutfitControls(identities);
-}
-
-function renderChatOutfitControls(identities = null) {
-    const host = $('#cig_chat_outfit_controls').empty();
-    if (!host.length) return;
-    const currentIdentities = (identities || getAppearanceIdentityChoices()).filter((identity) => ['character', 'user'].includes(identity.kind));
-    const catalog = migrateOutfitCatalog(extension_settings[extensionName]?.rp_outfits);
-    const outfitState = migrateChatOutfitState(chat_metadata[CHAT_CANON_KEY]?.outfitState);
-    $('<h3>').text('Current chat outfits').appendTo(host);
-    $('<small class="cig-setting-help">Optional outfit choices are saved in this chat and used by the wand.</small>').appendTo(host);
-    let rendered = 0;
-    for (const identity of currentIdentities) {
-        const outfits = catalog.outfits.filter((outfit) => outfit.identityId === identity.id);
-        rendered += 1;
-        const active = resolveActiveChatOutfit(outfitState, identity.id, catalog);
-        const row = $('<div class="cig_chat_outfit_row"></div>').attr('data-identity-id', identity.id);
-        $('<strong>').text(identity.label || identity.id).appendTo(row);
-        const select = $('<select class="text_pole cig_chat_outfit_select"></select>').attr('aria-label', `Choose outfit for ${identity.label || identity.id}`);
-        $('<option value="">No active outfit</option>').appendTo(select);
-        for (const outfit of outfits) $('<option>').val(outfit.id).text(outfit.name).prop('selected', outfit.id === active?.outfit?.id).appendTo(select);
-        select.appendTo(row);
-        if (outfits.length) $('<button type="button" class="menu_button cig_chat_outfit_activate">Activate</button>').attr('aria-label', `Activate selected outfit for ${identity.label || identity.id}`).appendTo(row);
-        if (active?.outfit) $('<button type="button" class="menu_button cig_chat_outfit_lock"></button>').text(active.binding?.isLocked ? 'Unlock outfit' : 'Lock outfit').attr({ 'aria-pressed': String(active.binding?.isLocked === true), 'aria-label': `${active.binding?.isLocked ? 'Unlock' : 'Lock'} outfit for ${identity.label || identity.id}` }).appendTo(row);
-        $('<input type="text" class="text_pole cig_chat_outfit_name" maxlength="80" placeholder="New outfit name">').attr('aria-label', `New outfit name for ${identity.label || identity.id}`).appendTo(row);
-        $('<input type="text" class="text_pole cig_chat_outfit_details" maxlength="240" placeholder="Outfit details">').attr('aria-label', `New outfit details for ${identity.label || identity.id}`).appendTo(row);
-        $('<button type="button" class="menu_button cig_chat_outfit_create">Create outfit</button>').attr('aria-label', `Create outfit for ${identity.label || identity.id}`).appendTo(row);
-        host.append(row);
-    }
-    if (!rendered) $('<small class="cig-setting-help">No current chat characters are available for outfit choices.</small>').appendTo(host);
 }
 
 function renderExtraStoryTools() {
@@ -4298,29 +4091,6 @@ jQuery(async () => {
         e.stopPropagation();
         const row = $(this).closest('.cig_appearance_item');
         await toggleAppearanceLookLock(row.attr('data-identity-id'), row.attr('data-look-id'));
-    });
-
-    $(document).on('click', '.cig_chat_outfit_activate', async function (e) {
-        e.stopPropagation();
-        const row = $(this).closest('.cig_chat_outfit_row');
-        const outfitId = row.find('.cig_chat_outfit_select').val();
-        if (!outfitId) return;
-        try { await activateChatOutfit(row.attr('data-identity-id'), outfitId); }
-        catch (error) { showGenerationError(error, 'Activate outfit'); }
-    });
-
-    $(document).on('click', '.cig_chat_outfit_lock', async function (e) {
-        e.stopPropagation();
-        try { await toggleChatOutfitLock($(this).closest('.cig_chat_outfit_row').attr('data-identity-id')); }
-        catch (error) { showGenerationError(error, 'Change outfit lock'); }
-    });
-
-    $(document).on('click', '.cig_chat_outfit_create', async function (e) {
-        e.stopPropagation();
-        const row = $(this).closest('.cig_chat_outfit_row');
-        try {
-            await createChatOutfit(row.attr('data-identity-id'), row.find('.cig_chat_outfit_name').val(), row.find('.cig_chat_outfit_details').val());
-        } catch (error) { showGenerationError(error, 'Create outfit'); }
     });
 
     $(document).on('click', '.cig_cinematic_suggestion [data-cig-cinematic-action]', async function (e) {

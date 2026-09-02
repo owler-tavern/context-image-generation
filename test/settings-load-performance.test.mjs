@@ -23,7 +23,7 @@ test('stable settings load does not delete and recreate retired director session
     );
 });
 
-test('loadSettings avoids serializing the five targeted migration comparisons while serialization outside that slice remains available', () => {
+test('loadSettings avoids serializing the three active targeted migration comparisons', () => {
     const start = indexSource.indexOf('async function loadSettings()');
     const end = indexSource.indexOf('function toggleProviderSpecificSettings()', start);
     const loadSettings = start >= 0 && end > start ? indexSource.slice(start, end) : '';
@@ -33,12 +33,9 @@ test('loadSettings avoids serializing the five targeted migration comparisons wh
         'existingProviderSettings',
         'cigSettings.extra_story_tools',
         'cigSettings.rp_library',
-        'cigSettings.rp_outfits',
-        'cigSettings.outfit_pending',
     ]) {
         assert.doesNotMatch(loadSettings, new RegExp(`JSON\\.stringify\\(${value.replaceAll('.', '\\.')}`, 'u'));
     }
-    assert.match(indexSource, /body: JSON\.stringify\(\{\}\)/u, 'request serialization outside loadSettings remains allowed');
 });
 
 test('ordinary message rendering and chat startup do not schedule full image-navigation scans', () => {
