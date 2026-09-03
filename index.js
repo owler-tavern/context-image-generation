@@ -173,6 +173,7 @@ const defaultSettings = {
     thinking_level: 'auto',
     use_google_search: false,
     auto_generate: 'off',
+    generation_deadline_ms: 120000,
     use_avatars: false,
     regenerate_on_swipe: false,
     include_descriptions: false,
@@ -1496,10 +1497,10 @@ function updateSizeDropdown(imageSizeOptions, selectedValue = extension_settings
     $sizeSelect.val(selectedValue);
 }
 
-async function materializeCapturedAvatarSource(source) {
+async function materializeCapturedAvatarSource(source, signal) {
     if (!source?.url) return null;
     try {
-        const response = await fetch(source.url);
+        const response = await fetch(source.url, { signal });
         if (!response.ok) return null;
         const blob = await response.blob();
         const base64 = await getBase64Async(blob);
@@ -1507,6 +1508,7 @@ async function materializeCapturedAvatarSource(source) {
         const mimeType = parts[0]?.match(/data:([^;]+)/)?.[1] || 'image/png';
         return { mimeType, data: parts[1] || base64, role: source.role, name: source.name };
     } catch (error) {
+        if (error?.name === 'AbortError') throw error;
         console.warn(`[${extensionName}] Error fetching captured avatar:`, error);
         return null;
     }
@@ -1834,18 +1836,19 @@ const referenceContributorPipeline = createReferenceContributorPipeline(createCa
         groupCharacterAvatars: input.groupCharacterAvatars || [],
         sourcePreferences: input.sourcePreferences || {},
     }),
-    materializeAvatarAssets: (input, references) => materializeHostAvatarReferenceAssets({
+    materializeAvatarAssets: (input, references, context = {}) => materializeHostAvatarReferenceAssets({
         references,
-        getCharacterAvatar: (identityId) => materializeCapturedAvatarSource(input.assetSources?.[identityId]),
-        getUserAvatar: (identityId) => materializeCapturedAvatarSource(input.assetSources?.[identityId]),
+        signal: context.signal,
+        getCharacterAvatar: (identityId, signal) => materializeCapturedAvatarSource(input.assetSources?.[identityId], signal),
+        getUserAvatar: (identityId, signal) => materializeCapturedAvatarSource(input.assetSources?.[identityId], signal),
     }),
     materializePreviousImage: (item) => galleryItemToDataUrl(item),
     resolveSavedAppearance: (input) => captureCanonForGeneration(input).canonSnapshot,
 }));
 
-async function collectSceneGenerationReferences(snapshot) {
+async function collectSceneGenerationReferences(snapshot, _request, context = {}) {
         const { prompt, sender = null, messageId = null, focusText = null, target = null, source: invocation } = snapshot.request;
-        const contributed = await referenceContributorPipeline.collect(snapshot.referenceContributorSnapshot, snapshot.request);
+        const contributed = await referenceContributorPipeline.collect(snapshot.referenceContributorSnapshot, snapshot.request, context);
         notifyBrokenCanon(contributed.omissions, (message) => toastr.info(message, 'Context Image Generation'));
         for (const notice of contributed.notices) toastr.info(notice.message || 'An optional reference was unavailable.', 'Context Image Generation');
         const appearanceTruths = [...new Map(contributed.truths.map((truth) => [truth.identityId, truth])).values()];
@@ -1964,7 +1967,7 @@ function createSceneGenerationPlanAdapter({ references }) {
     return references.plan;
 }
 
-async function dispatchSceneGenerationPlan(dispatchedPlan, signal) {
+async function dispatchSceneGenerationPlan(dispatchedPlan, signal, execution = {}) {
     const context = sceneGenerationDispatchContexts.get(dispatchedPlan);
     if (!context) throw new Error('Scene generation dispatch context is unavailable.');
     const { snapshot, messages, connection, continuitySurface, storyMemoryFeatureForGeneration } = context;
@@ -1980,6 +1983,7 @@ async function dispatchSceneGenerationPlan(dispatchedPlan, signal) {
                 fetchImpl: fetch,
                 getRequestHeaders,
                 mapAspectRatioToSize,
+                telemetry: execution.telemetry,
             },
         });
         if (snapshot.customConnection) {
@@ -2030,14 +2034,16 @@ async function dispatchSceneGenerationPlan(dispatchedPlan, signal) {
 const sceneGenerationKernel = createSceneGenerationKernel({
     capture: captureSceneGenerationRequest,
     collectReferences: collectSceneGenerationReferences,
+    createCoordinationPlan: ({ snapshot }) => createGenerationPlan(snapshot.planInput),
     createPlan: createSceneGenerationPlanAdapter,
-    coordinate: (_key, run, plan) => {
-        const execution = generationCoordinator.enqueue(plan, run);
+    coordinateEarly: (_key, run, plan, options) => {
+        const execution = generationCoordinator.enqueue(plan, run, options);
         currentGenerationRunId = execution.runId || currentGenerationRunId;
         $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
         return execution;
     },
     dispatch: dispatchSceneGenerationPlan,
+    getDeadlineMs: (snapshot) => snapshot.settingsSnapshot.generation_deadline_ms,
     generationKey: (request) => getGenerationKey(request.prompt, request.messageId ?? null, request.target ?? null),
     normalizeError: (error) => attachNormalizedProviderError(error, { providerId: error?.providerId || 'unknown', modelId: error?.modelId }),
 });

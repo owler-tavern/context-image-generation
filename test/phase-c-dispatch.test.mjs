@@ -50,7 +50,7 @@ test('dispatch accepts only a resolved plan and registered transport and forward
 test('dispatch never rereads a changed endpoint from the connection', async () => {
     let received;
     const transports = createTransportRegistry({
-        'fixture-transport': { id: 'fixture-transport', generate: async (input) => { received = input; return {}; } },
+        'fixture-transport': { id: 'fixture-transport', generate: async (input) => { received = input; return { imageData: PNG, mimeType: 'image/png' }; } },
     });
     const connection = { id: 'fixture:default', providerId: 'fixture', baseUrl: 'https://mutable.example', enabled: true };
     await dispatchProviderRoute({ plan: plan(), connection, signal: new AbortController().signal, transportContext: { transports } });
