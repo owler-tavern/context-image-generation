@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 9 partial — live no-spend Settings and slash registration verified; active-chat wand visibility remains untested.
+Task 9 live provider acceptance — wand dispatch reproduced a non-terminal provider wait; branch is NOT READY for live generation.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -85,13 +85,16 @@ Task 9 partial — live no-spend Settings and slash registration verified; activ
 - Task 9 responsive Settings — at 320px, 360px, 480px, and 1280px, `#cig_settings` had no horizontal overflow; the live DOM contained zero CIG Generate actions and zero outfit controls.
 - Task 9 slash registration — typing `/pro` without submitting displayed `/proimagine` and its generation help in SillyTavern's live slash autocomplete; the input was then cleared.
 - Task 9 console — no error-level browser console entries were observed. Host-level settings/deprecation warnings were present and were not attributed to this extension.
+- Authorized LinkAPI wand test — opened an existing local character chat, revealed the message actions, and invoked the CIG wand once with the saved LinkAPI configuration. The wand entered `Generating image…` but remained busy for more than three minutes with no new message attachment, Gallery item, toast, setup issue, or error-level console entry.
+- The stalled page was reloaded to terminate the browser-side request. The second authorized `/proimagine` provider call was deliberately not used because the first request had no terminal outcome and another call could duplicate spend without adding diagnostic value.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
 - Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
 - Live browser acceptance is **PARTIAL** because no character/chat was active: message-wand visibility, keyboard activation, and zero-request behavior across real message/navigation events remain untested.
-- Network-request capture was unavailable through the selected browser surface, so zero provider requests are supported by not invoking any generation/refresh action, not by a complete network trace.
+- Network-request capture was unavailable through the selected browser surface. The earlier no-spend checks invoked no generation action; the later authorized wand test did invoke one provider path, but its request/response status was not observable in a complete network trace.
+- The LinkAPI wand request has an unresolved non-terminal live failure. Whether LinkAPI accepted or billed the request could not be established from the available browser evidence.
 
 ## Decisions
 - Settings is configuration-only.
@@ -101,4 +104,4 @@ Task 9 partial — live no-spend Settings and slash registration verified; activ
 - v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
 
 ## Next action
-Load an active character/chat and complete the remaining no-spend wand/message/navigation checks. Paid wand/slash generation remains separately unauthorized and **NOT TESTED**.
+Diagnose the LinkAPI transport/request timeout and add a bounded terminal failure path before retrying paid wand or slash generation. Slash provider delivery remains **NOT TESTED live**.
