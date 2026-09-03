@@ -210,3 +210,45 @@ test('saved appearance resolves from its own captured assets when previous-image
     assert.deepEqual(savedInput.gallery, [{ id: 'appearance-gallery-a' }]);
     assert.deepEqual(result.references.map((entry) => entry.id), ['look-a']);
 });
+
+test('all intended captured avatar reads block before the provider path instead of silently falling back to text only', async () => {
+    const contributors = createCapturedReferenceContributors({
+        resolveAvatarReferences: () => [
+            { id: 'host:character', role: 'host-avatar', identityId: 'character:ava', assetId: 'asset:ava' },
+        ],
+        materializeAvatarAssets: async () => ({}),
+    });
+    const pipeline = createReferenceContributorPipeline(contributors);
+    let dispatched = 0;
+    const kernel = createSceneGenerationKernel({
+        capture: async (request) => ({ request, referencesEnabled: true, avatar: { enabled: true } }),
+        collectReferences: (snapshot, request) => pipeline.collect(snapshot, request),
+        createPlan: () => ({ id: 'must-not-plan' }),
+        coordinate: async (_key, run) => run(),
+        dispatch: async () => { dispatched += 1; return { imageData: 'AA==', mimeType: 'image/png' }; },
+        generationKey: () => 'missing-avatar',
+    });
+
+    await assert.rejects(
+        kernel.generate({ source: 'wand', destination: 'message', prompt: 'Ava enters.' }),
+        (error) => error?.code === 'AVATAR_REFERENCES_UNAVAILABLE'
+            && /could not be loaded/i.test(error.userMessage),
+    );
+    assert.equal(dispatched, 0);
+});
+
+test('partial captured avatar availability proceeds with an explicit omission notice', async () => {
+    const contributors = createCapturedReferenceContributors({
+        resolveAvatarReferences: () => [
+            { id: 'host:character', role: 'host-avatar', identityId: 'character:ava', assetId: 'asset:ava' },
+            { id: 'host:character:leo', role: 'host-avatar', identityId: 'character:leo', assetId: 'asset:leo' },
+        ],
+        materializeAvatarAssets: async () => ({ 'asset:ava': { data: 'AVA_BYTES', mimeType: 'image/png' } }),
+    });
+
+    const result = await createReferenceContributorPipeline(contributors).collect({ referencesEnabled: true, avatar: { enabled: true } }, {});
+
+    assert.deepEqual(result.references.map((reference) => reference.identityId), ['character:ava', 'character:leo']);
+    assert.deepEqual(result.omissions, [{ id: 'host:character:leo', reason: 'asset-unavailable', contributor: 'avatar' }]);
+    assert.deepEqual(result.notices, [{ contributor: 'avatar', status: 'partial', message: '1 avatar reference could not be loaded and will be omitted.' }]);
+});

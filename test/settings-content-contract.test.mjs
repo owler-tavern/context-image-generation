@@ -149,7 +149,8 @@ test('everyday settings use plain task groups and keep advanced/provider languag
     assert.match(imagesCast, /id="cig_extra_story_tools"[\s\S]*?Story Memory/);
     assert.doesNotMatch(`${preferences}${imagesCast}`, /canon|reference plan|revision|cast override|route contract/i);
     assert.match(preferences, /Framing, continuity, and custom visual direction are saved for the current chat/);
-    assert.match(preferences, /Message depth and system instruction apply to every chat/);
+    assert.match(preferences, /Message depth and generation instruction apply to every chat/);
+    assert.match(preferences, /<label for="cig_system_instruction">Generation instruction<\/label>/u);
 });
 
 test('story extras are opt-in, grouped once, and keep the ordinary view core-only by default', () => {

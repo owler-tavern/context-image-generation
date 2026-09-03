@@ -8,6 +8,7 @@ import {
     persistAcceptedSceneState,
     sceneStatePendingKey,
 } from '../lib/rp/scene-generation.js';
+import { resolveHostAvatarIdentityReferences, selectSceneRelevantAvatarReferences } from '../lib/rp/canon-generation-capture.js';
 
 const identities = [
     { id: 'character:ava', kind: 'character', label: 'Ava', aliases: ['Ava'] },
@@ -96,6 +97,51 @@ test('prompt excludes narrator, absent, and obsolete facts while preserving unkn
     assert.equal(snapshot.state.sceneFacts.cast.some((entry) => entry.identityId === 'user:sam'), false);
     assert.doesNotMatch(snapshot.prompt, /Sam is at the station/);
     assert.doesNotMatch(snapshot.prompt, /Narrator/);
+});
+
+test('production scene snapshots retain inferred cast confidence only for transient avatar selection', () => {
+    const castIdentities = [
+        { id: 'character:ava', kind: 'character', label: 'Ava', hostKey: 'ava.png', aliases: ['Ava'] },
+        { id: 'character:leo', kind: 'character', label: 'Leo', hostKey: 'leo.png', aliases: ['Leo'] },
+    ];
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Leo', role: 'character', mes: 'Leo raises the lantern.' },
+        identities: castIdentities,
+    });
+    const references = resolveHostAvatarIdentityReferences({
+        identities: castIdentities, activeCharacterAvatar: 'ava.png', groupCharacterAvatars: ['ava.png', 'leo.png'],
+    });
+
+    assert.deepEqual(snapshot.state.sceneFacts.cast, [{ identityId: 'character:leo', label: 'Leo', kind: 'character' }]);
+    assert.deepEqual(snapshot.avatarSceneCast, [{ identityId: 'character:leo', label: 'Leo', kind: 'character', confidence: 'high' }]);
+    assert.deepEqual(selectSceneRelevantAvatarReferences({ references, sceneCast: snapshot.avatarSceneCast }).map((reference) => reference.identityId), ['character:leo']);
+});
+
+test('production avatar cast excludes stale persisted members when a director exclusion is present', () => {
+    const castIdentities = [
+        { id: 'character:ava', kind: 'character', label: 'Ava', hostKey: 'ava.png', aliases: ['Ava'] },
+        { id: 'character:leo', kind: 'character', label: 'Leo', hostKey: 'leo.png', aliases: ['Leo'] },
+        { id: 'user:sam', kind: 'user', label: 'Sam', hostKey: 'sam.png', aliases: ['Sam'] },
+    ];
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava raises the lantern.' },
+        identities: castIdentities,
+        priorStoryState: { sceneFacts: { cast: [{ identityId: 'character:leo', label: 'Leo', kind: 'character' }] } },
+        castOverrides: [{ identityId: 'user:sam', action: 'exclude' }],
+    });
+    const references = resolveHostAvatarIdentityReferences({
+        identities: castIdentities, activeCharacterAvatar: 'ava.png', personaAvatar: 'sam.png', groupCharacterAvatars: ['ava.png', 'leo.png'],
+    });
+
+    assert.deepEqual(snapshot.avatarSceneCast, [
+        { identityId: 'character:leo', label: 'Leo', kind: 'character' },
+        { identityId: 'character:ava', label: 'Ava', kind: 'character', confidence: 'high' },
+    ]);
+    assert.deepEqual(selectSceneRelevantAvatarReferences({
+        references,
+        sceneCast: snapshot.avatarSceneCast,
+        castOverrides: snapshot.castOverrides,
+    }).map((reference) => reference.identityId), ['character:ava']);
 });
 
 test('scene state pending entries are chat-scoped and clone inputs', () => {

@@ -80,8 +80,10 @@ test('production passes captured avatar and description preferences into the con
     assert.match(snapshot, /captureReferenceContributorSnapshot\(\{/u);
     assert.match(snapshot, /avatarEnabled: settingsSnapshot\.use_avatars === true/u);
     assert.match(snapshot, /host: hostReferenceState/u);
+    assert.match(snapshot, /sceneCast: sceneSnapshot\.avatarSceneCast/u);
     assert.match(snapshot, /settings: settingsSnapshot/);
     assert.match(source, /descriptionText: snapshot\.settingsSnapshot\.include_descriptions === true/u);
+    assert.match(source, /notifyBrokenCanon\(contributed\.omissions\.filter\(isCanonReferenceOmission\)/u);
 });
 
 test('saved appearance storage is captured by the contributor boundary and never read during async collection', async () => {

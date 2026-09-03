@@ -55,8 +55,8 @@ import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, pr
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { canIncrementallyPrependGalleryItem, createGalleryRenderState, reindexGalleryTileActionTargets } from './lib/gallery-render-state.js';
 import { handleImageArrowNavigation, handleImageGesture, scheduleImageArrowConfiguration } from './lib/rp/image-navigation.js';
-import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from './lib/rp/canon-generation-capture.js';
-import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
+import { captureCanonForGeneration, isCanonReferenceOmission, notifyBrokenCanon, resolveHostAvatarIdentityReferences, selectSceneRelevantAvatarReferences } from './lib/rp/canon-generation-capture.js';
+import { buildGenerationMessages, buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from './lib/rp/reference-message-parts.js';
 import { enforcePreviousImagePolicy, projectSelectedReferenceAssets } from './lib/rp/reference-policy.js';
 import { POPUP_RESULT, POPUP_TYPE, Popup } from '../../../popup.js';
 import {
@@ -1713,6 +1713,16 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const appearanceReferenceState = savedAppearanceEnabled
         ? captureSavedAppearanceContributorState(settings, hostAppearanceContext, gallerySnapshot)
         : null;
+    const appearanceIdentities = appearanceReferenceState?.identities || hostReferenceState.identities;
+    const sceneSnapshot = buildSceneGenerationSnapshot({
+        selectedPassage: focusText,
+        clickedMessage: { name: sender || '', mes: prompt },
+        recentContext: recentMessages,
+        identities: appearanceIdentities,
+        priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
+        settings: settingsSnapshot,
+        castOverrides: effectiveCastOverrides,
+    });
     const referenceContributorSnapshot = captureReferenceContributorSnapshot({
         referencesEnabled: Boolean(capability),
         avatarEnabled: settingsSnapshot.use_avatars === true,
@@ -1724,16 +1734,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
             label: continuationIsCurrent ? 'selected story scene' : 'previous image',
         },
         appearance: appearanceReferenceState,
-    });
-    const appearanceIdentities = referenceContributorSnapshot.identities;
-    const sceneSnapshot = buildSceneGenerationSnapshot({
-        selectedPassage: focusText,
-        clickedMessage: { name: sender || '', mes: prompt },
-        recentContext: recentMessages,
-        identities: appearanceIdentities,
-        priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
-        settings: settingsSnapshot,
-        castOverrides: effectiveCastOverrides,
+        sceneCast: sceneSnapshot.avatarSceneCast || [],
+        castOverrides: sceneSnapshot.castOverrides || [],
     });
     const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
     const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state), ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}) };
@@ -1782,13 +1784,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
 
 async function buildMessages(prompt, sender = null, messageId = null, focusText = null, invocation, plan = null, referenceAssets = {}) {
     if (!plan) throw new TypeError('buildMessages requires a captured GenerationPlan.');
-    const contentParts = [];
-    if (plan.options.systemInstruction) contentParts.push({ type: 'text', text: plan.options.systemInstruction });
-    if (plan.prompt.descriptionText) contentParts.push({ type: 'text', text: plan.prompt.descriptionText });
-    contentParts.push({ type: 'text', text: plan.prompt.messageContent || plan.prompt.sourceMessage });
-    contentParts.push(...buildReferenceMessageParts(plan, referenceAssets));
-
-    return [{ role: 'user', content: contentParts }];
+    return buildGenerationMessages(plan, referenceAssets, buildReferenceMessageParts(plan, referenceAssets));
 }
 
 function getStableSpeakerIdentityId(sender, capturedIdentities = null, hostContext = null) {
@@ -1829,12 +1825,16 @@ async function captureSceneGenerationRequest(request) {
 }
 
 const referenceContributorPipeline = createReferenceContributorPipeline(createCapturedReferenceContributors({
-    resolveAvatarReferences: (input) => resolveHostAvatarIdentityReferences({
-        identities: input.identities || [],
-        activeCharacterAvatar: input.activeCharacterAvatar,
-        personaAvatar: input.personaAvatar,
-        groupCharacterAvatars: input.groupCharacterAvatars || [],
-        sourcePreferences: input.sourcePreferences || {},
+    resolveAvatarReferences: (input) => selectSceneRelevantAvatarReferences({
+        references: resolveHostAvatarIdentityReferences({
+            identities: input.identities || [],
+            activeCharacterAvatar: input.activeCharacterAvatar,
+            personaAvatar: input.personaAvatar,
+            groupCharacterAvatars: input.groupCharacterAvatars || [],
+            sourcePreferences: input.sourcePreferences || {},
+        }),
+        sceneCast: input.sceneCast || [],
+        castOverrides: input.castOverrides || [],
     }),
     materializeAvatarAssets: (input, references, context = {}) => materializeHostAvatarReferenceAssets({
         references,
@@ -1849,7 +1849,7 @@ const referenceContributorPipeline = createReferenceContributorPipeline(createCa
 async function collectSceneGenerationReferences(snapshot, _request, context = {}) {
         const { prompt, sender = null, messageId = null, focusText = null, target = null, source: invocation } = snapshot.request;
         const contributed = await referenceContributorPipeline.collect(snapshot.referenceContributorSnapshot, snapshot.request, context);
-        notifyBrokenCanon(contributed.omissions, (message) => toastr.info(message, 'Context Image Generation'));
+        notifyBrokenCanon(contributed.omissions.filter(isCanonReferenceOmission), (message) => toastr.info(message, 'Context Image Generation'));
         for (const notice of contributed.notices) toastr.info(notice.message || 'An optional reference was unavailable.', 'Context Image Generation');
         const appearanceTruths = [...new Map(contributed.truths.map((truth) => [truth.identityId, truth])).values()];
         const remembered = contributed.references.filter((reference) => reference.role === 'identity-look');

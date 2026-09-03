@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { captureCanonForGeneration, notifyBrokenCanon, resolveHostAvatarIdentityReferences } from '../lib/rp/canon-generation-capture.js';
+import { captureCanonForGeneration, isCanonReferenceOmission, notifyBrokenCanon, resolveHostAvatarIdentityReferences, selectSceneRelevantAvatarReferences } from '../lib/rp/canon-generation-capture.js';
 import { createGenerationPlan } from '../lib/generation-plan.js';
 import { buildReferenceMessageParts, materializeHostAvatarReferenceAssets } from '../lib/rp/reference-message-parts.js';
 
@@ -23,6 +23,77 @@ test('production host candidate projection uses the character and persona stable
         ['host:character', 'character:ava.png'],
         ['host:user', 'user:persona.png'],
     ]);
+});
+
+test('scene cast selection keeps only interpreted or explicitly overridden identities while low-confidence absence preserves v2 fallback references', () => {
+    const identities = [
+        { id: 'character:ava.png', kind: 'character', label: 'Ava', hostKey: 'ava.png' },
+        { id: 'character:leo.png', kind: 'character', label: 'Leo', hostKey: 'leo.png' },
+        { id: 'user:sam.png', kind: 'user', label: 'Sam', hostKey: 'sam.png' },
+    ];
+    const references = resolveHostAvatarIdentityReferences({
+        identities, activeCharacterAvatar: 'ava.png', personaAvatar: 'sam.png', groupCharacterAvatars: ['ava.png', 'leo.png'],
+    });
+
+    assert.deepEqual(selectSceneRelevantAvatarReferences({
+        references,
+        sceneCast: [{ identityId: 'character:leo.png', confidence: 'high' }],
+    }).map((reference) => reference.identityId), ['character:leo.png']);
+    assert.deepEqual(selectSceneRelevantAvatarReferences({
+        references,
+        sceneCast: [],
+        castOverrides: [{ identityId: 'user:sam.png', action: 'focus' }],
+    }).map((reference) => reference.identityId), ['user:sam.png']);
+    assert.deepEqual(selectSceneRelevantAvatarReferences({ references, sceneCast: [] }).map((reference) => reference.identityId), [
+        'character:ava.png', 'user:sam.png', 'character:leo.png',
+    ]);
+});
+
+test('explicit include and focus add only their identity to the confident current cast', () => {
+    const identities = [
+        { id: 'character:ava.png', kind: 'character', label: 'Ava', hostKey: 'ava.png' },
+        { id: 'character:leo.png', kind: 'character', label: 'Leo', hostKey: 'leo.png' },
+        { id: 'user:sam.png', kind: 'user', label: 'Sam', hostKey: 'sam.png' },
+    ];
+    const references = resolveHostAvatarIdentityReferences({
+        identities, activeCharacterAvatar: 'ava.png', personaAvatar: 'sam.png', groupCharacterAvatars: ['ava.png', 'leo.png'],
+    });
+    const productionAvatarCast = [
+        { identityId: 'character:ava.png', label: 'Ava', kind: 'character', confidence: 'high' },
+        { identityId: 'character:leo.png', label: 'Leo', kind: 'character' },
+    ];
+
+    for (const action of ['include', 'focus']) {
+        assert.deepEqual(selectSceneRelevantAvatarReferences({
+            references,
+            sceneCast: productionAvatarCast,
+            castOverrides: [{ identityId: 'user:sam.png', action }],
+        }).map((reference) => reference.identityId), ['character:ava.png', 'user:sam.png']);
+    }
+});
+
+test('exclude-only correction removes its identity from the v2 fallback when cast confidence is absent or low', () => {
+    const identities = [
+        { id: 'character:ava.png', kind: 'character', label: 'Ava', hostKey: 'ava.png' },
+        { id: 'character:leo.png', kind: 'character', label: 'Leo', hostKey: 'leo.png' },
+        { id: 'user:sam.png', kind: 'user', label: 'Sam', hostKey: 'sam.png' },
+    ];
+    const references = resolveHostAvatarIdentityReferences({
+        identities, activeCharacterAvatar: 'ava.png', personaAvatar: 'sam.png', groupCharacterAvatars: ['ava.png', 'leo.png'],
+    });
+
+    for (const sceneCast of [[], [{ identityId: 'character:leo.png', confidence: 'low' }]]) {
+        assert.deepEqual(selectSceneRelevantAvatarReferences({
+            references,
+            sceneCast,
+            castOverrides: [{ identityId: 'user:sam.png', action: 'exclude' }],
+        }).map((reference) => reference.identityId), ['character:ava.png', 'character:leo.png']);
+    }
+});
+
+test('avatar transport failures are not routed to the saved-look warning while canon omissions remain eligible', () => {
+    assert.equal(isCanonReferenceOmission({ id: 'host:character', reason: 'asset-unavailable', contributor: 'avatar' }), false);
+    assert.equal(isCanonReferenceOmission({ id: 'look:gone', reason: 'missing-look' }), true);
 });
 
 test('production capture freezes the current chat look before later chat/library changes', () => {
