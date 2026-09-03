@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createRunCoordinator } from '../lib/generation-coordinator.js';
+import { cancelCancellableRuns, listCancellableRunIds } from '../lib/generation-controls.js';
 
 const plan = (id, target = 'chat:1') => ({
     schema: 2, id, idempotencyKey: id, target: { chatId: target },
@@ -59,6 +60,40 @@ test('RunCoordinator starts a fresh run for the same message after completion', 
     assert.equal(second.imageData, 'second');
     assert.equal(calls, 2);
     assert.equal(coordinator.get('run:2').state, 'completed');
+});
+
+test('cancellation control retains an older pre-commit run after a newer run completes', async () => {
+    const coordinator = createRunCoordinator({ maxConcurrent: 2 });
+    let releaseFirst;
+    const first = coordinator.enqueue(plan('run-a', 'chat:a'), async () => new Promise((resolve) => { releaseFirst = resolve; }));
+    const second = await coordinator.enqueue(plan('run-b', 'chat:b'), async () => ({ imageData: 'second', mimeType: 'image/png' }));
+
+    assert.equal(second.imageData, 'second');
+    assert.deepEqual(listCancellableRunIds(coordinator.list()), ['run:1']);
+    assert.deepEqual(cancelCancellableRuns(coordinator), ['run:1']);
+    await assert.rejects(first, (error) => error.name === 'AbortError');
+    releaseFirst({ imageData: 'late', mimeType: 'image/png' });
+});
+
+test('commit transition notifies the cancellation control when no pre-commit runs remain', async () => {
+    const coordinator = createRunCoordinator();
+    const controlStates = [];
+    let release;
+    let resolveCommitted;
+    const committed = new Promise((resolve) => { resolveCommitted = resolve; });
+    coordinator.subscribe(() => controlStates.push(listCancellableRunIds(coordinator.list())));
+    const pending = coordinator.enqueue(plan('committed-only'), async (_signal, { beginCommit }) => {
+        beginCommit();
+        resolveCommitted();
+        return new Promise((resolve) => { release = resolve; });
+    });
+
+    await committed;
+
+    assert.deepEqual(controlStates.at(-1), []);
+    assert.equal(cancelCancellableRuns(coordinator).length, 0);
+    release({ imageData: 'saved', mimeType: 'image/png' });
+    await pending;
 });
 
 test('RunCoordinator terminal records contain normalized provider fields only', async () => {

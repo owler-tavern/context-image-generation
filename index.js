@@ -36,6 +36,7 @@ import { cancelModelRefreshUi, createModelSelectorController, renderManagedModel
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
+import { cancelCancellableRuns, listCancellableRunIds } from './lib/generation-controls.js';
 import { buildFocusedMessageContent } from './lib/rp-selection.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
@@ -49,7 +50,7 @@ import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generatio
 import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
-import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, loadExtensionSettings, persistExtensionSettings, providerSettingsEquivalent, replaceWhenChanged } from './lib/settings-migration-change.js';
+import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, loadExtensionSettings, persistExtensionSettings, providerSettingsEquivalent, removeRetiredGenerationDeadline, replaceWhenChanged } from './lib/settings-migration-change.js';
 import { connectionRevision, createCustomConnectionId, customCredentialRef, isCurrentCustomDiscoveryCompletion, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
@@ -173,7 +174,6 @@ const defaultSettings = {
     thinking_level: 'auto',
     use_google_search: false,
     auto_generate: 'off',
-    generation_deadline_ms: 120000,
     use_avatars: false,
     regenerate_on_swipe: false,
     include_descriptions: false,
@@ -194,7 +194,6 @@ const defaultSettings = {
 
 const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createRunCoordinator();
-let currentGenerationRunId = null;
 let lastGenerationPlanInspection = null;
 let setupRuntimeIssue = null;
 let storyMemoryController = null;
@@ -214,11 +213,14 @@ const galleryRenderState = createGalleryRenderState({
     renderAll: () => renderGallery(),
     prependOne: (item) => prependGalleryItem(item),
 });
-generationCoordinator.subscribe((event) => {
-    if (event.to === 'running' || event.to === 'cancelling') currentGenerationRunId = event.runId;
-    if (['completed', 'failed', 'stale', 'cancelled'].includes(event.to) && currentGenerationRunId === event.runId) currentGenerationRunId = null;
+function updateGenerationCancellationControl() {
+    const hasCancellableRun = listCancellableRunIds(generationCoordinator.list()).length > 0;
     const cancelControl = $('#cig_cancel_generation');
-    if (cancelControl.length) cancelControl.prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
+    if (cancelControl.length) cancelControl.prop('disabled', !hasCancellableRun).toggle(hasCancellableRun);
+}
+
+generationCoordinator.subscribe(() => {
+    updateGenerationCancellationControl();
 });
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
@@ -1244,6 +1246,7 @@ async function loadSettings() {
         settingsMigrated = true;
     }
     const cigSettings = extension_settings[extensionName];
+    if (removeRetiredGenerationDeadline(cigSettings)) settingsMigrated = true;
     if (!hadExplicitPreviousImageOptIn) {
         // Privacy-first migration: old versions could leave this enabled as
         // test/profile state. Require one deliberate opt-in on the new UI.
@@ -2036,14 +2039,12 @@ const sceneGenerationKernel = createSceneGenerationKernel({
     collectReferences: collectSceneGenerationReferences,
     createCoordinationPlan: ({ snapshot }) => createGenerationPlan(snapshot.planInput),
     createPlan: createSceneGenerationPlanAdapter,
-    coordinateEarly: (_key, run, plan, options) => {
-        const execution = generationCoordinator.enqueue(plan, run, options);
-        currentGenerationRunId = execution.runId || currentGenerationRunId;
-        $('#cig_cancel_generation').prop('disabled', !currentGenerationRunId).toggle(!!currentGenerationRunId);
+    coordinateEarly: (_key, run, plan) => {
+        const execution = generationCoordinator.enqueue(plan, run);
+        updateGenerationCancellationControl();
         return execution;
     },
     dispatch: dispatchSceneGenerationPlan,
-    getDeadlineMs: (snapshot) => snapshot.settingsSnapshot.generation_deadline_ms,
     generationKey: (request) => getGenerationKey(request.prompt, request.messageId ?? null, request.target ?? null),
     normalizeError: (error) => attachNormalizedProviderError(error, { providerId: error?.providerId || 'unknown', modelId: error?.modelId }),
 });
@@ -3789,7 +3790,7 @@ jQuery(async () => {
     });
 
     $('#cig_cancel_generation').on('click', function () {
-        if (currentGenerationRunId) generationCoordinator.cancel(currentGenerationRunId);
+        cancelCancellableRuns(generationCoordinator);
     });
     $('#cig_show_preflight').on('click', renderAdvancedPlanInspector);
     $('#cig_export_diagnostics').on('click', exportDiagnostics);

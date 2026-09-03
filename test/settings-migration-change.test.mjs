@@ -6,6 +6,7 @@ import {
     outfitCatalogEquivalent,
     outfitPendingStateEquivalent,
     providerSettingsEquivalent,
+    removeRetiredGenerationDeadline,
     replaceWhenChanged,
 } from '../lib/settings-migration-change.js';
 
@@ -33,6 +34,14 @@ test('replaceWhenChanged returns the migrated value when focused equivalence det
 
     assert.equal(result.changed, true);
     assert.strictEqual(result.value, migrated);
+});
+
+test('removes the retired generation deadline from persisted settings before saving', () => {
+    const settings = { provider: 'linkapi', generation_deadline_ms: 120000 };
+
+    assert.equal(removeRetiredGenerationDeadline(settings), true);
+    assert.equal(Object.hasOwn(settings, 'generation_deadline_ms'), false);
+    assert.equal(removeRetiredGenerationDeadline(settings), false);
 });
 
 test('provider migration equivalence treats a reordered persisted record as changed to preserve save behavior', () => {

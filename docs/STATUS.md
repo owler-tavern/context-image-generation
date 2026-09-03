@@ -104,4 +104,4 @@ Task 9 live provider acceptance — wand dispatch reproduced a non-terminal prov
 - v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
 
 ## Next action
-Diagnose the LinkAPI transport/request timeout and add a bounded terminal failure path before retrying paid wand or slash generation. Slash provider delivery remains **NOT TESTED live**.
+Diagnose the LinkAPI transport/request behavior before retrying paid wand or slash generation. Generation waits for a provider response unless the user explicitly cancels an active pre-commit run; Slash provider delivery remains **NOT TESTED live**.

@@ -12,16 +12,6 @@ import { createMessageDeliveryAdapter } from '../lib/scene-generation/delivery.j
 
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-async function settlesWithin(promise, ms = 100) {
-    return Promise.race([
-        promise.then(
-            (value) => ({ status: 'fulfilled', value }),
-            (error) => ({ status: 'rejected', error }),
-        ),
-        wait(ms).then(() => ({ status: 'timed-out' })),
-    ]);
-}
-
 function plan(id, target = 'chat:deadline') {
     return {
         schema: 2,
@@ -55,7 +45,7 @@ function injectedPlan(id = 'injected-result') {
     });
 }
 
-test('generation-wide deadline settles a never-ending avatar materialization and releases its target', async () => {
+test('generation remains active past the legacy deadline until the caller cancels it', async () => {
     const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
     let avatarSignal;
     const contributors = createCapturedReferenceContributors({
@@ -67,77 +57,52 @@ test('generation-wide deadline settles a never-ending avatar materialization and
         },
     });
     const pipeline = createReferenceContributorPipeline(contributors);
-    const pending = coordinator.enqueue(plan('avatar-timeout'), (signal, run) => pipeline.collect({
+    const pending = coordinator.enqueue(plan('avatar-no-deadline'), (signal, run) => pipeline.collect({
         referencesEnabled: true,
         avatar: { enabled: true },
     }, {}, { signal, telemetry: run.telemetry }));
+    const outcome = pending.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error }),
+    );
 
-    const settled = await settlesWithin(pending);
+    await wait(30);
 
+    assert.equal(avatarSignal.aborted, false);
+    assert.equal(coordinator.get('run:1').state, 'running');
+    assert.equal(coordinator.cancel('run:1'), true);
+    const settled = await outcome;
     assert.equal(settled.status, 'rejected');
-    assert.equal(settled.error.code, 'GENERATION_TIMEOUT');
+    assert.equal(settled.error.name, 'AbortError');
     assert.equal(avatarSignal.aborted, true);
-    assert.equal(coordinator.get('run:1').state, 'failed');
-    await coordinator.enqueue(plan('avatar-after-timeout'), async () => ({ imageData: 'AA==' }));
-    assert.equal(coordinator.get('run:2').state, 'completed');
+    assert.equal(coordinator.get('run:1').state, 'cancelled');
 });
 
-test('generation-wide deadline aborts a never-settling Gemini host proxy POST through its original signal', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
-    let postSignal;
-    const dispatchedPlan = createGenerationPlan({
-        ...plan('host-post-timeout'),
-        resolved: {
-            ...plan('host-post-timeout').resolved,
-            connectionId: 'linkapi:default',
-            endpoint: 'https://api.linkapi.ai',
-            routeEvidence: { state: 'verified', source: 'built-in', observedAt: '2026-09-02T00:00:00.000Z', protocol: 'gemini-compatible', requestShapeRevision: 'st-gemini-proxy-v1' },
-        },
-        prompt: { sourceMessage: 'private prompt' },
-        messages: [{ role: 'user', content: 'private prompt' }],
-    });
-    const pending = coordinator.enqueue(dispatchedPlan, (signal, run) => dispatchProviderRoute({
-        plan: dispatchedPlan,
-        connection: { id: 'linkapi:default', providerId: 'linkapi', kind: 'browser-api-key', enabled: true },
-        signal,
-        transportContext: {
-            apiKey: 'credential-not-for-telemetry',
-            telemetry: run.telemetry,
-            fetchImpl: async (_url, init) => new Promise((_resolve, reject) => {
-                postSignal = init.signal;
-                init.signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
-            }),
-        },
-    }));
-
-    const settled = await settlesWithin(pending);
-
-    assert.equal(settled.status, 'rejected');
-    assert.equal(settled.error.code, 'GENERATION_TIMEOUT');
-    assert.equal(postSignal.aborted, true);
-    assert.equal(coordinator.get('run:1').state, 'failed');
-});
-
-test('terminal telemetry is allowlisted, redacted, and does not retain a stuck run', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
-    const pending = coordinator.enqueue(plan('telemetry-timeout'), (_signal, run) => {
+test('terminal telemetry is allowlisted and redacted on caller cancellation', async () => {
+    const coordinator = createRunCoordinator();
+    const pending = coordinator.enqueue(plan('telemetry-cancelled'), (signal, run) => {
         run.telemetry.record('reference', 'started', {
             prompt: 'private prompt', credential: 'credential-not-for-telemetry', url: 'https://private.invalid/avatar.png', message: 'private message', asset: 'base64-data',
         });
-        return new Promise(() => {});
+        return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
     });
+    const outcome = pending.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error }),
+    );
+    assert.equal(coordinator.cancel('run:1'), true);
 
-    const settled = await settlesWithin(pending);
+    const settled = await outcome;
     const record = coordinator.get('run:1');
     const serialized = JSON.stringify(record);
 
     assert.equal(settled.status, 'rejected');
-    assert.equal(record.state, 'failed');
+    assert.equal(record.state, 'cancelled');
     assert.deepEqual(Object.keys(record.telemetry[0]).sort(), ['durationMs', 'runId', 'stage', 'status', 'timestamp']);
     assert.deepEqual(record.telemetry.map((event) => [event.stage, event.status]), [
         ['coordinate', 'started'],
         ['reference', 'started'],
-        ['coordinate', 'timed_out'],
+        ['coordinate', 'cancelled'],
     ]);
     assert.doesNotMatch(serialized, /private prompt|credential-not-for-telemetry|private\.invalid|private message|base64-data/i);
 });
@@ -186,8 +151,8 @@ test('diagnostic exports retain only allowlisted stage telemetry', async () => {
     assert.doesNotMatch(JSON.stringify(exported), /private prompt|secret|base64-data/i);
 });
 
-test('deadline settles the caller while an uncooperative operation still owns its target and slot', async () => {
-    const coordinator = createRunCoordinator({ maxConcurrent: 1, generationDeadlineMs: 10 });
+test('caller cancellation preserves target and slot ownership until an uncooperative operation releases', async () => {
+    const coordinator = createRunCoordinator({ maxConcurrent: 1 });
     let release;
     let secondCalls = 0;
     const first = coordinator.enqueue(plan('occupancy:first', 'chat:occupied'), async (signal) => {
@@ -197,14 +162,19 @@ test('deadline settles the caller while an uncooperative operation still owns it
         });
         return { imageData: 'late' };
     });
-    const settled = await settlesWithin(first);
+    const outcome = first.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error }),
+    );
+    assert.equal(coordinator.cancel('run:1'), true);
+    const settled = await outcome;
     const second = coordinator.enqueue(plan('occupancy:second', 'chat:occupied'), async () => {
         secondCalls += 1;
         return { imageData: 'second' };
     });
 
-    assert.equal(settled.error.code, 'GENERATION_TIMEOUT');
-    assert.equal(coordinator.get('run:1').state, 'failed');
+    assert.equal(settled.error.name, 'AbortError');
+    assert.equal(coordinator.get('run:1').state, 'cancelled');
     assert.equal(coordinator.get('run:2').state, 'queued');
     assert.equal(secondCalls, 0);
 
@@ -213,39 +183,52 @@ test('deadline settles the caller while an uncooperative operation still owns it
     assert.equal(secondCalls, 1);
 });
 
-test('pre-commit deadline aborts dispatch and does not start delivery', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
+test('pre-commit caller cancellation aborts dispatch and does not start delivery', async () => {
+    const coordinator = createRunCoordinator();
     let dispatchSignal;
+    let runId;
+    let dispatchStarted;
     let deliveryCalls = 0;
     const kernel = createSceneGenerationKernel({
         capture: async (request) => ({ request, planInput: plan('pre-commit-timeout') }),
         createCoordinationPlan: ({ snapshot }) => snapshot.planInput,
         collectReferences: async () => ({ references: [] }),
         createPlan: () => ({ id: 'delivery-final' }),
-        coordinateEarly: (_key, run, coordinationPlan, options) => coordinator.enqueue(coordinationPlan, run, options),
+        coordinateEarly: (_key, run, coordinationPlan) => {
+            const pending = coordinator.enqueue(coordinationPlan, run);
+            runId = pending.runId;
+            return pending;
+        },
         coordinate: () => { throw new Error('legacy coordinate must not run'); },
         dispatch: async (_plan, signal) => new Promise((_resolve, reject) => {
             dispatchSignal = signal;
+            dispatchStarted();
             signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true });
         }),
         generationKey: () => 'pre-commit-timeout',
-        getDeadlineMs: () => 10,
     });
 
-    const settled = await settlesWithin(kernel.generate(
+    const pending = kernel.generate(
         { source: 'wand', destination: 'message', prompt: 'scene' },
         { deliver: async () => { deliveryCalls += 1; } },
-    ));
+    );
+    const outcome = pending.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error }),
+    );
+    await new Promise((resolve) => { dispatchStarted = resolve; });
+    assert.equal(coordinator.cancel(runId), true);
+    const settled = await outcome;
 
     assert.equal(settled.status, 'rejected');
-    assert.equal(settled.error.code, 'GENERATION_TIMEOUT');
+    assert.equal(settled.error.name, 'AbortError');
     assert.equal(dispatchSignal.aborted, true);
     assert.equal(deliveryCalls, 0);
-    assert.equal(coordinator.get('run:1').state, 'failed');
+    assert.equal(coordinator.get('run:1').state, 'cancelled');
 });
 
-test('commit boundary disarms timeout and ignores cancellation until persistence completes', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
+test('commit boundary rejects cancellation until persistence completes', async () => {
+    const coordinator = createRunCoordinator();
     let runId;
     let releaseSave;
     let saveStarted;
@@ -254,15 +237,14 @@ test('commit boundary disarms timeout and ignores cancellation until persistence
         createCoordinationPlan: ({ snapshot }) => snapshot.planInput,
         collectReferences: async () => ({ references: [] }),
         createPlan: () => ({ id: 'commit-success-final' }),
-        coordinateEarly: (_key, run, coordinationPlan, options) => {
-            const pending = coordinator.enqueue(coordinationPlan, run, options);
+        coordinateEarly: (_key, run, coordinationPlan) => {
+            const pending = coordinator.enqueue(coordinationPlan, run);
             runId = pending.runId;
             return pending;
         },
         coordinate: () => { throw new Error('legacy coordinate must not run'); },
         dispatch: async () => ({ imageData: 'AA==', mimeType: 'image/png' }),
         generationKey: () => 'commit-success',
-        getDeadlineMs: () => 10,
     });
     const delivery = createMessageDeliveryAdapter({
         saveImage: async () => 'gallery/cig.png',
@@ -281,8 +263,6 @@ test('commit boundary disarms timeout and ignores cancellation until persistence
         { deliver: (value) => delivery.deliver(value) },
     );
     await new Promise((resolve) => { saveStarted = resolve; });
-    await wait(20);
-
     assert.equal(coordinator.cancel(runId), false);
     assert.equal(coordinator.get(runId).state, 'running');
     releaseSave({ saved: true });
@@ -301,17 +281,16 @@ test('commit boundary disarms timeout and ignores cancellation until persistence
 });
 
 test('a committed delivery reports its actual persistence failure', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
+    const coordinator = createRunCoordinator();
     const kernel = createSceneGenerationKernel({
         capture: async (request) => ({ request, planInput: plan('commit-failure') }),
         createCoordinationPlan: ({ snapshot }) => snapshot.planInput,
         collectReferences: async () => ({ references: [] }),
         createPlan: () => ({ id: 'commit-failure-final' }),
-        coordinateEarly: (_key, run, coordinationPlan, options) => coordinator.enqueue(coordinationPlan, run, options),
+        coordinateEarly: (_key, run, coordinationPlan) => coordinator.enqueue(coordinationPlan, run),
         coordinate: () => { throw new Error('legacy coordinate must not run'); },
         dispatch: async () => ({ imageData: 'AA==', mimeType: 'image/png' }),
         generationKey: () => 'commit-failure',
-        getDeadlineMs: () => 10,
     });
 
     await assert.rejects(
@@ -485,10 +464,12 @@ test('message delivery records committed chat-save failure and final Gallery per
 });
 
 test('reference and provider dependencies cannot obtain the private commit capability', async () => {
-    const coordinator = createRunCoordinator({ generationDeadlineMs: 10 });
+    const coordinator = createRunCoordinator();
     let referenceContext;
     let dispatchContext;
     let deliveryCalls = 0;
+    let runId;
+    let dispatchStarted;
     const kernel = createSceneGenerationKernel({
         capture: async (request) => ({ request, planInput: plan('private-commit-capability') }),
         createCoordinationPlan: ({ snapshot }) => snapshot.planInput,
@@ -497,31 +478,40 @@ test('reference and provider dependencies cannot obtain the private commit capab
             return { references: [] };
         },
         createPlan: () => ({ id: 'private-commit-capability-final' }),
-        coordinateEarly: (_key, run, coordinationPlan, options) => coordinator.enqueue(coordinationPlan, run, options),
+        coordinateEarly: (_key, run, coordinationPlan) => {
+            const pending = coordinator.enqueue(coordinationPlan, run);
+            runId = pending.runId;
+            return pending;
+        },
         coordinate: () => { throw new Error('legacy coordinate must not run'); },
-        dispatch: async (_plan, _signal, context) => {
+        dispatch: async (_plan, signal, context) => {
             dispatchContext = context;
             context.beginCommit?.();
-            await wait(30);
-            return { imageData: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB', mimeType: 'image/png' };
+            dispatchStarted();
+            return new Promise((_resolve, reject) => signal.addEventListener('abort', () => reject(Object.assign(new Error('aborted'), { name: 'AbortError' })), { once: true }));
         },
         generationKey: () => 'private-commit-capability',
-        getDeadlineMs: () => 10,
     });
 
-    const settled = await settlesWithin(kernel.generate(
+    const pending = kernel.generate(
         { source: 'wand', destination: 'message', prompt: 'scene' },
         { deliver: async () => { deliveryCalls += 1; } },
-    ));
+    );
+    const outcome = pending.then(
+        (value) => ({ status: 'fulfilled', value }),
+        (error) => ({ status: 'rejected', error }),
+    );
+    await new Promise((resolve) => { dispatchStarted = resolve; });
+    assert.equal(coordinator.cancel(runId), true);
+    const settled = await outcome;
 
     assert.equal(settled.status, 'rejected');
-    assert.equal(settled.error.code, 'GENERATION_TIMEOUT');
+    assert.equal(settled.error.name, 'AbortError');
     assert.equal(Object.hasOwn(referenceContext, 'beginCommit'), false);
     assert.equal(Object.hasOwn(dispatchContext, 'beginCommit'), false);
     assert.deepEqual(Object.keys(referenceContext).sort(), ['runId', 'signal', 'telemetry']);
     assert.deepEqual(Object.keys(dispatchContext).sort(), ['runId', 'signal', 'telemetry']);
     assert.equal(deliveryCalls, 0);
-    await wait(30);
 });
 
 test('shared decode boundary rejects empty adapter results without reporting decode completion', async () => {
