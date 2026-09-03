@@ -838,7 +838,7 @@ The correction preserves the accepted two-entry architecture and narrows compati
 - [x] Route custom Refresh Models work through the cancellable discovery coordinator and reset busy/disabled/a11y UI state on provider switch even when no coordinator operation is found.
 - [x] Correct Settings, README, developer/product/release documentation, ROADMAP, and ADR-002 so cinematic suggestions and Story Memory stage only for the next wand; wand and slash remain the manual generation actions.
 - [x] Add failing regression contracts before each production fix and make the focused slices green without live or paid provider calls.
-- [ ] Run final affected-suite, syntax, full deterministic, and diff checks.
-- [ ] Commit only explicit correction files plus the accepted ADR-002 and this plan; leave `.gitignore`, `AGENTS.md`, ADR-001, images, and unrelated metadata unchanged.
+- [x] Run final affected-suite, syntax, full deterministic, and diff checks: 890/890 tests, 82/82 syntax checks, and clean diff validation.
+- [x] Commit only explicit correction files plus the accepted ADR-002, this plan, and the user-requested repository `AGENTS.md`; leave `.gitignore`, ADR-001, images, and unrelated metadata unchanged.
 
-**Current checkpoint:** focused correction slices are green. Full deterministic verification and allowlist commits remain.
+**Current checkpoint:** correction commit `5ea94ca` passed independent Sol re-review with no remaining P0/P1 findings. Task 9 live no-spend UAT remains separate.

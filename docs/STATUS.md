@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Final-review correction round 1 — focused and full deterministic verification are green; explicit allowlist commit and independent re-review remain.
+Task 8 complete — deterministic verification and independent Sol re-review are green; Task 9 live no-spend UAT remains.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -26,7 +26,7 @@ Final-review correction round 1 — focused and full deterministic verification 
 - Added real extension-settings load/save and historical Story Memory artifact-reader coverage for compatibility preservation.
 - Carried the current opaque `outfitState` through visible-canon replay before its first save and during final cleanup, even when the historical candidate omits the field or contains a stale value.
 - Restored routine chat-canon persistence to SillyTavern's existing `saveChatConditional` coordination path; the preservation seam no longer selects direct one-to-one or group writers.
-- Reconciled Settings copy with ADR-002: provider/model refresh is discoverable, Settings remains configuration-only, and cinematic/Story Memory surfaces only stage context for wand/slash.
+- Reconciled Settings copy with ADR-002: provider/model refresh is discoverable, Settings remains configuration-only, and cinematic/Story Memory surfaces stage context only for the next wand.
 - Removed retired outfit-only CSS selectors while retaining shared layout and cinematic suggestion styling.
 - Reconciled PRODUCT, README, DEVELOPER_GUIDE, and ROADMAP with the two-entry v2.5 boundary; added `docs/V2_5_RELEASE_NOTES.md` with evidence and deferrals. Approved pre-existing README/DEVELOPER_GUIDE opening and ownership hunks remain unchanged.
 - Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
@@ -85,7 +85,7 @@ Final-review correction round 1 — focused and full deterministic verification 
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
 - Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
-- Independent re-review of final-review correction round 1 is outstanding.
+- Live browser acceptance remains outstanding; deterministic Sol re-review found no remaining P0/P1 issue.
 
 ## Decisions
 - Settings is configuration-only.
@@ -95,4 +95,4 @@ Final-review correction round 1 — focused and full deterministic verification 
 - v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
 
 ## Next action
-Commit the reviewed correction with explicit allowlists, then obtain independent Sol re-review. Task 9 live no-spend UAT remains separate.
+Run Task 9 live no-spend UAT in the loaded SillyTavern host without invoking wand/slash generation against a paid provider.
