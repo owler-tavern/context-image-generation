@@ -27,7 +27,7 @@ test('reconciles scene facts while preserving durable identity facts', () => {
 
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
     assert.equal(result.nextState.sceneFacts.location, 'library');
-    assert.equal(Object.hasOwn(result.nextState.sceneFacts, 'outfits'), false);
+    assert.deepEqual(result.nextState.sceneFacts.outfits, prior.sceneFacts.outfits);
     assert.deepEqual(result.nextState.sceneFacts.objects, [
         { value: 'map', holderIdentityId: 'character:ava' },
         { value: 'silver lantern', holderIdentityId: 'character:ava' },
@@ -41,18 +41,28 @@ test('reconciles scene facts while preserving durable identity facts', () => {
     });
 });
 
-test('does not erase durable or unobserved non-outfit scene facts when the new scene is unknown or partial', () => {
+test('preserves opaque legacy outfits without accepting interpreted replacements', () => {
     const prior = {
         schema: 1,
         durableIdentityFacts: { 'character:ava': ['Ava is left-handed.'] },
-        sceneFacts: { location: 'station', outfits: [{ identityId: 'character:ava', value: 'red coat' }] },
+        sceneFacts: {
+            location: 'station',
+            outfits: { schema: 9, legacyPayload: [{ owner: 'character:ava', value: 'red coat' }], futureField: { keep: true } },
+        },
     };
-    const result = reconcileStoryState(prior, { location: { status: 'unknown' }, outfits: [] });
+    const result = reconcileStoryState(prior, {
+        location: { status: 'unknown' },
+        outfits: [{ identityId: 'character:ava', value: 'interpreted replacement must be ignored' }],
+        sceneSignals: { outfits: { clear: true, confidence: 'high' } },
+    });
 
     assert.deepEqual(result.nextState.durableIdentityFacts, prior.durableIdentityFacts);
     assert.equal(result.nextState.sceneFacts.location, 'station');
-    assert.equal(Object.hasOwn(result.nextState.sceneFacts, 'outfits'), false);
+    assert.deepEqual(result.nextState.sceneFacts.outfits, prior.sceneFacts.outfits);
+    assert.notEqual(result.nextState.sceneFacts.outfits, prior.sceneFacts.outfits);
     assert.deepEqual(result.removedSceneFacts, {});
+    assert.deepEqual(result.addedSceneFacts, {});
+    assert.deepEqual(result.updatedSceneFacts, {});
 });
 
 test('clears a prior scene fact only on explicit high-confidence removal evidence', () => {

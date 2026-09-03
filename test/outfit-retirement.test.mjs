@@ -136,7 +136,7 @@ test('new generation plans ignore retired outfit inputs while a real historical 
     assert.deepEqual(historicalArtifact.cig_continuity_snapshot.activeOutfits[0].outfit, { name: 'Evening' });
 });
 
-test('current scene attire stays ordinary prompt text and never becomes extracted, retained, inspected, or provenance state', () => {
+test('current scene attire stays ordinary prompt text while opaque legacy outfit facts are preserved but never interpreted', () => {
     const snapshot = buildSceneGenerationSnapshot({
         clickedMessage: { name: 'Ava', mes: 'Ava wears a blue coat. Ava holds a silver lantern. Ava is in the library.' },
         identities: [{ id: 'character:ava', kind: 'character', label: 'Ava' }],
@@ -149,7 +149,9 @@ test('current scene attire stays ordinary prompt text and never becomes extracte
     assert.match(snapshot.prompt, /Ava wears a blue coat/u);
     assert.equal(Object.hasOwn(snapshot.interpretation, 'outfits'), false);
     assert.equal(Object.hasOwn(snapshot.interpretation.sceneSignals, 'outfits'), false);
-    assert.equal(Object.hasOwn(snapshot.state.sceneFacts, 'outfits'), false);
+    assert.deepEqual(snapshot.state.sceneFacts.outfits, [
+        { identityId: 'character:ava', value: 'red dress' },
+    ]);
     assert.doesNotMatch(snapshot.prompt, /^Outfits:/mu);
     assert.doesNotMatch(JSON.stringify(snapshot.inspection), /outfit|red dress/iu);
     assert.deepEqual(snapshot.state.sceneFacts.objects, [

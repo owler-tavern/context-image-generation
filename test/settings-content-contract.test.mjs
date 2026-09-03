@@ -80,9 +80,11 @@ test('ADR-002 keeps Settings configuration-only and makes model refresh discover
     assert.doesNotMatch(settings, /outfit\s+(?:create|creation|select|selection|lock|controls)|attire\s+controls/iu);
     assert.doesNotMatch(settings, /automatic\s+generation|generate\s+on\s+swipe|automatic story tools/iu);
     assert.doesNotMatch(settings, /(?:Cinematic|Iteration|Story Memory)[^<]*(?:generation entry|generate from|generation action)/iu);
-    assert.match(settings, /Cinematic suggestions stage context for the next wand or slash command\./u);
+    assert.match(settings, /The wand and slash command remain the only manual generation actions\./u);
+    assert.match(settings, /Cinematic suggestions stage context for the next wand\./u);
     assert.match(settings, /Suggestions never call a provider\./u);
-    assert.match(settings, /before staging it as context for the next wand or slash command\./u);
+    assert.match(settings, /before staging it as context for the next wand\./u);
+    assert.doesNotMatch(settings, /next wand or slash command/iu);
 });
 
 test('Refresh Models discovery is not generation verification in release docs', () => {
@@ -103,7 +105,7 @@ test('Images and Cast leads with current chat characters and progressively discl
     assert.match(imagesCast, /Remember a generated image as a reusable character appearance\./);
 });
 
-test('Gallery keeps only semantic non-generative controls; the wand is the sole generation entry', () => {
+test('Gallery keeps only semantic non-generative controls; wand and slash remain the generation entries', () => {
     assert.equal(settings.includes('id="cig_generate_btn"'), false);
     for (const id of ['cig_clear_gallery']) {
         const button = settings.match(new RegExp(`<button\\b[^>]*id="${id}"[^>]*>`));

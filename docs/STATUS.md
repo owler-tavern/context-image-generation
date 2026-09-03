@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 8 — deterministic regression and independent critique completed; deterministic acceptance record ready to commit.
+Final-review correction round 1 — focused and full deterministic verification are green; explicit allowlist commit and independent re-review remain.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -32,7 +32,11 @@ Task 8 — deterministic regression and independent critique completed; determin
 - Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
 - Corrected the Task 7 review finding: README and DEVELOPER_GUIDE now distinguish catalog discovery from route/image-generation verification, and DEVELOPER_GUIDE carries the approved D4 appearance-memory wording.
 - Task 8 deterministic acceptance found no demonstrated regression requiring a product-code fix.
-- Independent Task 8 critique found no P0 or P1 issue against the ADR-002 acceptance rubric; all eight criteria have deterministic contract or source evidence.
+- The initial Task 8 self-critique missed preservation and retirement gaps; the independent Sol whole-branch review correctly marked the branch NOT READY and drove this correction round.
+- Preserved `sceneFacts.outfits` as opaque compatibility data through scene reconciliation and successful wand persistence without interpreting it, adding it to deltas, or injecting it into prompts.
+- Retired outfit-specific Story Memory collection creation and membership changes while keeping historical outfit collections visible, readable, and read-only.
+- Routed custom provider catalog refresh through the cancellable discovery coordinator and made provider-switch cancellation clear stale Refresh Models busy, disabled, and accessibility state unconditionally.
+- Corrected settings and product documentation: wand and slash remain the manual generation actions, while cinematic suggestions and Story Memory stage context only for the next wand.
 
 ## Verification
 - `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
@@ -66,19 +70,29 @@ Task 8 — deterministic regression and independent critique completed; determin
 - Task 7 correction round 1 `git diff --check` — passed before final allowlist staging.
 - Task 8 syntax checks — `node --check index.js` plus every `lib/**/*.js` file passed: 1 index file + 81 library files, process exit 0.
 - Task 8 complete repository suite — 106 test files, 884 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo: `$tests = Get-ChildItem test -File -Filter '*.test.mjs' | ForEach-Object { $_.FullName }; node --test $tests`; process exit 0.
-- Task 8 independent rubric critique — PASS with no P0/P1 findings. Deterministic evidence covers two-source authority, shared kernel, configuration-only Settings, optional references, appearance-boundary isolation, inert legacy outfits, non-deletion/preservation, and release-documentation alignment.
+- Task 8 initial rubric self-critique — superseded by the independent Sol whole-branch review, which found four P1 and two P2 issues.
+- Final-review correction baseline focused suite — 155 passed, 0 failed.
+- Opaque scene-fact preservation RED — 31 passed, 5 failed before the compatibility seam; focused GREEN — 36 passed, 0 failed.
+- Historical outfit-collection retirement RED — 44 passed, 3 failed before the read-only boundary; strengthened collision/normalized-kind RED — 18 passed, 1 failed; focused GREEN — 73 passed, 0 failed.
+- Custom Refresh Models cancellation RED — 31 passed, 3 failed before coordinator/UI cancellation wiring; focused GREEN — 53 passed, 0 failed.
+- Settings runtime-truth RED — 17 passed, 1 failed before copy correction; focused GREEN — 18 passed, 0 failed.
+- Final-review correction focused suite — 127 passed, 0 failed after correcting the stale deletion assertion.
+- Final-review correction syntax checks — `index.js` plus every `lib/**/*.js` file passed: 82 files total, process exit 0.
+- Final-review correction complete repository suite — 106 test files, 890 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo; process exit 0.
+- Final-review correction `git diff --check` — passed.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
 - Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
+- Independent re-review of final-review correction round 1 is outstanding.
 
 ## Decisions
 - Settings is configuration-only.
 - Legacy outfit data is preserved, not purged.
 - Saved appearance contributes only when Appearance Memory is explicitly enabled; avatar, previous image, and saved appearance can all be absent without blocking a text-only plan.
-- Legacy outfit records are preserved as opaque compatibility data; no production path interprets, writes, replays, or injects them into generation.
-- v2.5 documentation names only wand and slash as generation entry points; cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances are staging/configuration surfaces.
+- Legacy outfit records are preserved as opaque compatibility data. Compatibility writes may carry them forward unchanged, but no production path interprets, mutates, or injects them into generation.
+- v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
 
 ## Next action
-Commit the Task 8 deterministic acceptance/status record. Task 9 live no-spend UAT remains separate; keep live provider generation out of scope unless separately authorized.
+Commit the reviewed correction with explicit allowlists, then obtain independent Sol re-review. Task 9 live no-spend UAT remains separate.

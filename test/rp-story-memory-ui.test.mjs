@@ -104,6 +104,46 @@ test('surface renders chat-ordered moments, compound filters, collections, prove
     assert.match(STORY_MEMORY_SURFACE_CSS, /@media/u);
 });
 
+test('surface shows historical outfit collections as readable data without outfit mutation controls', () => {
+    const html = renderStoryMemorySurface({
+        status: 'ready',
+        timeline: [artifact({ id: 'story:a', messageId: 2 })],
+        collections: [
+            { id: 'wardrobe', label: 'Old wardrobe', kind: 'outfit', memberIds: ['story:a'] },
+            { id: 'places', label: 'Places', kind: 'location', memberIds: ['story:a'] },
+        ],
+    });
+
+    assert.match(html, /Old wardrobe/u);
+    assert.match(html, /Legacy outfit collection · read-only/u);
+    assert.match(html, /data-story-legacy-member="story:a"/u);
+    assert.doesNotMatch(html, /<option value="outfit">/u);
+    assert.doesNotMatch(html, /<option value="wardrobe">/u);
+    assert.doesNotMatch(html, /data-story-collection-id="wardrobe"/u);
+    assert.match(html, /<option value="places">Places<\/option>/u);
+    assert.match(html, /data-story-collection-id="places"/u);
+});
+
+test('controller refuses outfit collection creation and membership changes without persistence', async () => {
+    const legacyMemory = memory();
+    legacyMemory.collections.wardrobe = { id: 'wardrobe', label: 'Old wardrobe', kind: 'outfit', memberIds: ['story:a'] };
+    const { deps, calls } = dependencies({ readMemory: async () => legacyMemory });
+    const controller = createStoryMemoryController(deps);
+    await controller.load({ chatId: 'chat-a' });
+    const persistCount = calls.persist.length;
+
+    const created = await controller.createCollection({ collectionId: 'new-wardrobe', kind: 'outfit', label: 'New wardrobe' });
+    const added = await controller.addCollectionMember('wardrobe', 'story:b');
+    const removed = await controller.removeCollectionMember('wardrobe', 'story:a');
+
+    for (const result of [created, added, removed]) {
+        assert.equal(result.status, 'error');
+        assert.match(result.error, /legacy outfit collections are read-only/i);
+    }
+    assert.equal(calls.persist.length, persistCount);
+    assert.deepEqual(controller.getState().memory.collections.wardrobe.memberIds, ['story:a']);
+});
+
 test('controller hydrates Gallery through the injected seam and searches compound filters', async () => {
     const { deps, calls } = dependencies();
     const controller = createStoryMemoryController(deps);

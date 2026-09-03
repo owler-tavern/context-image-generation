@@ -304,6 +304,32 @@ test('allows a fresh refresh after cancellation while the old result is stale', 
     assert.equal((await second).models[0].id, 'grok-imagine-image');
 });
 
+test('coordinator aborts a custom refresh when its provider is cancelled', async () => {
+    const coordinator = createModelDiscoveryCoordinator();
+    assert.equal(typeof coordinator.refreshCustom, 'function');
+    let observedSignal;
+    const pending = coordinator.refreshCustom(customConnection.id, {
+        connection: customConnection,
+        authPreset: 'bearer',
+        credential: 'test-key',
+        fetchImpl: async (_url, init) => await new Promise((_resolve, reject) => {
+            observedSignal = init.signal;
+            const fail = () => {
+                const error = new Error('cancelled');
+                error.name = 'AbortError';
+                reject(error);
+            };
+            if (init.signal.aborted) fail();
+            else init.signal.addEventListener('abort', fail, { once: true });
+        }),
+    });
+
+    assert.equal(coordinator.cancel(customConnection.id), true);
+    assert.equal(observedSignal.aborted, true);
+    assert.equal((await pending).stale, true);
+    assert.equal(coordinator.isActive(customConnection.id), false);
+});
+
 test('keeps Refresh Models beside the selector while Manage Models stays in the sole Advanced disclosure', async () => {
     const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');

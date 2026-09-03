@@ -14,7 +14,7 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 - **Two generation entry points:** use the message wand for a chat attachment or `/proimagine` (plus `/proimg` and `/geminiimg`) for preview/Gallery delivery. Both use the same generation path.
 - **Configuration-only Settings:** choose the provider, model, scene preferences, and optional avatar, previous-image, or saved-appearance references. Settings actions, including **Refresh Models**, never generate an image.
-- **Provider-free story tools:** Cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances can stage context for the next wand or slash command, but cannot start generation themselves.
+- **Provider-free story tools:** Cinematic suggestions and Story Memory can stage context for the next wand only. Gallery, Improve tools, and saved appearances remain provider-free support surfaces; none can start generation themselves.
 - **Inert legacy data:** attire remains prompt/scene content. Retired outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are not exposed; existing legacy outfit data is retained for rollback.
 
 ## Historical fork changes (v1.7.1)

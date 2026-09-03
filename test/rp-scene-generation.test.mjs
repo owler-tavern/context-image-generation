@@ -153,3 +153,39 @@ test('accepted scene state is read back before pending state is cleared', async 
     assert.deepEqual(calls, ['pending', 'set', 'chat', 'readback', 'remove']);
     assert.deepEqual(current, { sceneFacts: { location: 'library' } });
 });
+
+test('successful wand scene persistence carries opaque legacy outfits without prompt injection', async () => {
+    const legacyOutfits = {
+        schema: 9,
+        records: [{ owner: 'character:ava', privateLegacyValue: 'opaque-red-coat-marker' }],
+        futureField: { keep: true },
+    };
+    const snapshot = buildSceneGenerationSnapshot({
+        clickedMessage: { name: 'Ava', role: 'character', mes: 'Ava waits at the library.' },
+        identities,
+        priorStoryState: { sceneFacts: { location: 'station', outfits: legacyOutfits } },
+    });
+    const pending = createSceneStatePending({
+        chatId: 'chat-a',
+        epoch: 1,
+        state: snapshot.state,
+        target: { chatId: 'chat-a', messageId: 4 },
+    });
+    let persistedState = { sceneFacts: { location: 'station', outfits: legacyOutfits } };
+
+    const outcome = await persistAcceptedSceneState({
+        pending,
+        isCurrent: () => true,
+        getState: () => persistedState,
+        setState: (value) => { persistedState = value; },
+        savePending: async () => {},
+        saveChat: async () => ({ saved: true }),
+        readback: async (entry) => ({ status: 'confirmed', state: entry.state }),
+        removePending: async () => {},
+    });
+
+    assert.equal(outcome.status, 'confirmed');
+    assert.deepEqual(persistedState.sceneFacts.outfits, legacyOutfits);
+    assert.notEqual(persistedState.sceneFacts.outfits, legacyOutfits);
+    assert.doesNotMatch(snapshot.prompt, /opaque-red-coat-marker/u);
+});

@@ -24,7 +24,7 @@ ADR-002 defines exactly two generation entry points: the message wand and the `/
 
 Settings is configuration-only. It owns provider/model setup, scene preferences, optional avatar/previous-image references, and optional saved-appearance memory. Refresh Models is a configuration action that checks the selected provider and keeps existing local models; it never generates an image.
 
-Cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances may prepare or stage context for the next wand or slash command, but they are not generation entry points. Attire remains ordinary prompt/scene content. Outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are retired; legacy outfit data remains inert and preserved for rollback.
+Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support surfaces. None are generation entry points. Attire remains ordinary prompt/scene content. Outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are retired; legacy outfit data remains inert and preserved for rollback.
 
 ## Positioning
 

@@ -152,7 +152,7 @@ test('explicit object removal clears only the obsolete object fact', () => {
     });
     assert.deepEqual(result.sceneSignals.objects.remove, [{ value: 'map', identityId: 'character:ava', holderIdentityId: 'character:ava' }]);
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.objects, []);
-    assert.equal(Object.hasOwn(result.storyStateDelta.nextState.sceneFacts, 'outfits'), false);
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'character:ava', value: 'red coat' }]);
 });
 
 test('low-confidence recent departure is evidence but does not clear prior location', () => {
@@ -240,7 +240,7 @@ test('new observations preserve unmentioned cast while attire remains ordinary t
         identities,
     });
     assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.cast.map((entry) => entry.identityId).sort(), ['user:sam', 'character:ava'].sort());
-    assert.equal(Object.hasOwn(result.storyStateDelta.nextState.sceneFacts, 'outfits'), false);
+    assert.deepEqual(result.storyStateDelta.nextState.sceneFacts.outfits, [{ identityId: 'user:sam', value: 'blue shirt' }]);
     assert.deepEqual(result.storyStateDelta.removedSceneFacts, {});
 });
 

@@ -22,9 +22,13 @@ const connection = {
 function createFakeJQuery() {
     class Element {
         constructor() {
+            this.length = 1;
             this.value = '';
             this.options = [];
             this.handlers = new Map();
+            this.attributes = new Map();
+            this.properties = new Map();
+            this.classes = new Set();
         }
 
         empty() { this.options = []; return this; }
@@ -35,6 +39,23 @@ function createFakeJQuery() {
             return this;
         }
         text(value) { this.textValue = String(value); return this; }
+        attr(name, value) {
+            if (typeof name === 'object') {
+                for (const [key, item] of Object.entries(name)) this.attributes.set(key, String(item));
+                return this;
+            }
+            if (arguments.length === 1) return this.attributes.get(name);
+            this.attributes.set(name, String(value));
+            return this;
+        }
+        removeAttr(name) { this.attributes.delete(name); return this; }
+        prop(name, value) {
+            if (arguments.length === 1) return this.properties.get(name);
+            this.properties.set(name, value);
+            return this;
+        }
+        addClass(name) { this.classes.add(name); return this; }
+        removeClass(name) { this.classes.delete(name); return this; }
         on(eventName, handler) { this.handlers.set(eventName, handler); return this; }
         async trigger(eventName) {
             const handler = this.handlers.get(eventName);
@@ -52,6 +73,30 @@ function createFakeJQuery() {
     };
     return $;
 }
+
+test('provider-switch cancellation clears Refresh Models busy and accessibility state even without a tracked request', async () => {
+    const selectorUi = await import('../lib/providers/model-selector-ui.js');
+    assert.equal(typeof selectorUi.setControlBusyState, 'function');
+    assert.equal(typeof selectorUi.cancelModelRefreshUi, 'function');
+    const $ = createFakeJQuery();
+    const control = $('#cig_model_refresh').attr('title', 'Refresh available models');
+    selectorUi.setControlBusyState($, control, true, { busyTitle: 'Refreshing models…' });
+    let cancelledProviderId = null;
+
+    const cancelled = selectorUi.cancelModelRefreshUi($, {
+        providerId: CONNECTION_ID,
+        cancelDiscovery: (providerId) => { cancelledProviderId = providerId; return false; },
+    });
+
+    assert.equal(cancelled, false);
+    assert.equal(cancelledProviderId, CONNECTION_ID);
+    assert.equal(control.classes.has('generating'), false);
+    assert.equal(control.attr('aria-busy'), 'false');
+    assert.equal(control.attr('aria-disabled'), 'false');
+    assert.equal(control.prop('disabled'), false);
+    assert.equal(control.attr('title'), 'Refresh available models');
+    assert.equal(control.attr('data-cig-idle-title'), undefined);
+});
 
 test('ignores a custom discovery completion after the same connection ID changes revision', async () => {
     const customConnections = await import('../lib/providers/custom-connections.js');
@@ -223,6 +268,7 @@ test('index delegates Refresh, Advanced search, and Setup selection to the teste
     assert.match(source, /modelSelectorController\.bind\(\{/u);
     assert.match(source, /modelSelectorController\.updateModelDropdown\(\)/u);
     assert.match(source, /modelSelectorController\.selectSetupModel\(modelId\)/u);
+    assert.match(source, /cancelModelRefreshUi\(\$,[\s\S]*?cancelDiscovery:[\s\S]*?modelDiscoveryCoordinator\.cancel/u);
     assert.doesNotMatch(source, /\$\('#cig_(?:model_refresh|model_search|model)'\)\.on\(/u);
 });
 
@@ -233,7 +279,7 @@ test('production commits a custom refresh only after token, provider, and captur
         source.indexOf('// Dev aid:', source.indexOf('async function fetchManagedProviderModels')),
     );
     const captureAt = refresh.indexOf('const capturedCustomRevision =');
-    const awaitAt = refresh.indexOf('await discoverCustomConnectionModels');
+    const awaitAt = refresh.indexOf('await modelDiscoveryCoordinator.refreshCustom');
     const persistAt = refresh.indexOf('setProviderDiscoveryState');
     assert.ok(captureAt >= 0 && captureAt < awaitAt);
     assert.ok(awaitAt < persistAt);

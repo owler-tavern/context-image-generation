@@ -5,6 +5,7 @@ import {
     addStoryArtifact,
     addStoryCollectionMember,
     buildStoryArtifactId,
+    createStoryCollection,
     createStoryMemory,
     buildReproductionInput,
     getGenerationDetails,
@@ -277,13 +278,41 @@ test('date aliases are inclusive for date-only end bounds and invalid bounds fai
     assert.throws(() => searchStoryArtifacts(memory, { from: '2026-08-11', to: '2026-08-10' }), /range|bound|before/i);
 });
 
-test('collections contain artifact IDs only and support canon look, location, outfit, and moment labels', () => {
+test('active collections contain artifact IDs only and support non-outfit labels', () => {
     let memory = addStoryArtifact(createStoryMemory(), generated({ id: 'collection-image' }));
     memory = addStoryCollectionMember(memory, { collectionId: 'canon-harbor', kind: 'location', label: 'Harbor', artifactId: 'collection-image' });
     memory = addStoryCollectionMember(memory, { collectionId: 'canon-harbor', kind: 'location', label: 'Harbor', artifactId: 'collection-image' });
     assert.deepEqual(listStoryCollectionMembers(memory, 'canon-harbor').map((member) => member.id), ['collection-image']);
     assert.equal(memory.collections['canon-harbor'].kind, 'location');
     assert.equal(memory.artifacts['collection-image'].url, '/user/images/collection-image.png');
+});
+
+test('historical outfit collections remain readable but reject every active mutation', () => {
+    const first = generated({ id: 'look-one' });
+    const second = generated({ id: 'look-two', messageId: 2 });
+    const legacy = createStoryMemory({
+        schema: 2,
+        artifacts: { [first.id]: first, [second.id]: second },
+        collections: {
+            wardrobe: {
+                id: 'wardrobe',
+                kind: 'outfit',
+                label: 'Old wardrobe',
+                memberIds: [first.id],
+                legacyNote: 'preserve me',
+            },
+        },
+    });
+
+    assert.equal(legacy.collections.wardrobe.kind, 'outfit');
+    assert.equal(legacy.collections.wardrobe.legacyNote, 'preserve me');
+    assert.deepEqual(listStoryCollectionMembers(legacy, 'wardrobe').map((member) => member.id), [first.id]);
+    assert.throws(() => createStoryCollection(legacy, { collectionId: 'new-wardrobe', kind: 'outfit' }), /legacy outfit collections are read-only/i);
+    assert.throws(() => createStoryCollection(legacy, { collectionId: 'spaced-wardrobe', kind: ' outfit ' }), /legacy outfit collections are read-only/i);
+    assert.throws(() => createStoryCollection(legacy, { collectionId: 'wardrobe', kind: 'location' }), /legacy outfit collections are read-only/i);
+    assert.throws(() => addStoryCollectionMember(legacy, { collectionId: 'wardrobe', artifactId: second.id }), /legacy outfit collections are read-only/i);
+    assert.throws(() => removeStoryCollectionMember(legacy, 'wardrobe', first.id), /legacy outfit collections are read-only/i);
+    assert.deepEqual(legacy.collections.wardrobe.memberIds, [first.id]);
 });
 
 test('memory migration repairs and reports dangling collection members', () => {

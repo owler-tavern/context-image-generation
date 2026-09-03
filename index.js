@@ -32,7 +32,7 @@ import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolvePro
 import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
 import { mergeFetchedModelEntries, updateLocalModelEntries, mergeCustomDiscoveryModelRecords, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords } from './lib/providers/model-manager.js';
 import { getProviderModelEntries, setProviderModelRecords } from './lib/providers/model-record-store.js';
-import { createModelSelectorController, renderManagedModelSelector } from './lib/providers/model-selector-ui.js';
+import { cancelModelRefreshUi, createModelSelectorController, renderManagedModelSelector, setControlBusyState } from './lib/providers/model-selector-ui.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
@@ -246,20 +246,7 @@ function exportDiagnostics() {
 }
 
 function setBusyState(control, busy, { busyClass = 'generating', busyTitle = 'Working…' } = {}) {
-    const $control = control?.jquery ? control : $(control);
-    if (!$control?.length) return;
-    if (busy) {
-        if (!$control.attr('data-cig-idle-title')) $control.attr('data-cig-idle-title', $control.attr('title') || '');
-        $control.addClass(busyClass)
-            .attr({ 'aria-busy': 'true', 'aria-disabled': 'true', title: busyTitle })
-            .prop('disabled', true);
-    } else {
-        const idleTitle = $control.attr('data-cig-idle-title');
-        $control.removeClass(busyClass)
-            .attr({ 'aria-busy': 'false', 'aria-disabled': 'false' })
-            .prop('disabled', false);
-        if (idleTitle !== undefined) $control.attr('title', idleTitle).removeAttr('data-cig-idle-title');
-    }
+    return setControlBusyState($, control, busy, { busyClass, busyTitle });
 }
 
 function showGenerationError(error, operation = 'Image generation') {
@@ -483,9 +470,10 @@ function setProviderDiscoveryState(settings, providerId, result) {
 
 function cancelModelDiscovery(providerId) {
     modelDiscoveryUiSequence += 1;
-    const cancelled = modelDiscoveryCoordinator.cancel(providerId);
-    if (cancelled) setBusyState($('#cig_model_refresh'), false);
-    return cancelled;
+    return cancelModelRefreshUi($, {
+        providerId,
+        cancelDiscovery: (id) => modelDiscoveryCoordinator.cancel(id),
+    });
 }
 
 // --- LinkAPI ChatGPT (gpt-image) helpers (pure, text-prompt only) ---
@@ -591,7 +579,7 @@ async function fetchManagedProviderModels() {
     setBusyState(fetchButtons, true, { busyTitle: 'Refreshing models…' });
     try {
         const result = customConnection
-            ? await discoverCustomConnectionModels({
+            ? await modelDiscoveryCoordinator.refreshCustom(providerId, {
                 connection: customConnection,
                 authPreset: customConnection.credentialRef ? 'bearer' : 'none',
                 credential: key,

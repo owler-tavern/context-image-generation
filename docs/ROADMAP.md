@@ -30,7 +30,7 @@ The current branch contains the provider foundation and deterministic implementa
 
 Real-host UAT has confirmed LinkAPI discovery with four usable models, populated Story Memory, cinematic manual retrigger/adjust/dismiss, provider-free Settings editing, five exact-message image attachments, and extension-owned 320/360/480px panel fit. The old per-message **Direct this scene** and **Visual Story** entries are intentionally removed: the message wand and `/proimagine` slash command are the only generation actions, while direction and character-source choices live in Settings. LinkAPI's public `/api/pricing` returned `model_price: 0.09375` for `gemini-3.1-flash-image-preview` on 2026-09-01, but the benchmark remains a quality failure, not a release claim.
 
-This is **not yet a complete release claim**. The controlled benchmark allowed at most seven paid images and USD $0.65625; six originals were produced, but the two-character sequence is invalid because the persona changed between scenes and the quality scorecard is P1/failing. Some live interaction and focus/reload evidence also remains incomplete or conflicting. Settings is configuration-only; optional story tools stage context but never add a generation entry point. Legacy outfit data remains inert and preserved.
+This is **not yet a complete release claim**. The controlled benchmark allowed at most seven paid images and USD $0.65625; six originals were produced, but the two-character sequence is invalid because the persona changed between scenes and the quality scorecard is P1/failing. Some live interaction and focus/reload evidence also remains incomplete or conflicting. Settings is configuration-only; cinematic suggestions and Story Memory stage context only for the next wand and never add a generation entry point. Legacy outfit data remains inert and preserved.
 
 Evidence labels used in this ledger are **PROVEN deterministic** (repeatable local tests), **PROVEN live** (observed in the loaded SillyTavern host), **PARTIAL** (some acceptance evidence exists), **NOT TESTED** (no current evidence), **CONTRADICTED** (evidence conflicts with the intended outcome), and **DEFERRED** (explicitly outside the current release slice).
 
@@ -47,7 +47,7 @@ Classification used below:
 | P2 | Selected-passage/current-message scene interpretation | A for state delta, cast resolution, and artifact inspection; B for pre-existing selected-text/clicked-message/default controls | **PROVEN deterministic:** scene interpretation, selected-focus precedence, plan/artifact inspection (`test/rp-scene-*.test.mjs`, `test/generation-plan.test.mjs`, `test/runtime-plan-wiring.test.mjs`); **PARTIAL live:** exact-message attachments exercise planning | **NOT TESTED:** direct live selected-passage UAT and comparative subject-accuracy evidence |
 | P3 | Improve, Vary, change scene, edit, reuse, and make canonical | Future/retained artifact workflows; v2.5 does not expose iteration as a generation entry point, and swipe navigation is navigation-only. | **PROVEN deterministic:** historical iteration artifact contracts and inert runtime wiring (`test/rp-iteration-*.test.mjs`, `test/phase-e-acceptance.test.mjs`, `test/rp-iteration-runtime-wiring.test.mjs`); **PARTIAL live:** Improve actions were retained on five images, but actions were not fully exercised | **NOT TESTED:** live Vary/Reuse/Canonical/two-up outcomes and usability; additional paid two-up remains **DEFERRED** until explicit spend approval |
 | P4 | Visual story memory, search, favorites, collections, details, and Continue | A for timeline/search/favorites/collections/details; mixed B/A for exact-scene Continue | **PROVEN deterministic:** Story Memory runtime/UI, chat isolation, guided Continue preview, and final-plan reference receipts (`test/p4-story-memory-runtime.test.mjs`, `test/rp-story-memory-*.test.mjs`, `test/rp-reference-receipt.test.mjs`); **PARTIAL live:** populated timeline, selected Details, and 320px fit | **NOT TESTED:** live search/favorite/collection/Continue actions and a conclusive chat-switch isolation run |
-| P5 | Story-aware cinematic suggestions and session limits | Provider-free staging only in v2.5; suggestions never generate and may prepare context for the next wand or slash command. | **PROVEN deterministic:** meaningful delta interpretation, duplicate/ambiguous suppression, queue/recovery, budgets, and lifecycle (`test/rp-cinematic-automation.test.mjs`, `test/rp-cinematic-runtime.test.mjs`, `test/rp-cinematic-ui.test.mjs`, `test/rp-cinematic-integration.contract.test.mjs`); **PROVEN live:** manual suggestion/adjust/dismiss were provider-free; cards only **stage for the next wand** | **DEFERRED:** automatic generation, card-triggered generation, and any separate cinematic generation entry point |
+| P5 | Story-aware cinematic suggestions and session limits | Provider-free staging only in v2.5; suggestions never generate and may prepare context only for the next wand. | **PROVEN deterministic:** meaningful delta interpretation, duplicate/ambiguous suppression, queue/recovery, budgets, and lifecycle (`test/rp-cinematic-automation.test.mjs`, `test/rp-cinematic-runtime.test.mjs`, `test/rp-cinematic-ui.test.mjs`, `test/rp-cinematic-integration.contract.test.mjs`); **PROVEN live:** manual suggestion/adjust/dismiss were provider-free; cards only **stage for the next wand** | **DEFERRED:** automatic generation, card-triggered generation, and any separate cinematic generation entry point |
 | P6 | Per-chat Wand Direction, Character Sources, and Cast Correction in Settings | A for durable direction/source/cast choices; B for readiness and progressive disclosure. Settings remains configuration-only. | **PROVEN deterministic:** chat-scoped framing/continuity/direction, Auto/Avatar/Description, explicit identity pinning, Include/Focus/Exclude/Auto cast correction, strict previous-image opt-in, and settings-only/no-duplicate-entry contracts (`test/rp-chat-canon.test.mjs`, `test/rp-cast-settings-*.test.mjs`, `test/settings-content-contract.test.mjs`); **PROVEN live:** Settings edits were provider-free at narrow widths | **NOT TESTED:** reload isolation and outcome evidence that deliberate source/cast choices change an attached wand result; old inline Direct-this-scene/Visual Story claims are **DEPRECATED** |
 
 ## Priority 0 — Trustworthy provider and model selection
@@ -87,7 +87,7 @@ Characters remain recognizable across changing scenes, including two-character s
 | **Remember this look** | Promote a successful image into a durable character appearance | SLAY Images |
 | **Look selection and lock** | Select an alternate look and keep it active across subsequent scenes until deliberately changed | SLAY Images |
 | **Two-character identity planning** | Preview both characters and keep their references and descriptions separated | SLAY Images; Picture Prompt |
-| **Outfit selection and lock** | Name a complete outfit, hold it across scenes, and change it when the story changes | SLAY Images; Image Generation Suite |
+| **Legacy outfit compatibility** | Preserve historical outfit state as opaque rollback data without using it for suggestions, prompts, or generation plans | Migration-safe product boundary |
 | **Visible reference plan** | Show which avatars, remembered looks, or previous scenes will be sent and explain omissions caused by model limits | Picture Prompt; 0cyris ImageGen |
 
 ### Not in the first continuity increment
@@ -122,7 +122,7 @@ The user clicks the wand and receives an image of the intended story moment. Per
 | **Current-message interpretation** | Without a selection, treat the clicked message as the primary moment and use nearby context only to resolve cast, location, and current state | Pawtrait; Quick Image Gen |
 | **Persistent visual defaults** | Configure reusable style, aspect ratio, framing preference, continuity strength, and optional custom visual instruction in Settings | Image Generation Suite; Quick Image Gen; current settings |
 | **Automatic cast resolution** | Infer who is present from the selected message and recent context without adding narrator, GM, or absent characters | 0cyris ImageGen; SLAY Images |
-| **Story-state delta** | Preserve durable identity facts, update current outfit/location/objects/injuries, and remove facts made obsolete by the new scene | SLAY Images; product synthesis |
+| **Story-state delta** | Preserve durable identity facts, update current location/objects/injuries, and remove facts made obsolete by the new scene; carry legacy outfit facts opaquely without interpreting them | SLAY Images; product synthesis |
 | **Inspect interpretation after generation** | Let advanced users inspect the effective focus, references, and prompt from the resulting artifact rather than blocking generation beforehand | Ikarus Auto Image; Image Generation Suite |
 
 ### Product rule
@@ -180,7 +180,7 @@ Long-running roleplays develop a searchable visual history rather than an undiff
 | **Story timeline** | Browse images in chat order with their source moments | Quick Image Gen; per-chat galleries |
 | **Favorites** | Mark important images without moving or duplicating files | SD Proxy; Quick Image Gen |
 | **Search and filters** | Find by character, chat, task, model, prompt text, or date | SD Proxy |
-| **Collections** | Group canon looks, locations, outfits, and memorable moments | SD Proxy |
+| **Collections** | Group canon looks, locations, and memorable moments; historical outfit collections remain visible and read-only | SD Proxy |
 | **Generation details** | Inspect source passage, effective prompt, references, model, and settings | Ikarus Auto Image; Image Generation Suite |
 | **Continue from this scene** | Use a selected prior image and its still-valid facts for the next generation | Current previous-image behavior, made explicit |
 
@@ -216,7 +216,7 @@ Automation creates images at meaningful moments and remains understandable, opti
 
 - **PROVEN deterministic; PROVEN live for manual card:** Suggestions never generate solely because an ambiguous event fired twice (`test/rp-cinematic-automation.test.mjs`, `test/rp-cinematic-runtime.test.mjs`).
 - **PARTIAL live:** Users can predict or disable suggestions; manual suggestion/adjust/dismiss was observed, but reload recovery remains untested.
-- **PROVEN deterministic; PARTIAL live:** Location, cast, and outfit changes are reflected in the suggested shot (`test/rp-cinematic-automation.test.mjs`); only manual live retrigger is confirmed.
+- **PROVEN deterministic; PARTIAL live:** Location, cast, and emotional-beat changes are reflected in the suggested shot (`test/rp-cinematic-automation.test.mjs`); only manual live retrigger is confirmed. Legacy outfit data never affects suggestions.
 - **PROVEN deterministic; NOT TESTED live:** Suggestion limits stop queued provider-free suggestions at the configured boundary (`test/rp-cinematic-runtime.test.mjs`).
 - **PROVEN deterministic; PROVEN live:** Suggested shots do not interrupt ordinary chat flow; manual cards were provider-free and inline (`test/rp-cinematic-ui.test.mjs`, `test/rp-cinematic-integration.contract.test.mjs`).
 
@@ -290,7 +290,7 @@ Primary measures:
 
 - Character-identity retention across sequential scenes
 - Correct identity separation in two-character scenes
-- Correct outfit and current-state retention
+- Correct current-state retention without legacy outfit-state influence
 - Percentage of images retained, favorited, varied, or made canonical
 - Percentage of generations requiring prompt editing
 - Time from story moment to useful image
@@ -304,7 +304,7 @@ Operational measures such as cancellation success, duplicate requests, and provi
 
 1. **Repair and score the benchmark.** Pricing is verified at USD $0.09375 for the selected LinkAPI model, but the seven-request/USD $0.65625 run is not a pass: six originals exist, the two-character sequence is invalid after a persona change, and the quality scorecard is P1/failing. Keep the same route and 16:9 setup, correct the persona, obtain a valid replacement, and score identity retention first. Do not present the current run as benchmark success.
 2. **Complete player-action UAT on retained media and memory.** Exercise Improve/Vary, Reuse, Canonical, Story Memory search/favorite/collection/Continue, and explain which references were used. Presence of a button is not acceptance of its action.
-3. **Verify the settings-only direction path.** Change framing, continuity, visual direction, Auto/Avatar/Description, and explicit pin/unpin in chat A; switch to chat B and back; confirm isolation, reload recovery, 320/360/480px keyboard safety, and zero provider calls during edits. The host wand must remain the sole manual generation action.
+3. **Verify the settings-only direction path.** Change framing, continuity, visual direction, Auto/Avatar/Description, and explicit pin/unpin in chat A; switch to chat B and back; confirm isolation, reload recovery, 320/360/480px keyboard safety, and zero provider calls during edits. The host wand and slash command must remain the only manual generation actions.
 4. **Exercise optional cinematic behavior.** Enable the extra story-tools and cinematic toggles, trigger a card from a real accepted story-state change, verify disable/re-enable and Next-state explanation, stage it for the next wand, and confirm the staged shot is consumed once. Do not treat a card as a separate generation action.
 5. **Live-validate guided Story Memory Continue.** The provider-free preview, strict opt-in, exact selected artifact, chat isolation, success-only consumption, and replacement-race protection are **PROVEN deterministic** at `698569c`; exercise the complete action in the loaded host without treating selection as generation.
 6. **Live-validate compact cast correction and reference explanation.** Include/Focus/Exclude/Auto, current-chat NPC support, cross-chat reference isolation, readiness, and final-plan receipts are **PROVEN deterministic** at `35a03c1` and `410a6c6`; attach a corrected known-missed-character result and verify its Story Memory receipt.

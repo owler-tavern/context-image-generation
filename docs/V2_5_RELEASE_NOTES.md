@@ -8,9 +8,9 @@ v2.5 implements ADR-002's focused generation boundary:
 - `/proimagine`, `/proimg`, and `/geminiimg` generate from an explicit prompt and deliver to preview/Gallery.
 - Both entry points share one Scene Generation kernel for readiness, planning, dispatch, coordination, and normalized errors.
 - Settings is configuration-only. Provider, model, scene preferences, optional avatar/previous-image references, and saved-appearance memory remain available. **Refresh Models** checks the selected provider and keeps existing local model IDs when discovery is empty or fails.
-- Cinematic suggestions, Story Memory, Gallery, Improve tools, and saved appearances are provider-free or explicit staging surfaces. They cannot introduce another generation entry point.
+- Cinematic suggestions and Story Memory are provider-free staging surfaces for the next wand only. Gallery, Improve tools, and saved appearances remain provider-free support surfaces. They cannot introduce another generation entry point.
 - Attire remains ordinary prompt/scene content. Outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are retired.
-- Legacy `rp_outfits`, `outfit_pending`, per-chat `outfitState`, and historical `activeOutfits` data remain inert and readable for rollback. No user-owned images or metadata are purged.
+- Legacy `rp_outfits`, `outfit_pending`, per-chat `outfitState`, `sceneFacts.outfits`, historical outfit collections, and historical `activeOutfits` data remain inert and readable for rollback. Opaque `sceneFacts.outfits` values survive ordinary scene reconciliation and successful wand persistence without entering prompts or generation plans. No user-owned images or metadata are purged.
 
 ## Evidence
 
