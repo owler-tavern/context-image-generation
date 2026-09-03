@@ -4,7 +4,7 @@
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 
 ## Current milestone
-Task 8 complete — deterministic verification and independent Sol re-review are green; Task 9 live no-spend UAT remains.
+Task 9 partial — live no-spend Settings and slash registration verified; active-chat wand visibility remains untested.
 
 ## Completed
 - ADR-002 accepted and corrected to wand + slash.
@@ -80,12 +80,18 @@ Task 8 complete — deterministic verification and independent Sol re-review are
 - Final-review correction syntax checks — `index.js` plus every `lib/**/*.js` file passed: 82 files total, process exit 0.
 - Final-review correction complete repository suite — 106 test files, 890 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo; process exit 0.
 - Final-review correction `git diff --check` — passed.
+- Independent Sol correction re-review — READY against the P0/P1 completion gate; no P0/P1 findings remain. Documentation-only P2 bookkeeping was corrected in `75aea01`.
+- Task 9 live host — loaded the current extension in SillyTavern at `http://127.0.0.1:8001/`; CIG Settings rendered and reported the selected provider/model ready without invoking generation.
+- Task 9 responsive Settings — at 320px, 360px, 480px, and 1280px, `#cig_settings` had no horizontal overflow; the live DOM contained zero CIG Generate actions and zero outfit controls.
+- Task 9 slash registration — typing `/pro` without submitting displayed `/proimagine` and its generation help in SillyTavern's live slash autocomplete; the input was then cleared.
+- Task 9 console — no error-level browser console entries were observed. Host-level settings/deprecation warnings were present and were not attributed to this extension.
 
 ## Failures / open issues
 - Live browser UAT is outstanding.
 - No paid-provider verification is authorized.
 - Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
-- Live browser acceptance remains outstanding; deterministic Sol re-review found no remaining P0/P1 issue.
+- Live browser acceptance is **PARTIAL** because no character/chat was active: message-wand visibility, keyboard activation, and zero-request behavior across real message/navigation events remain untested.
+- Network-request capture was unavailable through the selected browser surface, so zero provider requests are supported by not invoking any generation/refresh action, not by a complete network trace.
 
 ## Decisions
 - Settings is configuration-only.
@@ -95,4 +101,4 @@ Task 8 complete — deterministic verification and independent Sol re-review are
 - v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
 
 ## Next action
-Run Task 9 live no-spend UAT in the loaded SillyTavern host without invoking wand/slash generation against a paid provider.
+Load an active character/chat and complete the remaining no-spend wand/message/navigation checks. Paid wand/slash generation remains separately unauthorized and **NOT TESTED**.
