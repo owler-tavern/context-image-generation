@@ -38,12 +38,33 @@ function attributes(markup) {
     return Object.fromEntries([...markup.matchAll(/([\w-]+)="([^"]*)"/g)].map(([, name, value]) => [name, value]));
 }
 
+function countId(id) {
+    return (settings.match(new RegExp(`id="${id}"`, 'g')) || []).length;
+}
+
 function advancedMarkup() {
     const opening = settings.match(/<details\b[^>]*id="cig_advanced_setup"[^>]*>/);
     assert.ok(opening, 'missing #cig_advanced_setup opening tag');
     const closingIndex = settings.indexOf('</details>', opening.index);
     assert.notEqual(closingIndex, -1, 'missing #cig_advanced_setup closing tag');
     return settings.slice(opening.index, closingIndex + '</details>'.length);
+}
+
+function setupMarkup() {
+    const opening = settings.match(/<section\b[^>]*id="cig_settings_panel_setup"[^>]*>/);
+    assert.ok(opening, 'missing Setup panel');
+    const closing = settings.indexOf('<section id="cig_settings_panel_preferences"', opening.index);
+    assert.notEqual(closing, -1, 'missing Setup panel closing boundary');
+    return settings.slice(opening.index, closing);
+}
+
+function connectionEditorMarkup() {
+    const setup = setupMarkup();
+    const opening = setup.indexOf('<details id="cig_connection_editor"');
+    const closing = setup.indexOf('<details id="cig_advanced_setup"', opening);
+    assert.notEqual(opening, -1, 'missing Connection settings editor');
+    assert.notEqual(closing, -1, 'missing Troubleshooting after Connection settings');
+    return setup.slice(opening, closing);
 }
 
 test('settings shell owns exactly three labelled tabs and matching panels', () => {
@@ -73,23 +94,21 @@ test('settings shell owns exactly three labelled tabs and matching panels', () =
     }
 });
 
-test('settings keeps one non-nested Advanced disclosure and no Advanced tab', () => {
+test('settings keeps troubleshooting separate from connection and manual-model disclosures', () => {
     const details = [...settings.matchAll(/<details\b[^>]*>/g)];
-    assert.equal(details.length, 1);
-    assert.equal(attributes(details[0][0]).id, 'cig_advanced_setup');
+    const ids = details.map((detail) => attributes(detail[0]).id).filter(Boolean);
+    for (const id of ['cig_model_manager', 'cig_connection_editor', 'cig_advanced_setup']) assert.ok(ids.includes(id), `missing ${id}`);
     assert.doesNotMatch(settings, /role="tab"[^>]*(?:value="advanced"|>\s*Advanced\s*<)/i);
 
     const advanced = advancedMarkup();
     for (const id of [
-        'cig_provider_advanced_container', 'cig_model_manager',
-        'cig_managed_model_list', 'cig_show_preflight', 'cig_export_diagnostics',
+        'cig_provider_advanced_container', 'cig_show_preflight', 'cig_cancel_generation', 'cig_export_diagnostics',
     ]) assert.match(advanced, new RegExp(`id="${id}"`));
+    assert.doesNotMatch(advanced, /id="cig_custom_connection_editor"|id="cig_model_manager"/);
 });
 
 test('Setup exposes separate polite readiness and runtime issue status regions before Advanced', () => {
-    const setupStart = settings.indexOf('id="cig_settings_panel_setup"');
-    const setupEnd = settings.indexOf('</section>', setupStart);
-    const setup = settings.slice(setupStart, setupEnd);
+    const setup = setupMarkup();
     const status = setup.match(/<[^>]+id="cig_setup_status"[^>]*>/);
     const issue = setup.match(/<[^>]+id="cig_setup_issue"[^>]*>/);
     assert.ok(status);
@@ -99,16 +118,14 @@ test('Setup exposes separate polite readiness and runtime issue status regions b
         assert.match(element, /aria-live="polite"/);
     }
     assert.ok(setup.indexOf('id="cig_model"') < setup.indexOf('id="cig_setup_status"'));
-    assert.ok(setup.indexOf('id="cig_setup_issue"') < setup.indexOf('id="cig_advanced_setup"'));
+    assert.ok(setup.indexOf('id="cig_setup_issue"') < setup.indexOf('id="cig_connection_editor"'));
 });
 
-test('all index-bound settings controls remain unique in settings markup', () => {
-    const boundIds = new Set([...index.matchAll(/#(cig_[\w-]+)/g)].map((match) => match[1]));
+test('Setup controls remain unique and include the active connection contract', () => {
+    const markupIds = [...settings.matchAll(/\bid="(cig_[\w-]+)"/g)].map((match) => match[1]);
     assert.doesNotMatch(settings, /id="cig_generate_btn"/);
-    for (const id of boundIds) {
-        if (DYNAMIC_OR_NON_SETTINGS_IDS.has(id) || id === 'cig_generate_btn') continue;
-        assert.equal((settings.match(new RegExp(`id="${id}"`, 'g')) || []).length, 1, `${id} must occur exactly once`);
-    }
+    for (const id of new Set(markupIds)) assert.equal(countId(id), 1, `${id} must occur exactly once`);
+    for (const id of ['cig_provider', 'cig_edit_connection', 'cig_add_connection', 'cig_model', 'cig_model_method', 'cig_connection_editor', 'cig_connection_preset']) assert.equal(countId(id), 1, `${id} remains singular`);
 });
 
 test('settings navigation activates, persists, and supports keyboard roving focus', () => {
@@ -132,7 +149,7 @@ test('Refresh Models reports route-aware outcomes and keeps existing models on e
     assert.match(index, /getDiscoveryRefreshMessage\(result\)/);
     assert.match(index, /Your current model list was kept\./);
     assert.match(settings, /id="cig_model_refresh"[^>]*value="Refresh Models"/u);
-    assert.match(settings, /Refresh Models checks the selected provider and keeps existing local models\./u);
+    assert.match(settings, /Refresh Models checks the active connection and keeps your existing local choices\./u);
 });
 
 const customConnection = {
@@ -192,22 +209,23 @@ test('provider option projection includes enabled custom connections without pro
     });
 });
 
-test('Advanced setup exposes explicit masked custom image protocols with separate save and test actions', () => {
-    const advanced = advancedMarkup();
+test('Connection editor exposes masked custom image protocols with separate save, test, and activation actions', () => {
+    const editor = connectionEditorMarkup();
     for (const id of [
-        'cig_custom_connection_list', 'cig_custom_connection_add', 'cig_custom_connection_label',
+        'cig_custom_connection_list', 'cig_custom_connection_label',
         'cig_custom_connection_protocol', 'cig_custom_connection_base_url', 'cig_custom_connection_models_path',
         'cig_custom_connection_generation_path', 'cig_custom_connection_auth', 'cig_custom_connection_key',
         'cig_custom_connection_enabled', 'cig_custom_connection_save', 'cig_custom_connection_test',
-        'cig_custom_connection_delete',
+        'cig_custom_connection_delete', 'cig_custom_connection_use', 'cig_custom_connection_dual',
+        'cig_custom_connection_gemini_url', 'cig_custom_connection_images_url',
         'cig_custom_connection_status', 'cig_custom_connection_preview', 'cig_custom_connection_local_warning',
         'cig_custom_connection_first_request_warning', 'cig_custom_connection_key_warning',
-    ]) assert.match(advanced, new RegExp(`id="${id}"`));
-    assert.match(advanced, /option value="openai-images">OpenAI Images/);
-    assert.match(advanced, /option value="gemini-compatible">Gemini-compatible/);
-    assert.doesNotMatch(advanced, /id="cig_custom_connection_protocol"[^>]*disabled/);
-    assert.match(advanced, /id="cig_custom_connection_key"[^>]*type="password"[^>]*aria-describedby="cig_custom_connection_key_warning"[^>]*autocomplete="off"/);
-    assert.match(advanced, /value="Test and fetch models"/);
+    ]) assert.match(editor, new RegExp(`id="${id}"`));
+    assert.match(editor, /option value="openai-images">OpenAI Images/);
+    assert.match(editor, /option value="gemini-compatible">Gemini-compatible/);
+    assert.doesNotMatch(editor, /id="cig_custom_connection_protocol"[^>]*disabled/);
+    assert.match(editor, /id="cig_custom_connection_key"[^>]*type="password"[^>]*aria-describedby="cig_custom_connection_key_warning"[^>]*autocomplete="off"/);
+    assert.match(editor, /value="Test and fetch models"/);
     assert.match(settings, /browser-side SillyTavern extension settings/);
     assert.match(index, /#cig_custom_connection_save/);
     assert.match(index, /#cig_custom_connection_test/);
@@ -267,9 +285,9 @@ test('route diagnostics are complete, honest, and redact secret-bearing inputs',
 });
 
 test('custom route preview is labelled text with a polite status region', () => {
-    const advanced = advancedMarkup();
-    assert.match(advanced, /id="cig_custom_connection_route_summary"[^>]*role="status"[^>]*aria-live="polite"/);
-    assert.match(advanced, /id="cig_custom_connection_preview"[^>]*aria-label="Sanitized route preview"/);
+    const editor = connectionEditorMarkup();
+    assert.match(editor, /id="cig_custom_connection_route_summary"[^>]*role="status"[^>]*aria-live="polite"/);
+    assert.match(editor, /id="cig_custom_connection_preview"[^>]*aria-label="Sanitized route preview"/);
     assert.match(index, /projectRouteDiagnostics\(/);
     assert.doesNotMatch(index, /JSON\.stringify\(editor\.routePreview/);
     assert.doesNotMatch(index, /editor\.routePreview\.(?:catalog|generation)\.(?:url|upstreamProxyRoot)/);

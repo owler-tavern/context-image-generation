@@ -33,8 +33,8 @@ test('classifies curated LinkAPI image catalog records through their verified bu
 
     assert.equal(catalog.returnedCount, 3);
     assert.equal(catalog.accepted.length, 2);
-    assert.equal(catalog.unresolved.length, 0);
-    assert.equal(catalog.rejected.length, 1);
+    assert.equal(catalog.unresolved.length, 1);
+    assert.equal(catalog.rejected.length, 0);
     assert.deepEqual(catalog.accepted.map((entry) => [entry.id, entry.transportId || entry.transport]), [
         ['gemini-3.1-flash-image-preview', 'sillyTavernGeminiProxy'],
         ['gpt-image-2-c', 'openAiImages'],
@@ -59,7 +59,8 @@ test('preserves catalog outcome counts without retaining raw catalog records', a
         fetchImpl: async () => new Response(JSON.stringify({ data: [{ id: 'gpt-4.1' }] }), { status: 200 }),
     });
 
-    assert.deepEqual(result.models, []);
+    assert.deepEqual(result.models.map(model => model.id), ['gpt-4.1']);
+    assert.equal(result.models[0].transportId, null);
     assert.deepEqual(result.evidence, {
         kind: 'openai-list',
         source: 'provider /models endpoint',
@@ -67,8 +68,8 @@ test('preserves catalog outcome counts without retaining raw catalog records', a
         retryCount: 0,
         returnedCount: 1,
         acceptedCount: 0,
-        unresolvedCount: 0,
-        rejectedCount: 1,
+        unresolvedCount: 1,
+        rejectedCount: 0,
     });
     assert.equal(Object.hasOwn(result.evidence, 'catalog'), false);
 });
@@ -103,7 +104,7 @@ test('reports an unresolved-only TokenReply discovery as having no verified imag
 
     assert.deepEqual(getDiscoveryRefreshMessage(result), {
         level: 'warning',
-        message: 'Provider returned 1 models, but none have a verified image route. Your saved models were kept.',
+        message: 'Catalog refreshed in Setup → Model: 0 with known image routes; 1 marked Unverified. Unverified entries need a documented protocol in a custom connection before generation.',
     });
     assert.deepEqual(mergeDiscoveryModelRecords([], result, 'tokenreply').map((entry) => entry.id), ['gemini-2.5-flash-image']);
 });
@@ -330,14 +331,16 @@ test('coordinator aborts a custom refresh when its provider is cancelled', async
     assert.equal(coordinator.isActive(customConnection.id), false);
 });
 
-test('keeps Refresh Models beside the selector while Manage Models stays in the sole Advanced disclosure', async () => {
+test('keeps Refresh Models and model search in the main Setup flow while manual IDs remain optional', async () => {
     const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
     assert.match(settings, /id="cig_model_refresh"/);
     assert.match(settings, /id="cig_model_search"/);
     assert.match(settings, /id="cig_model_discovery_status"/);
-    assert.match(settings, /<details id="cig_advanced_setup"/);
-    assert.match(settings, /<div id="cig_model_manager"/);
+    assert.match(settings, /<details id="cig_model_manager"[\s\S]*?<summary>Enter a model ID<\/summary>/);
+    assert.match(settings, /id="cig_show_all_models"/);
+    assert.match(settings, /id="cig_model_method_container"/);
+    assert.doesNotMatch(settings, /id="cig_managed_model_list"/);
     assert.doesNotMatch(settings, /cig_fetch_provider_models/);
     assert.match(index, /#cig_model_refresh/);
     assert.match(index, /#cig_model_search/);

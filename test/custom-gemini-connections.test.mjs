@@ -165,7 +165,7 @@ test('Gemini first-request confirmation names the saved protocol, transport, hos
     assert.match(confirmation.message, /POST \/api\/backends\/chat-completions\/generate/);
     assert.match(confirmation.message, /Upstream proxy root: https:\/\/gemini\.example/);
     assert.doesNotMatch(confirmation.message, /Protocol: OpenAI Images/);
-    assert.match(runtimeSource, /projectCustomFirstRequestConfirmation\(connection\)/);
+    assert.match(runtimeSource, /resolveCustomModelRoute\(connection, model\)/);
 });
 
 test('Gemini discovery fallbacks preserve the exact saved connection route and evidence', async () => {

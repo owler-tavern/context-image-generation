@@ -66,9 +66,16 @@ test('requires a model when the model is missing or not in the provider model li
     });
 });
 
-test('reports ready only for a listed model and complete credentials', () => {
-    assert.deepEqual(deriveSetupReadiness({ providerUi: provider(), providerId: 'makersuite', modelId: 'image-model', apiKey: '' }), {
-        state: 'ready', label: 'Ready to generate',
+test('requires an explicit route, then reports configured status without claiming a live generation', () => {
+    const input = { providerUi: provider(), providerId: 'makersuite', modelId: 'image-model', apiKey: '' };
+    assert.deepEqual(deriveSetupReadiness(input), {
+        state: 'needs-method', label: 'Choose a generation method for this model.',
+    });
+    assert.deepEqual(deriveSetupReadiness({
+        ...input,
+        route: { transportId: 'host', model: { routeEvidence: { state: 'configured' } } },
+    }), {
+        state: 'ready', label: 'Configured. Image generation has not been tried with this model. Use the wand to try it.',
     });
 });
 

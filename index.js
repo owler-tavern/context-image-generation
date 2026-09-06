@@ -29,10 +29,10 @@ import { SlashCommandParser } from '../../../slash-commands/SlashCommandParser.j
 import { SlashCommand } from '../../../slash-commands/SlashCommand.js';
 import { ARGUMENT_TYPE, SlashCommandArgument } from '../../../slash-commands/SlashCommandArgument.js';
 import { getModelDefinition, getProviderDefinition, resolveAdapterId, resolveProviderRoute, getProviderDefinitions, getReferenceImageCapability, requiresAdapterRoute } from './lib/providers/registry.js';
-import { getCustomCatalogRefreshMessage, getModelFallback, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectCustomFirstRequestConfirmation, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
-import { mergeFetchedModelEntries, updateLocalModelEntries, mergeCustomDiscoveryModelRecords, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage, updateModelRecords } from './lib/providers/model-manager.js';
+import { getCustomCatalogRefreshMessage, projectCustomConnectionEditor, projectCustomConnectionProviderUi, projectProviderControls, projectProviderOptions, projectProviderUi, projectRouteDiagnostics } from './lib/providers/ui-projection.js';
+import { mergeProviderModels, mergeFetchedModelEntries, updateLocalModelEntries, mergeCustomDiscoveryModelRecords, mergeDiscoveryModelRecords, getDiscoveryRefreshMessage } from './lib/providers/model-manager.js';
 import { getProviderModelEntries, setProviderModelRecords } from './lib/providers/model-record-store.js';
-import { cancelModelRefreshUi, createModelSelectorController, renderManagedModelSelector, setControlBusyState } from './lib/providers/model-selector-ui.js';
+import { cancelModelRefreshUi, createModelSelectorController, setControlBusyState } from './lib/providers/model-selector-ui.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
@@ -47,11 +47,12 @@ import { buildGenerationKey, getMessageFingerprint, validateMessageTarget } from
 import { attachNormalizedProviderError, getSafeProviderErrorLogFields, normalizeProviderError } from './lib/providers/errors.js';
 import { createChatLifecycleEpoch } from './lib/rp-lifecycle.js';
 import { createGenerationPlan, mapAspectRatioToImageSize } from './lib/generation-plan.js';
-import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent, inspectGenerationPlan } from './lib/providers/preflight.js';
+import { inspectGenerationPlan } from './lib/providers/preflight.js';
 import { serializeDiagnosticsExport } from './lib/providers/diagnostics.js';
 import { migrateProviderSettings } from './lib/providers/settings-migration.js';
 import { appearanceLibraryEquivalent, extraStoryToolsEquivalent, loadExtensionSettings, persistExtensionSettings, providerSettingsEquivalent, removeRetiredGenerationDeadline, replaceWhenChanged } from './lib/settings-migration-change.js';
-import { connectionRevision, createCustomConnectionId, customCredentialRef, isCurrentCustomDiscoveryCompletion, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
+import { resolveCustomModelRoute, customModelRouteRevision, connectionRevision, createCustomConnectionId, customCredentialRef, isCurrentCustomDiscoveryCompletion, migrateCustomConnections, nextCustomDiscoveryEvidence, projectCurrentCustomDiscoveryState, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from './lib/providers/custom-connections.js';
+import { activateImageConnection, rememberImageModel, projectSetupModels } from './lib/setup-connection-state.js';
 import { deriveSetupReadiness, formatSetupRuntimeIssue, normalizeSettingsTab, projectImageSizePreference, projectReferencePreferences, projectSetupTabStatus, resolveInitialSettingsTab } from './lib/settings-ui.js';
 import { createAccessibleDialogController } from './lib/gallery-dialog.js';
 import { canIncrementallyPrependGalleryItem, createGalleryRenderState, reindexGalleryTileActionTargets } from './lib/gallery-render-state.js';
@@ -225,6 +226,7 @@ generationCoordinator.subscribe(() => {
 const modelDiscoveryCoordinator = createModelDiscoveryCoordinator();
 let modelDiscoveryUiSequence = 0;
 let customConnectionDraftId = '';
+let setupEditorProviderId = ''; // Editor selection never chooses the generation destination.
 const chatLifecycleEpoch = createChatLifecycleEpoch();
 
 function renderAdvancedPlanInspector() {
@@ -278,8 +280,11 @@ function renderSetupReadiness(settings) {
         providerId,
         modelId: settings.model,
         apiKey: getProviderApiKey(settings, providerId),
+        route: getSelectedModelRoute(settings),
     });
-    $('#cig_setup_status').text(readiness.label).attr('data-cig-readiness', readiness.state);
+    $('#cig_setup_status').text(`${providerUi?.label || providerId}${settings.model ? ` Â· ${settings.model}` : ''}: ${readiness.label}`).attr('data-cig-readiness', readiness.state);
+    const action = { 'needs-key': 'Add key', 'needs-model': 'Choose model', 'needs-method': 'Choose generation method', 'needs-provider': 'Add connection', unavailable: 'Choose connection' }[readiness.state];
+    $('#cig_setup_fix').text(action || '').prop('hidden', !action).attr('data-readiness', readiness.state);
     renderSetupTabStatus(readiness);
 }
 
@@ -359,6 +364,11 @@ function projectSelectedProviderUi(settings, providerId = settings?.provider || 
 function getSelectedModelRoute(settings, modelId = settings.model) {
     const providerId = settings.provider || 'makersuite';
     const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
+    const custom = getCustomConnection(settings, providerId);
+    if (custom) {
+        const route = resolveCustomModelRoute(custom, localModel);
+        return { providerId, modelId, model: localModel, transportId: route?.transportId || '', routeEvidence: localModel?.routeEvidence, ...route };
+    }
     let providerRoute = resolveProviderRoute(providerId, modelId);
     if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
         providerRoute = { ...providerRoute, model: { id: modelId, ...cloneSnapshot(localModel) }, transport: localModel.transportId || localModel.transport };
@@ -371,50 +381,7 @@ function getSelectedModelRoute(settings, modelId = settings.model) {
     };
 }
 
-function modelNeedsExperimentalPreflight(model) {
-    const sourceKind = model?.source?.kind || model?.source;
-    const imageGenerationState = model?.capabilities?.imageGeneration?.state || 'unknown';
-    return ['manual', 'fetched'].includes(sourceKind) && imageGenerationState !== 'supported';
-}
 
-function isExperimentalPreflightAccepted(settings, route) {
-    return hasExperimentalModelPreflightConsent(settings.experimental_model_preflight, route);
-}
-
-function setExperimentalPreflight(settings, route, accepted) {
-    const key = experimentalModelPreflightKey(route);
-    if (!key) return;
-    if (!settings.experimental_model_preflight || typeof settings.experimental_model_preflight !== 'object' || Array.isArray(settings.experimental_model_preflight)) settings.experimental_model_preflight = {};
-    if (accepted === true) settings.experimental_model_preflight[key] = true;
-    else delete settings.experimental_model_preflight[key];
-}
-
-function clearExperimentalPreflightForRoute(settings, route) {
-    setExperimentalPreflight(settings, route, false);
-}
-
-function clearExperimentalPreflightForProvider(settings, providerId) {
-    const map = settings.experimental_model_preflight;
-    if (!map || typeof map !== 'object' || Array.isArray(map)) return;
-    for (const key of Object.keys(map)) {
-        try {
-            const parsed = JSON.parse(key);
-            if (Array.isArray(parsed) && parsed[0] === providerId) delete map[key];
-        } catch { /* migration will discard malformed keys */ }
-    }
-}
-
-function renderExperimentalPreflight(settings, modelId = settings.model) {
-    const selectedRoute = getSelectedModelRoute(settings, modelId);
-    const showExperimentalPreflight = modelNeedsExperimentalPreflight(selectedRoute.model);
-    $('#cig_experimental_preflight').toggle(showExperimentalPreflight);
-    $('#cig_experimental_preflight_checkbox')
-        .prop('checked', showExperimentalPreflight && isExperimentalPreflightAccepted(settings, selectedRoute))
-        .prop('disabled', !showExperimentalPreflight);
-    $('#cig_experimental_preflight_warning')
-        .text('Endpoint/model is unverified; optional features are disabled.')
-        .toggle(showExperimentalPreflight);
-}
 
 function getProviderDiscoveryState(settings, providerId) {
     const custom = getCustomConnectionStore(settings);
@@ -570,12 +537,13 @@ async function fetchManagedProviderModels() {
     }
 
     const key = getProviderApiKey(settings, providerId);
-    if (ui.requiresApiKey && !key) {
+    const customConnection = getCustomConnection(settings, providerId);
+    const catalogRequiresKey = customConnection ? (customConnection.catalogAuth ? customConnection.catalogAuth !== 'none' : Boolean(customConnection.credentialRef)) : ui.requiresApiKey;
+    if (catalogRequiresKey && !key) {
         toastr.warning(`Enter a ${ui.label} key first.`, 'Context Image Generation');
         return;
     }
 
-    const customConnection = getCustomConnection(settings, providerId);
     const capturedCustomRevision = customConnection ? connectionRevision(customConnection) : '';
     const refreshToken = ++modelDiscoveryUiSequence;
     const fetchButtons = $('#cig_model_refresh');
@@ -584,7 +552,7 @@ async function fetchManagedProviderModels() {
         const result = customConnection
             ? await modelDiscoveryCoordinator.refreshCustom(providerId, {
                 connection: customConnection,
-                authPreset: customConnection.credentialRef ? 'bearer' : 'none',
+                authPreset: customConnection.catalogAuth || (customConnection.credentialRef ? (customConnection.protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none'),
                 credential: key,
                 existingEvidence: getCustomConnectionStore(settings).evidence[providerId],
                 savedModels: getProviderModelEntries(settings, providerId),
@@ -659,6 +627,7 @@ function selectedCustomConnection(settings) {
 }
 
 function renderCustomConnectionEditor() {
+    if (!renderConnectionEditorMode()) return;
     const settings = extension_settings[extensionName] || {};
     const store = getCustomConnectionStore(settings);
     let connection = selectedCustomConnection(settings);
@@ -683,17 +652,26 @@ function renderCustomConnectionEditor() {
     $('#cig_custom_connection_models_path').val(connection.modelsPath || '/v1/models');
     $('#cig_custom_connection_generation_path').val(connection.generationPath || '/v1/images/generations').toggle(protocol === 'openai-images');
     $('#cig_custom_connection_generation_path_label').toggle(protocol === 'openai-images');
-    $('#cig_custom_connection_auth').val(connection.credentialRef ? (protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none');
-    $('#cig_custom_connection_key').val('').prop('disabled', !connection.credentialRef)
+    $('#cig_custom_connection_auth').val(connection.catalogAuth || (connection.credentialRef ? (protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none'));
+    $('#cig_custom_connection_key').val('').prop('disabled', false)
         .attr('placeholder', key ? 'Saved key (enter to replace)' : 'Enter API key');
+    $('#cig_custom_connection_clear_key').prop('checked', false);
+    $('#cig_custom_connection_save').val(connection.id === settings.provider ? 'Save changes to active connection' : 'Save connection');
     $('#cig_custom_connection_enabled').prop('checked', connection.enabled !== false);
+    $('#cig_custom_connection_dual').prop('checked', Boolean(connection.generationMethods));
+    $('#cig_custom_connection_gemini_url').val(connection.generationMethods?.['gemini-compatible']?.baseUrl || connection.baseUrl || '');
+    $('#cig_custom_connection_images_url').val(connection.generationMethods?.['openai-images']?.baseUrl || connection.baseUrl || '');
+    $('#cig_custom_connection_generation_path').val(connection.generationMethods?.['openai-images']?.generationPath || connection.generationPath || '/v1/images/generations');
+    renderCustomMethodFields();
+    $('#cig_custom_connection_use').prop('disabled', !store.connections[connection.id] || connection.enabled === false);
     $('#cig_custom_connection_status').text(editor ? editor.status.label : 'Not saved');
     $('#cig_custom_connection_delete').prop('disabled', !store.connections[connection.id]);
+    $('#cig_custom_connection_test').prop('disabled', !store.connections[connection.id]);
     const localWarning = editor?.localInsecure ? 'Local HTTP connections are not encrypted. Use this only for a trusted service on this device.' : '';
     $('#cig_custom_connection_local_warning').text(localWarning).prop('hidden', !editor?.localInsecure).toggle(Boolean(editor?.localInsecure));
     const firstRequestWarning = editor?.status?.firstRequestWarning || '';
     $('#cig_custom_connection_first_request_warning').text(firstRequestWarning).prop('hidden', !firstRequestWarning).toggle(Boolean(firstRequestWarning));
-    const selectedModel = store.models[connection.id]?.find((model) => model.id === settings.model) || store.models[connection.id]?.[0];
+    const selectedModel = store.models[connection.id]?.find((model) => model.id === settings.connection_models?.[connection.id]);
     const routeEvidence = selectedModel?.routeEvidence || (store.evidence[connection.id] ? {
         ...store.evidence[connection.id],
         source: store.evidence[connection.id].state === 'verified' ? 'sanitized-probe' : 'user-configured-protocol',
@@ -730,12 +708,19 @@ function renderCustomConnectionEditor() {
     $('#cig_custom_connection_preview').text(previewLines.join('\n'));
 }
 
+function renderCustomMethodFields() {
+    const gemini = $('#cig_custom_connection_protocol').val() === 'gemini-compatible';
+    const dual = $('#cig_custom_connection_dual').prop('checked');
+    $('#cig_custom_connection_generation_path, #cig_custom_connection_generation_path_label').toggle(!gemini || dual);
+    $('#cig_custom_connection_gemini_url, label[for="cig_custom_connection_gemini_url"], #cig_custom_connection_images_url, label[for="cig_custom_connection_images_url"]').toggle(Boolean(dual));
+}
+
 function readCustomConnectionDraft() {
     const settings = extension_settings[extensionName] || {};
     const existing = selectedCustomConnection(settings);
     const id = existing?.id || customConnectionDraftId || createCustomConnectionId();
     const protocol = $('#cig_custom_connection_protocol').val() === 'gemini-compatible' ? 'gemini-compatible' : 'openai-images';
-    const authPreset = $('#cig_custom_connection_auth').val() === 'none' ? 'none' : (protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer');
+    const authPreset = $('#cig_custom_connection_auth').val() || 'bearer';
     return {
         schema: 1,
         id,
@@ -744,8 +729,13 @@ function readCustomConnectionDraft() {
         baseUrl: String($('#cig_custom_connection_base_url').val() || ''),
         modelsPath: String($('#cig_custom_connection_models_path').val() || '/v1/models'),
         ...(protocol === 'openai-images' ? { generationPath: String($('#cig_custom_connection_generation_path').val() || '/v1/images/generations') } : {}),
-        credentialRef: authPreset !== 'none' ? customCredentialRef(id) : null,
+        catalogAuth: authPreset,
+        credentialRef: $('#cig_custom_connection_clear_key').prop('checked') ? null : (authPreset !== 'none' || existing?.credentialRef || String($('#cig_custom_connection_key').val() || '') ? customCredentialRef(id) : null),
         enabled: $('#cig_custom_connection_enabled').prop('checked') !== false,
+        ...($('#cig_custom_connection_dual').prop('checked') ? { generationMethods: {
+            'openai-images': { baseUrl: String($('#cig_custom_connection_images_url').val() || $('#cig_custom_connection_base_url').val()), generationPath: String($('#cig_custom_connection_generation_path').val() || '/v1/images/generations') },
+            'gemini-compatible': { baseUrl: String($('#cig_custom_connection_gemini_url').val() || $('#cig_custom_connection_base_url').val()) },
+        } } : {}),
     };
 }
 
@@ -758,20 +748,38 @@ function saveCustomConnectionFromEditor() {
     settings.custom_connections = upsertCustomConnection(getCustomConnectionStore(settings), validation.connection);
     if (!settings.custom_connection_keys || typeof settings.custom_connection_keys !== 'object' || Array.isArray(settings.custom_connection_keys)) settings.custom_connection_keys = {};
     const enteredKey = String($('#cig_custom_connection_key').val() || '');
-    if (validation.connection.credentialRef && enteredKey) settings.custom_connection_keys[validation.connection.credentialRef] = enteredKey;
+    if (validation.connection.credentialRef && enteredKey) {
+        const keyChanged = settings.custom_connection_keys[validation.connection.credentialRef] !== enteredKey;
+        settings.custom_connection_keys[validation.connection.credentialRef] = enteredKey;
+        if (keyChanged) {
+            const store = getCustomConnectionStore(settings);
+            settings.custom_connections = migrateCustomConnections({ ...store,
+                evidence: { ...store.evidence, [validation.connection.id]: undefined },
+                modelEvidence: { ...store.modelEvidence, [validation.connection.id]: undefined },
+                confirmations: { ...store.confirmations, [validation.connection.id]: undefined },
+            });
+        }
+    }
     if (!validation.connection.credentialRef && draft.id) delete settings.custom_connection_keys[customCredentialRef(draft.id)];
     settings.custom_connection_editor_id = validation.connection.id;
+    setupEditorProviderId = validation.connection.id;
     customConnectionDraftId = validation.connection.id;
     renderProviderDropdown();
     $('#cig_provider').val(settings.provider);
     renderCustomConnectionEditor();
+    refreshManagedModels();
     saveSettingsDebounced();
     return validation.connection;
 }
 
 async function testCustomConnectionFromEditor() {
     let connection;
-    try { connection = saveCustomConnectionFromEditor(); }
+    try {
+        connection = selectedCustomConnection(extension_settings[extensionName]);
+        if (!connection) throw new Error('Save the connection before loading its models.');
+        const draft = validateCustomConnection(readCustomConnectionDraft());
+        if (!draft.valid || connectionRevision(draft.connection) !== connectionRevision(connection) || String($('#cig_custom_connection_key').val() || '')) throw new Error('Save your changes before loading models.');
+    }
     catch (error) { toastr.warning(error.message, 'Context Image Generation'); return; }
     const settings = extension_settings[extensionName];
     const capturedRevision = connectionRevision(connection);
@@ -782,7 +790,7 @@ async function testCustomConnectionFromEditor() {
         const store = getCustomConnectionStore(settings);
         const result = await discoverCustomConnectionModels({
             connection,
-            authPreset: connection.credentialRef ? (connection.protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none',
+            authPreset: connection.catalogAuth || (connection.credentialRef ? (connection.protocol === 'gemini-compatible' ? 'gemini-api-key' : 'bearer') : 'none'),
             credential: getCustomConnectionKey(settings, connection),
             existingEvidence: store.evidence[connection.id],
             savedModels: store.models[connection.id] || [],
@@ -801,10 +809,6 @@ async function testCustomConnectionFromEditor() {
         setProviderDiscoveryState(currentSettings, connection.id, result);
         setProviderModelRecords(currentSettings, connection.id, mergedModels);
         if (!result.warning || result.warning.code === 'DISCOVERY_EMPTY') {
-            currentSettings.provider = connection.id;
-            currentSettings.model = mergedModels.some((model) => model.id === currentSettings.model)
-                ? currentSettings.model
-                : mergedModels[0]?.id || currentSettings.model;
             toastr.success(getCustomCatalogRefreshMessage(result.models), 'Context Image Generation');
         } else toastr.warning(result.warning.userMessage, 'Context Image Generation');
         renderProviderDropdown();
@@ -839,34 +843,89 @@ async function deleteSelectedCustomConnection() {
 }
 
 function renderProviderDropdown() {
+    const settings = extension_settings[extensionName] || {};
     const $providerSelect = $('#cig_provider').empty();
-    const customConnections = Object.values(getCustomConnectionStore(extension_settings[extensionName] || {}).connections);
+    const customConnections = Object.values(getCustomConnectionStore(settings).connections);
+    const inactiveSelection = customConnections.find(connection => connection.id === settings.provider && connection.enabled === false);
+    if (inactiveSelection) $providerSelect.append($('<option>').val(inactiveSelection.id).text(`${inactiveSelection.label} (disabled)`).prop('disabled', true));
     for (const provider of projectProviderOptions({ customConnections })) {
-        const unavailableLabel = provider.available === false
-            ? ` — ${String(provider.unavailableReason || 'Unavailable until server adapter support').replace(/\s+/g, ' ').slice(0, 96)}`
-            : '';
-        $providerSelect.append($('<option>')
-            .val(provider.id)
-            .text(`${provider.label || provider.id}${unavailableLabel}`)
-            .prop('disabled', provider.available === false)
-            .attr('title', provider.available === false ? provider.unavailableReason || 'Available after the optional server adapter is installed.' : undefined));
+        if (provider.available === false && provider.id !== settings.provider) continue;
+        const definition = getProviderDefinition(provider.id);
+        if (definition?.credentialKey && !getProviderApiKey(settings, provider.id) && provider.id !== settings.provider) continue;
+        $providerSelect.append($('<option>').val(provider.id).text(provider.label || provider.id).prop('disabled', provider.available === false));
     }
+    $providerSelect.val(settings.provider || 'makersuite');
+}
+
+function useImageConnection(providerId) {
+    const settings = extension_settings[extensionName];
+    const custom = getCustomConnection(settings, providerId);
+    const provider = getProviderDefinition(providerId);
+    if ((!custom && !provider) || custom?.enabled === false || provider?.available === false) return;
+    cancelModelDiscovery(settings.provider);
+    activateImageConnection(settings, providerId);
+    $('#cig_model_search').val('');
+    clearSetupRuntimeIssue();
+    renderProviderDropdown();
+    refreshManagedModels();
+    renderChatAppearanceSources();
+    $('#cig_connection_editor').prop('open', false);
+    saveSettingsDebounced();
+}
+
+function openConnectionEditor(providerId = '') {
+    const settings = extension_settings[extensionName];
+    setupEditorProviderId = providerId;
+    const custom = getCustomConnection(settings, providerId);
+    if (custom) { settings.custom_connection_editor_id = custom.id; customConnectionDraftId = custom.id; }
+    else if (providerId === 'custom') { settings.custom_connection_editor_id = ''; customConnectionDraftId = createCustomConnectionId(); }
+    renderCustomConnectionEditor();
+    $('#cig_connection_editor').prop('open', true);
+}
+
+function renderConnectionEditorMode() {
+    const settings = extension_settings[extensionName] || {};
+    const preset = $('#cig_connection_preset').empty();
+    preset.append($('<option>').val('').text('Choose a provider'));
+    for (const provider of getProviderDefinitions().filter(provider => provider.available !== false)) {
+        preset.append($('<option>').val(provider.id).text(provider.label || provider.id));
+    }
+    preset.append($('<option>').val('custom').text('Custom API'));
+    const custom = setupEditorProviderId === 'custom' || Boolean(getCustomConnection(settings, setupEditorProviderId));
+    preset.val(custom ? 'custom' : setupEditorProviderId);
+    $('#cig_custom_connection_editor').toggle(custom);
+    const builtin = getProviderDefinition(setupEditorProviderId);
+    $('#cig_builtin_connection_fields').toggle(Boolean(builtin));
+    const activeLabel = getCustomConnection(settings, settings.provider)?.label || getProviderDefinition(settings.provider)?.label || settings.provider;
+    const editingLabel = getCustomConnection(settings, setupEditorProviderId)?.label || builtin?.label || 'New connection';
+    $('#cig_connection_editing_status').text(`${editingLabel}. Images currently use ${activeLabel || 'no connection'}.`);
+    if (builtin) {
+        const ui = projectProviderUi(builtin.id, settings.model);
+        $('#cig_provider_key_container').toggle(ui.requiresApiKey);
+        $('#cig_provider_api_key_label').text(ui.credential.label);
+        $('#cig_provider_api_key').val('').attr('placeholder', getProviderApiKey(settings, builtin.id) ? 'Key saved â€” enter a new key to replace it' : 'Enter API key');
+        $('#cig_provider_info').text(ui.credential.setupHelp || '').toggle(Boolean(ui.credential.setupHelp));
+        $('#cig_builtin_connection_save').toggle(ui.requiresApiKey);
+        $('#cig_builtin_connection_use').prop('disabled', ui.requiresApiKey && !getProviderApiKey(settings, builtin.id));
+    }
+    return custom;
 }
 
 function getSetupModelContext(settings) {
     const providerId = settings.provider || 'makersuite';
     const localEntries = getProviderModelEntries(settings, providerId);
     const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const ui = projectSelectedProviderUi(settings, providerId, settings.model, {
-        localEntries,
-        discoveryEvidence: discoveryState.evidence,
-        discoveryWarning: discoveryState.warning,
-    });
+    const ui = projectSelectedProviderUi(settings, providerId, settings.model, { localEntries, discoveryEvidence: discoveryState.evidence, discoveryWarning: discoveryState.warning });
     if (!ui) return undefined;
-    const selectedModelId = getCustomConnection(settings, providerId)
-        ? ui.selectedModelId || settings.model || ''
-        : getModelFallback(providerId, settings.model, localEntries);
-    return { providerId, models: ui.models, selectedModelId, ui };
+    const raw = getCustomConnection(settings, providerId) ? localEntries : mergeProviderModels(providerId, localEntries);
+    const all = raw.map(model => ({
+        id: model.id,
+        label: `${model.label || model.id}${model.label && model.label !== model.id ? ` â€” ${model.id}` : ''}`,
+        knownImage: model.source?.kind === 'built-in' || (!model.source && Boolean(model.transport)) || model.capabilities?.imageGeneration?.state === 'supported' || model.routeEvidence?.state === 'verified',
+    }));
+    if (settings.model && !all.some(model => model.id === settings.model)) all.push({ id: settings.model, label: `${settings.model} â€” not in the latest list` });
+    const models = projectSetupModels(all, { selectedModelId: settings.model, query: $('#cig_model_search').val(), showAll: $('#cig_show_all_models').prop('checked') });
+    return { providerId, models, selectedModelId: settings.model || '', ui };
 }
 
 const modelSelectorController = createModelSelectorController($, {
@@ -874,7 +933,6 @@ const modelSelectorController = createModelSelectorController($, {
     getModelContext: getSetupModelContext,
     getSelectedRoute: getSelectedModelRoute,
     cancelDiscovery: cancelModelDiscovery,
-    clearPreflight: clearExperimentalPreflightForRoute,
     clearRuntimeIssue: clearSetupRuntimeIssue,
     renderCapabilityUi: toggleImageSizeVisibility,
     renderReadinessUi: renderSetupReadiness,
@@ -940,6 +998,7 @@ function selectInitialSettingsTab(settings) {
         providerId,
         modelId: settings.model,
         apiKey: getProviderApiKey(settings, providerId),
+        route: getSelectedModelRoute(settings),
     });
     activateSettingsTab(resolveInitialSettingsTab({ savedTab: settings.ui_last_settings_tab, readiness }), { persist: false });
 }
@@ -1352,56 +1411,34 @@ async function loadSettings() {
 
 function toggleProviderSpecificSettings() {
     const settings = extension_settings[extensionName];
-    const providerId = settings.provider || 'makersuite';
-    const ui = projectSelectedProviderUi(settings, providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
+    const ui = projectSelectedProviderUi(settings, settings.provider, settings.model, { localEntries: getProviderModelEntries(settings, settings.provider) });
     if (!ui) return;
-    const credential = ui.credential;
-    $('#cig_provider_key_container').toggle(credential.mode === 'extension-key');
-    $('#cig_provider_advanced_container').toggle(Boolean(credential.advancedHelp));
-    $('#cig_provider_api_key_label').text(credential.label);
-    $('#cig_provider_api_key').attr('placeholder', credential.placeholder);
-    $('#cig_provider_api_key').val(getProviderApiKey(settings, settings.provider));
-    $('#cig_provider_info').text(credential.setupHelp).toggle(Boolean(credential.setupHelp));
-    $('#cig_provider_advanced_info').text(credential.advancedHelp).toggle(Boolean(credential.advancedHelp));
+    $('#cig_provider_advanced_container').toggle(Boolean(ui.credential?.advancedHelp));
+    $('#cig_provider_advanced_info').text(ui.credential?.advancedHelp || '');
     renderSetupReadiness(settings);
 }
 
 function renderModelManager() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const localEntries = getProviderModelEntries(settings, providerId);
-    const discoveryState = getProviderDiscoveryState(settings, providerId);
-    const ui = projectSelectedProviderUi(settings, providerId, settings.model, {
-        localEntries,
-        discoveryEvidence: discoveryState.evidence,
-        discoveryWarning: discoveryState.warning,
-    });
-    if (!ui) return;
-
-    renderManagedModelSelector($, {
-        models: ui.models,
-        selectedModelId: settings.model,
-        search: $('#cig_model_search').val(),
-        labelForModel: (model) => `${model.label}${localEntries.some((entry) => entry.id === model.id) ? ' (local)' : ' (built-in)'}`,
-    });
-    $('#cig_managed_model_id').val(settings.model || '');
-    const customConnection = getCustomConnection(settings, providerId);
-    const provider = getProviderDefinition(providerId) || (customConnection ? { id: providerId, transports: customConnection.protocol === 'gemini-compatible' ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } } : { openAiImages: { baseUrl: customConnection.baseUrl } }, models: [] } : undefined);
-    const selectedEntry = localEntries.find((entry) => entry.id === settings.model);
-    const $transport = $('#cig_managed_model_transport').empty();
-    for (const transport of Object.keys(provider?.transports || {})) {
-        const label = transport === 'sillyTavernGeminiProxy' ? 'Gemini-compatible proxy' : transport === 'openAiImages' ? 'OpenAI Images API' : transport;
-        $transport.append($('<option>').val(transport).text(label));
+    const custom = getCustomConnection(settings, providerId);
+    const route = getSelectedModelRoute(settings);
+    const builtin = getModelDefinition(providerId, settings.model);
+    const select = $('#cig_model_method').empty();
+    select.append($('<option>').val('').text('Choose a generation method'));
+    const methods = custom ? Object.keys(custom.generationMethods || { [custom.protocol]: {} })
+        : Object.keys(getProviderDefinition(providerId)?.transports || {});
+    for (const method of methods) {
+        const id = resolveAdapterId(method) || method;
+        if (!['openai-images', 'sillytavern-gemini-proxy', 'gemini-compatible'].includes(id)) continue;
+        select.append($('<option>').val(method).text(id === 'openai-images' ? 'Images API (GPT image)' : 'Gemini-compatible'));
     }
-    $transport.val(selectedEntry?.transportId || selectedEntry?.transport || provider?.models?.find((model) => model.id === settings.model)?.transport || $transport.val());
-    $('#cig_managed_model_transport_container').toggle($transport.children().length > 1);
-    renderExperimentalPreflight(settings);
-    $('#cig_model_discovery_note')
-        .text(ui.modelDiscovery.warning?.userMessage || (ui.modelDiscovery.refreshEnabled
-            ? 'Refresh merges discovered models and keeps your local entries.'
-            : ui.modelDiscovery.disabledReason || ''))
-        .toggle(Boolean(ui.modelDiscovery.warning?.userMessage || ui.modelDiscovery.refreshEnabled || ui.modelDiscovery.disabledReason));
-    $('#cig_remove_model').prop('disabled', !localEntries.some((entry) => entry.id === settings.model));
+    const selectedMethod = custom ? (route?.protocol || '') : (route.model?.transportId || route.model?.transport || '');
+    select.val(selectedMethod).prop('disabled', Boolean(builtin));
+    $('#cig_model_method_container').toggle(Boolean(settings.model) && !builtin);
+    $('#cig_model_method_note').text(!settings.model ? '' : builtin ? 'Generation method supplied by the provider preset.' : !route.transportId ? 'Choose the method documented by your provider. Model names do not determine the method.' : 'This method is saved for this model. Optional image features stay off until supported.');
+    const state = getProviderDiscoveryState(settings, providerId);
+    $('#cig_model_discovery_note').text(state.warning ? 'Models could not be refreshed. Your active connection and selected model are unchanged.' : 'Refresh updates this connectionâ€™s catalog without changing your selection.');
     renderSetupReadiness(settings);
 }
 
@@ -1413,49 +1450,41 @@ function refreshManagedModels() {
     renderSetupReadiness(extension_settings[extensionName]);
 }
 
-function saveManagedModel(operation) {
+function saveManagedModel() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
-    const customConnection = getCustomConnection(settings, providerId);
-    const provider = getProviderDefinition(providerId) || (customConnection ? { id: providerId, transports: customConnection.protocol === 'gemini-compatible' ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } } : { openAiImages: { baseUrl: customConnection.baseUrl } }, models: [] } : undefined);
-    const id = $('#cig_managed_model_id').val().trim();
-    if (!id) {
-        toastr.warning('Enter an actual model ID.', 'Context Image Generation');
-        return;
+    const id = String($('#cig_managed_model_id').val() || '').trim();
+    if (!id || id.length > 240 || /[\u0000-\u001f]/u.test(id)) { toastr.warning('Enter a model ID, up to 240 characters.'); return; }
+    const current = getProviderModelEntries(settings, providerId);
+    const custom = getCustomConnection(settings, providerId);
+    if (!current.some(model => model.id === id) && !getModelDefinition(providerId, id)) {
+        const entry = { id, providerId, source: { kind: 'manual' }, ...(custom ? { transportId: custom.protocol === 'gemini-compatible' ? 'sillytavern-gemini-proxy' : 'openai-images' } : {}) };
+        setProviderModelRecords(settings, providerId, [...current, entry]);
     }
-    const previousId = $('#cig_managed_model_list').val();
-    const localEntries = getProviderModelEntries(settings, providerId);
-    const transport = $('#cig_managed_model_transport').val() || undefined;
-    const previousEntry = localEntries.find((entry) => entry.id === previousId);
-    const previousTransport = previousEntry?.transportId || previousEntry?.transport || provider?.models?.find((model) => model.id === previousId)?.transport || transport;
-    clearExperimentalPreflightForRoute(settings, { providerId, modelId: previousId, transportId: previousTransport });
-    clearExperimentalPreflightForRoute(settings, { providerId, modelId: previousId, transportId: transport });
-    const type = operation === 'save' && localEntries.some((entry) => entry.id === previousId) ? 'replace' : 'upsert';
-    setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type, previousId, id, source: 'manual', transportId: transport }, providerId));
-    settings.model = id;
+    rememberImageModel(settings, id);
     clearSetupRuntimeIssue();
     refreshManagedModels();
     saveSettingsDebounced();
 }
 
-function removeManagedModel() {
+function saveSelectedModelMethod(method) {
     const settings = extension_settings[extensionName];
-    const providerId = settings.provider || 'makersuite';
-    const selectedId = $('#cig_managed_model_list').val();
-    const localEntries = getProviderModelEntries(settings, providerId);
-    if (!localEntries.some((entry) => entry.id === selectedId)) {
-        toastr.info('Built-in models stay available. Select a different ID or remove a local model.', 'Context Image Generation');
-        return;
-    }
-    setProviderModelRecords(settings, providerId, updateModelRecords(localEntries, { type: 'remove', id: selectedId }, providerId));
-    const customUi = projectSelectedProviderUi(settings, providerId, settings.model, { localEntries: getProviderModelEntries(settings, providerId) });
-    settings.model = getCustomConnection(settings, providerId)
-        ? customUi?.selectedModelId || ''
-        : getModelFallback(providerId, settings.model, getProviderModelEntries(settings, providerId));
+    const providerId = settings.provider;
+    if (!settings.model || !method || getModelDefinition(providerId, settings.model)) return;
+    const custom = getCustomConnection(settings, providerId);
+    const methods = custom ? Object.keys(custom.generationMethods || { [custom.protocol]: {} }) : Object.keys(getProviderDefinition(providerId)?.transports || {});
+    if (!methods.includes(method)) return;
+    const transportId = custom ? (method === 'gemini-compatible' ? 'sillytavern-gemini-proxy' : 'openai-images') : method;
+    const protocol = (resolveAdapterId(transportId) || transportId) === 'openai-images' ? 'openai-images' : 'gemini-compatible';
+    const entries = getProviderModelEntries(settings, providerId);
+    const previous = entries.find(model => model.id === settings.model) || { id: settings.model, providerId };
+    const replacement = { ...previous, source: { kind: 'manual' }, transportId, capabilities: {}, routeEvidence: { state: 'configured', source: 'user-configured-protocol', observedAt: new Date().toISOString(), protocol, requestShapeRevision: protocol === 'openai-images' ? 'openai-images-v1' : 'st-gemini-proxy-v1' } };
+    setProviderModelRecords(settings, providerId, [...entries.filter(model => model.id !== settings.model), replacement]);
     clearSetupRuntimeIssue();
     refreshManagedModels();
     saveSettingsDebounced();
 }
+
 function toggleImageSizeVisibility() {
     const settings = extension_settings[extensionName];
     const providerId = settings.provider || 'makersuite';
@@ -1597,28 +1626,16 @@ function captureSavedAppearanceContributorState(settings, hostContext, gallerySn
 
 async function confirmCustomConnectionRoute(settings, invocation) {
     const connection = getCustomConnection(settings, settings.provider);
-    if (!connection) return { accepted: false, confirmedRevision: '' };
-    const store = getCustomConnectionStore(settings);
-    const revision = connectionRevision(connection);
-    const evidence = store.evidence[connection.id];
-    if (evidence?.revision !== revision || !['configured', 'verified'].includes(evidence?.state)) {
-        throw new Error('Test and fetch models before generating through this custom connection.');
-    }
-    if (evidence.state === 'verified') return { accepted: true, confirmedRevision: revision };
+    if (!connection) return { accepted: true, confirmedRevision: '' };
+    const model = getProviderModelEntries(settings, connection.id).find(entry => entry.id === settings.model);
+    const route = resolveCustomModelRoute(connection, model);
+    if (!route) throw new Error('Choose a generation method for this model in Setup.');
+    if (model?.capabilities?.imageGeneration?.state === 'supported') return { accepted: true, confirmedRevision: route.revision };
     if (!['wand', 'slash'].includes(invocation)) throw new Error(`Unsupported generation source: ${invocation || 'missing'}`);
-    const projection = projectCustomConnectionEditor(connection, {
-        credentialConfigured: Boolean(getCustomConnectionKey(settings, connection)),
-        evidence,
-    });
-    const confirmation = projectCustomFirstRequestConfirmation(connection);
-    const popup = new Popup(confirmation.message, POPUP_TYPE.CONFIRM, null, {
-        okButton: 'Test with one generation',
-        cancelButton: 'Cancel',
-        animation: 'fast',
-    });
-    const accepted = (await popup.show()) === POPUP_RESULT.AFFIRMATIVE;
-    if (!accepted) throw new Error('Custom connection generation was cancelled before any request.');
-    return { accepted: true, confirmedRevision: revision };
+    const content = $('<div>').text(`Try ${model.id} through ${connection.label}? This first image request uses ${route.protocol === 'gemini-compatible' ? 'Gemini-compatible generation' : 'the Images API'} at ${route.endpoint}. Your provider may charge for the image.`);
+    const popup = new Popup(content, POPUP_TYPE.CONFIRM, null, { okButton: 'Generate image', cancelButton: 'Cancel', animation: 'fast' });
+    if ((await popup.show()) !== POPUP_RESULT.AFFIRMATIVE) throw new Error('Custom connection generation was cancelled before any request.');
+    return { accepted: true, confirmedRevision: route.revision };
 }
 
 function captureGenerationSnapshot(prompt, sender = null, messageId = null, focusText = null, target = null, invocation, routeConfirmation = {}, continuation = null) {
@@ -1626,17 +1643,14 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const providerId = settings.provider || 'makersuite';
     const modelId = settings.model;
     const customConnection = getCustomConnection(settings, providerId);
+    const selectedCustomModel = customConnection ? getProviderModelEntries(settings, providerId).find(entry => entry.id === modelId) : null;
+    const customRoute = customConnection ? resolveCustomModelRoute(customConnection, selectedCustomModel) : null;
+    const customTransport = customRoute?.protocol === 'gemini-compatible' ? 'sillyTavernGeminiProxy' : 'openAiImages';
     let providerRoute = customConnection ? {
-        provider: {
-            id: customConnection.id,
-            label: customConnection.label,
-            credentialKey: customConnection.credentialRef || undefined,
-            transports: customConnection.protocol === 'gemini-compatible'
-                ? { sillyTavernGeminiProxy: { baseUrl: customConnection.baseUrl } }
-                : { openAiImages: { baseUrl: `${customConnection.baseUrl}${customConnection.generationPath}` } },
-        },
-        model: getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId),
-        transport: customConnection.protocol === 'gemini-compatible' ? 'sillyTavernGeminiProxy' : 'openAiImages',
+        provider: { id: customConnection.id, label: customConnection.label, credentialKey: customConnection.credentialRef || undefined,
+            transports: customRoute ? { [customTransport]: { baseUrl: customRoute.endpoint } } : {} },
+        model: selectedCustomModel,
+        transport: customRoute ? customTransport : undefined,
     } : resolveProviderRoute(providerId, modelId);
     const localModel = getProviderModelEntries(settings, providerId).find((entry) => entry.id === modelId);
     if (!providerRoute.model && (localModel?.transportId || localModel?.transport)) {
@@ -1652,8 +1666,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     const transportId = resolveAdapterId(legacyTransport);
     if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
-    const preflightRoute = { providerId, modelId, transportId: legacyTransport };
-    const preflightAccepted = !modelNeedsExperimentalPreflight(routeModel) || isExperimentalPreflightAccepted(settings, preflightRoute);
+    const preflightAccepted = true; // The explicit wand/slash request is the generation intent.
     const recentMessages = cloneSnapshot(getRecentMessages(settings.message_depth || 1, messageId)) || [];
     let messageContent = prompt;
     if (messageId !== null || sender !== null) {
@@ -1751,7 +1764,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         if (facts.length) messageContent = `${messageContent}\n\n[Still-valid story facts]\n${facts.join('; ')}`;
     }
     const connectionId = routeModel.connectionId || `${providerId}:default`;
-    const endpointClass = routeModel.endpointClass || (customConnection ? (customConnection.protocol === 'gemini-compatible' ? 'custom-gemini-proxy' : 'custom-openai-images') : legacyTransport);
+    const endpointClass = customRoute?.endpointClass || routeModel.endpointClass || legacyTransport;
     const planInput = {
         id: `generation:${getGenerationKey(prompt, messageId, target)}`,
         idempotencyKey: getGenerationKey(prompt, messageId, target),
@@ -1992,22 +2005,29 @@ async function dispatchSceneGenerationPlan(dispatchedPlan, signal, execution = {
         if (snapshot.customConnection) {
                 const currentSettings = extension_settings[extensionName];
                 const currentStore = getCustomConnectionStore(currentSettings);
+                const currentConnection = currentStore.connections[snapshot.customConnection.id];
+                const currentModel = getProviderModelEntries(currentSettings, snapshot.customConnection.id).find(model => model.id === dispatchedPlan.resolved.modelId);
+                const routeStillCurrent = currentConnection
+                    && getCustomConnectionKey(currentSettings, currentConnection) === snapshot.apiKey
+                    && customModelRouteRevision(currentConnection, currentModel) === customModelRouteRevision(snapshot.customConnection, dispatchedPlan.resolved.modelDefinition);
                 const promoted = promoteCustomConnectionEvidence({
                     connection: snapshot.customConnection,
+                    model: dispatchedPlan.resolved.modelDefinition,
                     evidence: currentStore.evidence[snapshot.customConnection.id],
                     decodedResult: generated,
                 });
                 const promotedModel = promoteCustomModelEvidence({
                     connection: snapshot.customConnection,
                     modelId: dispatchedPlan.resolved.modelId,
+                    transportId: dispatchedPlan.resolved.transportId,
                     decodedResult: generated,
                 });
-                if (promoted?.state === 'verified'
-                    && promoted.revision === connectionRevision(snapshot.customConnection)
+                if (routeStillCurrent && promoted?.state === 'verified'
+                    && promoted.revision === customModelRouteRevision(snapshot.customConnection, dispatchedPlan.resolved.modelDefinition)
                     && promotedModel?.revision === promoted.revision) {
                     currentSettings.custom_connections = migrateCustomConnections({
                         ...currentStore,
-                        evidence: { ...currentStore.evidence, [snapshot.customConnection.id]: promoted },
+                        evidence: snapshot.customConnection.generationMethods ? currentStore.evidence : { ...currentStore.evidence, [snapshot.customConnection.id]: promoted },
                         modelEvidence: {
                             ...currentStore.modelEvidence,
                             [snapshot.customConnection.id]: {
@@ -3758,36 +3778,38 @@ jQuery(async () => {
         setTimeout(async () => {
             const selectedTab = $('#cig_settings [data-cig-tab][aria-selected="true"]').attr('data-cig-tab');
             if (selectedTab === 'images-cast') renderImagesCastSettings();
-            if (selectedTab === 'preferences') syncChatWandPreferenceControls();
         }, 0);
     });
 
-    $('#cig_provider').on('change', function () {
+    $('#cig_provider').on('change', function () { useImageConnection($(this).val()); });
+    $('#cig_setup_fix').on('click', function () {
+        const state = $(this).attr('data-readiness');
+        if (state === 'needs-key') openConnectionEditor(extension_settings[extensionName].provider);
+        else if (state === 'needs-provider') openConnectionEditor('');
+        else $(state === 'needs-method' ? '#cig_model_method' : state === 'needs-model' ? '#cig_model' : '#cig_provider').trigger('focus');
+    });
+    $('#cig_edit_connection').on('click', () => openConnectionEditor(extension_settings[extensionName].provider));
+    $('#cig_add_connection').on('click', () => openConnectionEditor(''));
+    $('#cig_connection_editor_cancel').on('click', () => $('#cig_connection_editor').prop('open', false));
+    $('#cig_connection_preset').on('change', function () { openConnectionEditor($(this).val()); });
+    $('#cig_custom_connection_use').on('click', () => {
+        const id = extension_settings[extensionName].custom_connection_editor_id;
+        if (getCustomConnection(extension_settings[extensionName], id)) useImageConnection(id);
+    });
+    $('#cig_builtin_connection_use').on('click', () => useImageConnection(setupEditorProviderId));
+    $('#cig_builtin_connection_save').on('click', () => {
         const settings = extension_settings[extensionName];
-        const previousProvider = settings.provider || 'makersuite';
-        cancelModelDiscovery(previousProvider);
-        clearExperimentalPreflightForProvider(settings, previousProvider);
-        settings.provider = $(this).val();
-        clearSetupRuntimeIssue();
-        updateModelDropdown();
-        toggleImageSizeVisibility();
-        toggleProviderSpecificSettings();
-        renderModelManager();
-        renderChatAppearanceSources();
+        if (!getProviderDefinition(setupEditorProviderId)) return;
+        const key = String($('#cig_provider_api_key').val() || '').trim();
+        if (key) setProviderApiKey(settings, setupEditorProviderId, key);
+        renderProviderDropdown();
+        $('#cig_provider').val(settings.provider);
+        renderSetupReadiness(settings);
+        renderCustomConnectionEditor();
         saveSettingsDebounced();
     });
 
-    $('#cig_provider_api_key').on('input', function () {
-        const settings = extension_settings[extensionName];
-        const provider = settings.provider || 'makersuite';
-        cancelModelDiscovery(provider);
-        if (projectSelectedProviderUi(settings, provider, settings.model)?.requiresApiKey) {
-            setProviderApiKey(settings, provider, $(this).val());
-            clearSetupRuntimeIssue();
-            renderSetupReadiness(settings);
-            saveSettingsDebounced();
-        }
-    });
+    $('#cig_provider_api_key').on('input', () => $('#cig_connection_editing_status').text('Unsaved key. Save key to apply it.'));
 
     $('#cig_cancel_generation').on('click', function () {
         cancelCancellableRuns(generationCoordinator);
@@ -3799,23 +3821,13 @@ jQuery(async () => {
         const settings = extension_settings[extensionName];
         settings.custom_connection_editor_id = $(this).val() || '';
         customConnectionDraftId = settings.custom_connection_editor_id;
+        setupEditorProviderId = settings.custom_connection_editor_id || 'custom';
         renderCustomConnectionEditor();
     });
-    $('#cig_custom_connection_add').on('click', function () {
-        const settings = extension_settings[extensionName];
-        customConnectionDraftId = createCustomConnectionId();
-        settings.custom_connection_editor_id = '';
-        renderCustomConnectionEditor();
-    });
-    $('#cig_custom_connection_auth').on('change', function () {
-        const enabled = $(this).val() !== 'none';
-        $('#cig_custom_connection_key').prop('disabled', !enabled);
-    });
-    $('#cig_custom_connection_protocol').on('change', function () {
-        const gemini = $(this).val() === 'gemini-compatible';
-        $('#cig_custom_connection_generation_path').toggle(!gemini);
-        $('#cig_custom_connection_generation_path_label').toggle(!gemini);
-        if ($('#cig_custom_connection_auth').val() !== 'none') $('#cig_custom_connection_auth').val(gemini ? 'gemini-api-key' : 'bearer');
+    $('#cig_custom_connection_protocol, #cig_custom_connection_dual').on('change', renderCustomMethodFields);
+    $('#cig_custom_connection_editor').on('input change', 'input, select', function () {
+        $('#cig_custom_connection_use, #cig_custom_connection_test').prop('disabled', true);
+        $('#cig_custom_connection_status').text('Unsaved changes. Save connection to apply them.');
     });
     $('#cig_custom_connection_save').on('click', function () {
         try {
@@ -3831,42 +3843,11 @@ jQuery(async () => {
     modelSelectorController.bind({
         onRefresh: fetchManagedProviderModels,
     });
-    $('#cig_managed_model_list').on('change', function () {
-        const selectedId = $(this).val() || '';
-        $('#cig_managed_model_id').val(selectedId);
-        const settings = extension_settings[extensionName];
-        const providerId = settings.provider || 'makersuite';
-        $('#cig_remove_model').prop('disabled', !getProviderModelEntries(settings, providerId).some((entry) => entry.id === selectedId));
-        renderExperimentalPreflight(settings, selectedId);
-    });
-    $('#cig_experimental_preflight_checkbox').on('change', function () {
-        const settings = extension_settings[extensionName];
-        const route = getSelectedModelRoute(settings, $('#cig_managed_model_list').val() || settings.model);
-        if (!modelNeedsExperimentalPreflight(route.model)) {
-            $(this).prop('checked', false);
-            return;
-        }
-        setExperimentalPreflight(settings, route, $(this).prop('checked'));
-        clearSetupRuntimeIssue();
-        renderSetupReadiness(settings);
-        saveSettingsDebounced();
-        renderExperimentalPreflight(settings, route.modelId);
-    });
-    $('#cig_managed_model_transport').on('change', function () {
-        const settings = extension_settings[extensionName];
-        const providerId = settings.provider || 'makersuite';
-        const selectedId = $('#cig_managed_model_list').val() || settings.model;
-        const previousEntry = getProviderModelEntries(settings, providerId).find((entry) => entry.id === selectedId);
-        const previousTransport = previousEntry?.transportId || previousEntry?.transport || getProviderDefinition(providerId)?.models?.find((model) => model.id === selectedId)?.transport || '';
-        clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: previousTransport });
-        clearExperimentalPreflightForRoute(settings, { providerId, modelId: selectedId, transportId: $(this).val() || '' });
-        clearSetupRuntimeIssue();
-        renderModelManager();
-        saveSettingsDebounced();
-    });
-    $('#cig_add_model').on('click', () => saveManagedModel('add'));
-    $('#cig_save_model').on('click', () => saveManagedModel('save'));
-    $('#cig_remove_model').on('click', removeManagedModel);
+    $('#cig_model_method').on('change', function () { saveSelectedModelMethod($(this).val()); });
+    $('#cig_show_all_models').on('change', updateModelDropdown);
+    $('#cig_model_search').off('input').on('input', updateModelDropdown);
+    $('#cig_add_model').on('click', saveManagedModel);
+
 
     $('#cig_aspect_ratio').on('change', function () {
         extension_settings[extensionName].aspect_ratio = $(this).val();

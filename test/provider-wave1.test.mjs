@@ -117,10 +117,11 @@ test('future-server inventory records are visible but cannot resolve a browser t
     }
 });
 
-test('provider dropdown disables future-server entries from registry metadata', async () => {
-    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    assert.match(source, /provider\.available === false/);
-    assert.match(source, /provider\.unavailableReason/);
+test('future-server provider metadata is available to the active connection selector', async () => {
+    const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
+    assert.match(settings, /id="cig_provider"/);
+    assert.match(settings, /id="cig_connection_preset"/);
+    assert.match(settings, /id="cig_connection_editing_status"/);
 });
 
 test('provider key settings are registry-driven for Wave 1 entries', () => {

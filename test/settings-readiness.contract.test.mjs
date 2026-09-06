@@ -9,98 +9,83 @@ const style = await readFile(new URL('../style.css', import.meta.url), 'utf8');
 function setupMarkup() {
     const opening = settings.match(/<section\b[^>]*id="cig_settings_panel_setup"[^>]*>/);
     assert.ok(opening, 'missing Setup panel');
-    const closing = settings.indexOf('</section>', opening.index);
-    assert.notEqual(closing, -1, 'missing Setup panel closing tag');
-    return settings.slice(opening.index, closing + '</section>'.length);
+    const closing = settings.indexOf('<section id="cig_settings_panel_preferences"', opening.index);
+    assert.notEqual(closing, -1, 'missing Setup panel closing boundary');
+    return settings.slice(opening.index, closing);
 }
 
-function advancedMarkup() {
+function troubleshootingMarkup() {
     const opening = settings.match(/<details\b[^>]*id="cig_advanced_setup"[^>]*>/);
-    assert.ok(opening, 'missing Advanced setup disclosure');
+    assert.ok(opening, 'missing Troubleshooting disclosure');
     const closing = settings.indexOf('</details>', opening.index);
-    assert.notEqual(closing, -1, 'missing Advanced setup closing tag');
+    assert.notEqual(closing, -1, 'missing Troubleshooting closing tag');
     return settings.slice(opening.index, closing + '</details>'.length);
 }
 
-test('Setup keeps provider, conditional credentials, model, and distinct status regions in order', () => {
+test('Setup leads with active connection and model selection before readiness and editing', () => {
     const setup = setupMarkup();
-    const ids = ['cig_provider', 'cig_provider_key_container', 'cig_model', 'cig_setup_status', 'cig_setup_issue', 'cig_advanced_setup'];
+    const ids = ['cig_provider', 'cig_edit_connection', 'cig_add_connection', 'cig_model_search', 'cig_model', 'cig_model_method_container', 'cig_setup_status', 'cig_setup_issue', 'cig_connection_editor'];
     const positions = ids.map((id) => setup.indexOf(`id="${id}"`));
-    assert.ok(positions.every((position) => position >= 0), 'Setup must expose every readiness control and region');
-    assert.ok(positions.every((position, index) => index === 0 || position > positions[index - 1]), 'Setup must lead users through provider, credentials, model, local status, then runtime issue');
+    assert.ok(positions.every((position) => position >= 0), 'Setup exposes the active connection, model, status, and editor controls');
+    assert.ok(positions.every((position, i) => i === 0 || position > positions[i - 1]), 'Setup follows connection, model, readiness, then editing');
+    assert.match(setup, /<label for="cig_provider">Generate images with<\/label>/);
     for (const id of ['cig_setup_status', 'cig_setup_issue']) {
-        const element = setup.match(new RegExp(`<[^>]+id="${id}"[^>]*>`));
-        assert.ok(element, `missing ${id}`);
-        assert.match(element[0], /role="status"/);
-        assert.match(element[0], /aria-live="polite"/);
+        const element = setup.match(new RegExp(`<[^>]+id="${id}"[^>]*>`))?.[0] || '';
+        assert.match(element, /role="status"/);
+        assert.match(element, /aria-live="polite"/);
     }
+    assert.match(setup, /Use the wand in chat to generate an image\./);
 });
 
-test('Setup keeps only contextual setup controls outside its sole Advanced disclosure', () => {
+test('Setup keeps credentials inside the focused connection editor and model routing explicit', () => {
     const setup = setupMarkup();
-    const advanced = advancedMarkup();
-    assert.equal((settings.match(/<details\b/g) || []).length, 1, 'Advanced setup is the sole disclosure');
-    for (const id of ['cig_model_manager', 'cig_provider_advanced_container', 'cig_experimental_preflight', 'cig_show_preflight', 'cig_cancel_generation', 'cig_export_diagnostics']) {
-        assert.match(advanced, new RegExp(`id="${id}"`), `${id} belongs in Advanced setup`);
-    }
-    assert.doesNotMatch(setup.slice(0, setup.indexOf('<details')), /Gemini proxy URL|Actual model IDs|experimental text-only|Inspect last plan|Export diagnostics/i);
+    const editorStart = setup.indexOf('<details id="cig_connection_editor"');
+    const troubleshootingStart = setup.indexOf('<details id="cig_advanced_setup"', editorStart);
+    const editor = setup.slice(editorStart, troubleshootingStart);
+    assert.match(editor, /id="cig_builtin_connection_fields"[\s\S]*id="cig_provider_key_container"/);
+    const keyField = editor.match(/<input[^>]*id="cig_provider_api_key"[^>]*>/)?.[0] || '';
+    assert.match(keyField, /placeholder="Enter API key"/);
+    assert.doesNotMatch(keyField, /sk-|Bearer/i);
+    for (const id of ['cig_connection_preset', 'cig_connection_editing_status', 'cig_builtin_connection_save', 'cig_builtin_connection_use', 'cig_connection_editor_cancel']) assert.match(editor, new RegExp(`id="${id}"`));
+    for (const id of ['cig_show_all_models', 'cig_model_method', 'cig_model_method_note']) assert.match(setup, new RegExp(`id="${id}"`));
 });
 
-test('readiness and runtime issue rendering preserve a local-only readiness message', () => {
+test('manual model entry is deliberately separate from the one selected model', () => {
+    const setup = setupMarkup();
+    assert.equal((setup.match(/id="cig_model"/g) || []).length, 1);
+    assert.match(setup, /<details id="cig_model_manager"[\s\S]*?<summary>Enter a model ID<\/summary>/);
+    assert.match(setup, /<label for="cig_managed_model_id">Model ID<\/label>/);
+    assert.match(setup, /id="cig_add_model"[^>]*value="Use model ID"/);
+    assert.doesNotMatch(setup, /id="cig_managed_model_list"|id="cig_managed_model_transport"|id="cig_save_model"|id="cig_remove_model"/);
+});
+
+test('Troubleshooting contains diagnostics while connection editing remains separate', () => {
+    const troubleshooting = troubleshootingMarkup();
+    assert.match(troubleshooting, /<summary>Troubleshooting<\/summary>/);
+    for (const id of ['cig_provider_advanced_container', 'cig_show_preflight', 'cig_cancel_generation', 'cig_export_diagnostics', 'cig_preflight_summary']) assert.match(troubleshooting, new RegExp(`id="${id}"`));
+    assert.doesNotMatch(troubleshooting, /id="cig_custom_connection_editor"|id="cig_provider_api_key"/);
+});
+
+test('readiness rendering uses a safe local configuration message and reports method gaps', () => {
     assert.match(index, /function renderSetupReadiness\(settings\)/);
     assert.match(index, /function renderSetupRuntimeIssue\(\)/);
     assert.match(index, /let setupRuntimeIssue\s*=/);
     assert.match(index, /deriveSetupReadiness\(\{/);
     assert.match(index, /#cig_setup_status/);
     assert.match(index, /#cig_setup_issue/);
-    assert.doesNotMatch(index, /cig_setup_status[^\n]{0,180}(?:Connected|Online|Verified)/i);
+    assert.doesNotMatch(index, /cig_setup_status[^\n]{0,180}(?:Connected|Online)/i);
 });
 
-test('Setup tab presents text and an accessible status for incomplete setup or runtime errors without changing the selected tab', () => {
+test('Setup tab has an accessible incomplete or issue status without changing the selected tab', () => {
     const setupTab = settings.match(/<button\b[^>]*id="cig_settings_tab_setup"[^>]*>[\s\S]*?<\/button>/)?.[0] || '';
     assert.match(setupTab, /id="cig_setup_tab_status"/);
     assert.match(index, /function renderSetupTabStatus\(readiness\)/);
     assert.match(index, /projectSetupTabStatus\(readiness, setupRuntimeIssue\)/);
     assert.match(index, /\.attr\('aria-label', status\.accessibleLabel\)/);
-    assert.match(index, /#cig_setup_tab_status/);
     assert.doesNotMatch(index, /renderSetupTabStatus[\s\S]{0,800}activateSettingsTab\(/);
 });
 
 test('hidden Setup tab status has an authoritative display-none rule', () => {
     const hiddenRule = style.match(/\.cig-setup-tab-status\[hidden\]\s*\{[^}]*\}/)?.[0] || '';
     assert.match(hiddenRule, /display:\s*none\s*!important\s*;/);
-});
-
-test('provider projection controls credential copy and refresh visibility without disabled dead ends', () => {
-    const setup = setupMarkup();
-    const keyField = setup.match(/<input[^>]+id="cig_provider_api_key"[^>]*>/)?.[0] || '';
-    const refresh = setup.match(/<input[^>]+id="cig_model_refresh"[^>]*>/)?.[0] || '';
-    assert.match(keyField, /placeholder="Enter API key"/);
-    assert.doesNotMatch(keyField, /sk-|Bearer/i);
-    assert.match(refresh, /aria-describedby="cig_model_refresh_hint"/);
-    assert.ok(setup.indexOf('id="cig_provider_info"') < setup.indexOf('id="cig_model"'));
-});
-
-test('Setup keeps technical provider diagnostics inside Advanced and wires updates to the separate issue region', () => {
-    const setup = setupMarkup();
-    const advanced = advancedMarkup();
-    const setupBeforeAdvanced = setup.slice(0, setup.indexOf('<details'));
-    assert.match(advanced, /id="cig_provider_advanced_info"/);
-    assert.doesNotMatch(setupBeforeAdvanced, /api\.linkapi\.ai|grok-imagine-image|OpenAI-compatible|curated CogView/i);
-    assert.match(index, /if \(result\.warning\) \{[\s\S]{0,300}setSetupRuntimeIssue\(result\.warning, 'Provider model discovery'\)/);
-    assert.match(index, /#cig_provider_api_key[\s\S]{0,500}setProviderApiKey[\s\S]{0,500}renderSetupReadiness\(settings\)/);
-    assert.match(index, /#cig_experimental_preflight_checkbox[\s\S]{0,700}setExperimentalPreflight[\s\S]{0,300}clearSetupRuntimeIssue\(\)/);
-});
-
-test('Advanced provider diagnostics do not expose LinkAPI recovery', () => {
-    const advanced = advancedMarkup();
-    assert.doesNotMatch(advanced, /legacy LinkAPI routing|cig_linkapi_legacy_routing/i);
-    assert.doesNotMatch(index, /linkapi_use_legacy_routing|linkapi-legacy-recovery/);
-});
-
-test('configuration changes clear runtime issues while failures capture their latest safe message', () => {
-    assert.match(index, /setSetupRuntimeIssue\(normalized, operation\)/);
-    assert.match(index, /setSetupRuntimeIssue\(result\.warning, 'Provider model discovery'\)/);
-    assert.match(index, /setProviderApiKey\(settings, provider, \$\(this\)\.val\(\)\);\s*clearSetupRuntimeIssue\(\);\s*renderSetupReadiness\(settings\)/);
-    assert.match(index, /setExperimentalPreflight\(settings, route, \$\(this\)\.prop\('checked'\)\);\s*clearSetupRuntimeIssue\(\);\s*renderSetupReadiness\(settings\)/);
 });

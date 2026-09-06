@@ -31,6 +31,55 @@
     opacity: 0.72;
 }
 
+/* Setup connection flow */
+#cig_settings_panel_setup .cig-connection-actions,
+#cig_settings_panel_setup .cig-setup-model-row,
+#cig_settings_panel_setup .cig-troubleshooting-actions {
+    display: flex;
+    align-items: end;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+}
+
+#cig_settings_panel_setup .cig-setup-model-row {
+    align-items: stretch;
+}
+
+#cig_settings_panel_setup .cig-connection-actions > .menu_button,
+#cig_settings_panel_setup .cig-setup-model-row > .menu_button,
+#cig_settings_panel_setup .cig-troubleshooting-actions > .menu_button,
+#cig_settings_panel_setup .cig-manual-model-entry > .menu_button {
+    min-height: 44px;
+}
+
+#cig_settings_panel_setup .cig-model-selection,
+#cig_settings_panel_setup .cig-connection-editor-content,
+#cig_settings_panel_setup .cig-manual-model-entry {
+    display: grid;
+    gap: 0.5rem;
+}
+
+#cig_settings_panel_setup .cig-connection-editor,
+#cig_settings_panel_setup .cig_model_manager,
+#cig_settings_panel_setup .cig_advanced_setup,
+#cig_settings_panel_setup .cig-custom-connection-advanced {
+    padding: 0.5rem 0;
+}
+
+#cig_settings_panel_setup .cig-custom-connection-dual-fields {
+    display: grid;
+    grid-template-columns: minmax(8rem, 0.35fr) minmax(12rem, 1fr);
+    align-items: center;
+    gap: 0.5rem 0.75rem;
+}
+
+#cig_settings_panel_setup #cig_preflight_summary {
+    max-height: 15rem;
+    overflow: auto;
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
 #cig_settings .cig-custom-connection-editor {
     display: grid;
     gap: 0.65rem;
@@ -96,6 +145,24 @@
 }
 
 @media (max-width: 480px) {
+    #cig_settings_panel_setup .cig-connection-actions,
+    #cig_settings_panel_setup .cig-setup-model-row,
+    #cig_settings_panel_setup .cig-troubleshooting-actions {
+        align-items: stretch;
+        flex-direction: column;
+    }
+
+    #cig_settings_panel_setup .cig-connection-actions > .menu_button,
+    #cig_settings_panel_setup .cig-setup-model-row > .menu_button,
+    #cig_settings_panel_setup .cig-troubleshooting-actions > .menu_button,
+    #cig_settings_panel_setup .cig-manual-model-entry > .menu_button {
+        width: 100%;
+    }
+
+    #cig_settings_panel_setup .cig-custom-connection-dual-fields {
+        grid-template-columns: 1fr;
+    }
+
     .cig-model-row {
         flex-direction: column;
     }
@@ -212,6 +279,17 @@
 }
 
 @media (max-width: 480px) {
+    #cig_settings .cig-settings-tabs [data-cig-tab] {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: 0.3rem;
+        white-space: normal;
+    }
+
+    #cig_setup_tab_status > span {
+        display: none;
+    }
+
     #cig_settings .cig-settings-tabs {
         overflow-x: auto;
         padding-bottom: 0.25rem;

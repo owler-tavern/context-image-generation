@@ -239,11 +239,11 @@ test('production controller carries parsed custom records through persistence in
 
     $('#cig_model_search').val('fresh');
     await $('#cig_model_refresh').trigger('click');
-    assert.deepEqual($('#cig_model').options.map((option) => option.value), ['manual-image', 'fresh-image']);
+    assert.deepEqual($('#cig_model').options.map((option) => option.value), ['', 'manual-image', 'fresh-image']);
 
     await $('#cig_model_search').trigger('input');
     assert.deepEqual($('#cig_managed_model_list').options.map((option) => option.value), ['fresh-image']);
-    assert.deepEqual($('#cig_model').options.map((option) => option.value), ['manual-image', 'fresh-image']);
+    assert.deepEqual($('#cig_model').options.map((option) => option.value), ['', 'manual-image', 'fresh-image']);
 
     selectionEffects.length = 0;
     $('#cig_model').val('fresh-image');

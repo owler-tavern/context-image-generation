@@ -404,16 +404,19 @@ test('decoded success promotes only the exact custom model and cannot automate a
     peerPlan.resolved.modelDefinition = peer;
     peerPlan.policy.preflightAccepted = false;
     let calls = 0;
-    await assert.rejects(dispatchProviderRoute({
+    await dispatchProviderRoute({
         plan: peerPlan,
         connection: { ...customConnection, providerId: customConnection.id },
         signal: new AbortController().signal,
         transportContext: {
             apiKey: 'sk-test-secret',
-            fetchImpl: async () => { calls += 1; throw new Error('must not fetch'); },
+            fetchImpl: async () => {
+                calls += 1;
+                return new Response(JSON.stringify({ data: [{ b64_json: PNG }] }), { status: 200 });
+            },
         },
-    }), /experimental model route requires explicit preflight confirmation/i);
-    assert.equal(calls, 0);
+    });
+    assert.equal(calls, 1);
 
     const consentedPeerPlan = structuredClone(peerPlan);
     consentedPeerPlan.invocation = 'settings';
@@ -430,7 +433,7 @@ test('decoded success promotes only the exact custom model and cannot automate a
             },
         },
     });
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
 });
 
 test('experimental consent is scoped to the exact custom model route', () => {

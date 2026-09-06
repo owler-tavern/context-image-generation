@@ -64,7 +64,7 @@ test('only wand and slash actions reach the injected generation authority', asyn
     const fakeKernel = { generate: async request => (dispatched.push(request.source), { artifact: fakeArtifact, plan: {}, request }) };
     const harness = createAuthorityHarness(fakeKernel);
     const index = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    const renderedMessageBody = index.match(/async function onCigMessageRendered\(messageId\) \{[\s\S]*?\n\}\n\njQuery/u)?.[0] || '';
+    const renderedMessageBody = index.match(/async function onCigMessageRendered\(messageId\) \{[\s\S]*?\r?\n\}\r?\n\r?\njQuery/u)?.[0] || '';
     const settingsBody = index.match(/async function loadSettings\(\) \{[\s\S]*?selectInitialSettingsTab\(cigSettings\);\r?\n\}/u)?.[0] || '';
 
     await harness.clickWand();

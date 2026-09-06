@@ -6,6 +6,8 @@ import { createTransportRegistry, dispatchProviderRoute } from '../lib/providers
 import { migrateProviderSettings } from '../lib/providers/settings-migration.js';
 import { normalizeProviderError } from '../lib/providers/errors.js';
 import { getModelDefinition } from '../lib/providers/registry.js';
+import { experimentalModelPreflightKey, hasExperimentalModelPreflightConsent } from '../lib/providers/preflight.js';
+import * as preflight from '../lib/providers/preflight.js';
 
 const PNG = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB';
 
@@ -71,7 +73,7 @@ test('dispatch rejects a connection id mismatch before secret resolution or adap
     assert.deepEqual(calls, []);
 });
 
-test('unknown manual and fetched image models require explicit experimental preflight', async () => {
+test('unknown manual and fetched image models still require a resolved route', async () => {
     for (const source of ['manual', 'fetched']) {
         const calls = [];
         await assert.rejects(dispatchProviderRoute({
@@ -79,7 +81,7 @@ test('unknown manual and fetched image models require explicit experimental pref
             connection: { id: 'fixture:default', providerId: 'fixture', enabled: true },
             signal: new AbortController().signal,
             transportContext: { transports: transport(calls) },
-        }), /experimental|preflight|confirmation/i);
+        }), /route evidence|unverified/i);
         assert.deepEqual(calls, [], source);
     }
 });
@@ -141,21 +143,55 @@ test('migration keeps only exact non-secret experimental preflight route keys', 
     assert.doesNotMatch(JSON.stringify(migrated.experimental_model_preflight), /secret/i);
 });
 
-test('Manage Models exposes the explicit experimental text-only confirmation and snapshot wiring', async () => {
+test('Setup replaces experimental consent with an explicit model method and normal generation intent', async () => {
     const [settings, index, guide] = await Promise.all([
         readFile(new URL('../settings.html', import.meta.url), 'utf8'),
         readFile(new URL('../index.js', import.meta.url), 'utf8'),
         readFile(new URL('../DEVELOPER_GUIDE.md', import.meta.url), 'utf8'),
     ]);
-    assert.match(settings, /id="cig_experimental_preflight"/);
-    assert.match(settings, /Allow experimental text-only generation/);
-    assert.match(settings, /endpoint\/model is unverified/i);
+    assert.doesNotMatch(settings, /cig_experimental_preflight|Allow experimental text-only generation/);
+    assert.match(settings, /id="cig_model_method"/);
     assert.match(index, /experimental_model_preflight/);
     assert.match(index, /preflightAccepted/);
-    assert.match(index, /cig_experimental_preflight/);
-    assert.match(index, /clearExperimentalPreflightForRoute/);
-    assert.match(index, /clearExperimentalPreflightForProvider/);
-    assert.match(guide, /experimental text-only generation/i);
+    assert.doesNotMatch(index, /cig_experimental_preflight|clearExperimentalPreflightForRoute|clearExperimentalPreflightForProvider/);
+});
+
+test('experimental consent survives legacy and canonical OpenAI transport aliases after reload', () => {
+    const legacy = { providerId: 'linkapi', modelId: 'gpt-image-2-c', transportId: 'openAiImages' };
+    const canonical = { ...legacy, transportId: 'openai-images' };
+    const reloadedLegacyConsent = JSON.parse(JSON.stringify({ [JSON.stringify(['linkapi', 'gpt-image-2-c', 'openAiImages'])]: true }));
+    const reloadedCanonicalConsent = JSON.parse(JSON.stringify({ [JSON.stringify(['linkapi', 'gpt-image-2-c', 'openai-images'])]: true }));
+
+    assert.equal(experimentalModelPreflightKey(legacy), experimentalModelPreflightKey(canonical));
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedLegacyConsent, canonical), true);
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedCanonicalConsent, legacy), true);
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedCanonicalConsent, { ...legacy, modelId: 'different-image' }), false);
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedCanonicalConsent, { ...legacy, providerId: 'other-provider' }), false);
+});
+
+test('experimental consent survives legacy and canonical custom Gemini transport aliases after reload', () => {
+    const legacy = { providerId: 'connection:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', modelId: 'gemini-image', transportId: 'sillyTavernGeminiProxy' };
+    const canonical = { ...legacy, transportId: 'sillytavern-gemini-proxy' };
+    const reloadedLegacyConsent = JSON.parse(JSON.stringify({ [JSON.stringify([legacy.providerId, legacy.modelId, legacy.transportId])]: true }));
+    const reloadedCanonicalConsent = JSON.parse(JSON.stringify({ [JSON.stringify([canonical.providerId, canonical.modelId, canonical.transportId])]: true }));
+
+    assert.equal(experimentalModelPreflightKey(legacy), experimentalModelPreflightKey(canonical));
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedLegacyConsent, canonical), true);
+    assert.equal(hasExperimentalModelPreflightConsent(reloadedCanonicalConsent, legacy), true);
+});
+
+test('revoking experimental consent clears legacy transport aliases without touching another route', () => {
+    const route = { providerId: 'linkapi', modelId: 'gpt-image-2-c', transportId: 'openai-images' };
+    const consents = {
+        [JSON.stringify(['linkapi', 'gpt-image-2-c', 'openAiImages'])]: true,
+        [JSON.stringify(['linkapi', 'different-image', 'openAiImages'])]: true,
+    };
+
+    assert.equal(typeof preflight.clearExperimentalModelPreflightConsent, 'function');
+    preflight.clearExperimentalModelPreflightConsent(consents, route);
+
+    assert.equal(hasExperimentalModelPreflightConsent(consents, route), false);
+    assert.equal(hasExperimentalModelPreflightConsent(consents, { ...route, modelId: 'different-image', transportId: 'openAiImages' }), true);
 });
 
 test('preflight rejection produces a safe Advanced-directed toast message', () => {

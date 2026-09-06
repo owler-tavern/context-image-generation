@@ -84,11 +84,10 @@ test('future-server and unresolved providers fail before dispatch can reach host
     }
 });
 
-test('unavailable reason is projected into the live status adjacent to the model selector', async () => {
-    const source = await readFile(new URL('../index.js', import.meta.url), 'utf8');
-    assert.match(source, /ui\.available === false/);
-    assert.match(source, /ui\.unavailableReason/);
-    assert.match(source, /provider\.available === false/);
-    assert.match(source, /unavailableLabel/);
-    assert.match(source, /cig_model_discovery_status/);
+test('unavailable provider metadata remains available to the active-connection Setup flow', async () => {
+    const settings = await readFile(new URL('../settings.html', import.meta.url), 'utf8');
+    assert.match(settings, /id="cig_provider"/);
+    assert.match(settings, /id="cig_model_note"/);
+    assert.match(settings, /id="cig_setup_status"/);
+    assert.match(settings, /id="cig_connection_editor"/);
 });

@@ -1,5 +1,26 @@
 # v2.5 Status
 
+## Setup redesign and per-model methods — implemented
+
+- Objective: explicit active connection/model, independent editing/fetching, truthful readiness, and Gemini plus OpenAI Images methods within one saved custom connection.
+- Plan: `docs/SETUP_IMPLEMENTATION_PLAN.md`. Design: `docs/SETUP_UX_REVIEW.md`.
+- Implemented: explicit activation with remembered model per connection; one searchable selector and manual-ID entry; model-specific method selection; independent editor and troubleshooting; removed experimental checkbox/enforcement; actionable readiness; catalog authentication independent from the shared generation key; explicit key removal. Saving active edits is labeled as applying to the active connection.
+- Contracts: additive schema-1 `generationMethods` and `catalogAuth`; deterministic route resolver; mixed-model evidence scoped to model/method; refresh preserves assignments; key/route changes invalidate proof; late generation responses cannot restore proof for a changed key or route. Legacy single-method records remain supported.
+- Verified: 932/932 available Node tests passed, including actual mocked adapter requests for both Gemini and OpenAI Images methods, discovery retention, persistence, explicit activation and readiness. `node --check index.js` and `git diff --check` passed. Excluded only the pre-existing missing-fixture `test/no-spend-uat.test.mjs` (imports absent `.superpowers/sdd/2026-08-31-provider-model-discovery-routing/live-uat.mjs`).
+- Browser verified using an isolated SillyTavern data directory on loopback port 8002: loaded actual extension; saving a custom connection retained Google AI Studio as active; explicit Use switched connection; two manual models retained different Gemini/Images methods when switching; selected connection/model/method survived reload; Add key recovery opened that connection's editor. Desktop and 390px layout inspected, with narrow tab spacing corrected. Test data used example.test, no real credentials or provider calls.
+- Independent review: activation and mixed routing accepted; clarified shared-key/catalog-auth contract, added explicit key removal and active-save wording, added missing-action recovery. Editor fetch reports counts; model selection takes place after explicit activation.
+- Not verified: live LinkAPI catalog and paid Gemini/GPT image generation. Browser host emitted unrelated Extension Manager dependency/JSON errors; no clean-host-console claim. Host startup attempted legacy public override migration and sandbox denied those writes; isolated data was used throughout.
+- Next live acceptance: reload the real SillyTavern instance, refresh LinkAPI, select a Gemini model then a GPT image model and generate from the wand with the same connection. The isolated setup/provider commit snapshot passes 930/930 available tests; older scene changes remain outside this commit. No push requested.
+
+## Provider bug fixes — 2026-09-05
+
+- Objective: restore LinkAPI catalog visibility and make saved custom-model experimental consent reach generation.
+- Cause: LinkAPI discovery rejected every ID outside four curated routes. Custom generation looked up consent using legacy transport names while the checkbox stored canonical names.
+- Changes: retain unknown LinkAPI catalog IDs visibly as Unverified; add the documented `gpt-image-2` Images route on discovery; unify consent aliases while retaining provider/model isolation and old approvals.
+- Verification: failing regressions reproduced discovery loss, alias mismatch, and legacy-consent revocation. Final available suite: 920 passed, zero failed, excluding `test/no-spend-uat.test.mjs`, which imports the missing pre-existing `.superpowers/sdd/2026-08-31-provider-model-discovery-routing/live-uat.mjs`. The initial unrestricted run had 918 passing tests and that one module-load failure. The LinkAPI regression exercises discovery, persistence, selector projection, consent, and simulated adapter dispatch. Syntax checks and `git diff --check` passed.
+- Live limits: no connected SillyTavern browser tab was available. No live catalog request or paid image generation has been performed for this patch. Unknown catalog protocols remain unresolved rather than being guessed.
+- Next action: reload SillyTavern, refresh the provider catalog, and verify the selected model against the live provider. Both reported code defects are patched; live acceptance remains unverified.
+
 ## Objective
 Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
 

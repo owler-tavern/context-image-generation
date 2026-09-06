@@ -72,7 +72,8 @@ test('ADR-002 keeps Settings configuration-only and makes model refresh discover
     assert.match(settings, /id="cig_provider"/u);
     assert.match(settings, /id="cig_model"/u);
     assert.match(settings, /id="cig_model_refresh"[^>]*value="Refresh Models"/u);
-    assert.match(settings, /Refresh Models checks the selected provider and keeps existing local models\./u);
+    assert.match(settings, /Refresh Models checks the active connection and keeps your existing local choices\./u);
+    assert.match(settings, /Use the wand in chat to generate an image\./u);
     for (const id of ['cig_message_depth', 'cig_system_instruction', 'cig_use_avatars', 'cig_use_previous_image', 'cig_extra_appearance_memory']) {
         assert.match(settings, new RegExp(`id="${id}"`), `${id} remains configurable`);
     }
