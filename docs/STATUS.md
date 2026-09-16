@@ -4,7 +4,7 @@
 Ship the consolidated branch review and September 16 user feedback on `codex/v2.5`, preserving both local installations and existing user data.
 
 ## Current milestone
-Implementation and isolated SillyTavern UI acceptance verified. Git publication and synchronization receipts are reported after the final push.
+Extension review shipped. Follow-up host correction: SillyTavern patched and offline verified; TauriTavern source/build work in progress.
 
 ## Completed
 - Integrated Add/Edit connection beside the active connection selector, with focus and explicit activation.
@@ -19,6 +19,8 @@ Implementation and isolated SillyTavern UI acceptance verified. Git publication 
 - Removed four obsolete tracked agent reports/specs; ignored local attachment caches and working notes without deleting them. Retained decision records and compatibility data.
 
 ## Verification
+- Host follow-up: installed SillyTavern handler and prompt converter passed 55 offline assertions across 12 image cases after reproducing 15 failures before the fix. Exact preview IDs, three aspect ratios, resolution, and both avatar byte strings are preserved. Fetch was stubbed; no provider request was made.
+- Extension suite after host-patch tooling: **957 passed, 0 failed**. Host JavaScript syntax check passed.
 - Final integrated `npm test`: **954 passed, 0 failed**, including the previously missing no-spend helper. The committed Git archive was independently extracted into a clean temporary directory and also passed all 954 tests.
 - Initial full run: 952 passed, 2 failed. Both were obsolete assertions for intentionally removed behavior: no Gallery recovery on thrown chat-save errors, and the retired visual-preference handler. Corrected expectations and reran the whole suite.
 - Independent Sol source review: no remaining P1 implementation finding after correcting host model scoping and consistent recovery visibility.
@@ -27,7 +29,7 @@ Implementation and isolated SillyTavern UI acceptance verified. Git publication 
 - Browser tests used no user chats/credentials and sent no provider catalog or generation request. An unrelated global Extension Manager startup notice was dismissed.
 
 ## Known limitations
-- Installed SillyTavern backend has an exact image-model allowlist excluding `gemini-3.1-flash-image-preview`; it therefore omits structured image configuration for that ID. The extension preserves the exact provider ID and warns from advertised host migration metadata. Prompt instructions are not a guarantee of output dimensions. A host correction or explicitly selected provider-supported alternative remains necessary for structured control on that affected route.
+- Installed SillyTavern backend was corrected locally to accept the two Gemini 3 preview image IDs and preserve absent optional image settings. Restart SillyTavern to load the change. Host updates may overwrite it; the repeatable patch and offline verifier are documented in `docs/HOST_GEMINI_FIX.md`. Updating the extension alone does not patch the host.
 - Real provider-generated dimensions, image quality, and avatar likeness remain **NOT VERIFIED**. No paid generation was performed.
 - Native TauriTavern runtime remains **NOT VERIFIED**; browser acceptance was performed in SillyTavern. Both receive the same extension files, not a claim of identical host behavior.
 - Broad entrypoint refactoring and thumbnail/decode performance optimization are deferred: no measured performance problem or safe migration evidence justifies a broad rewrite in this fix release.
