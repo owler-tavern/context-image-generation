@@ -73,14 +73,16 @@ test('chat canon stores bounded appearance source choices as stable identity dat
     assert.deepEqual(original.appearanceSources.unsafe.sourceId, '/raw/path/should-drop');
 });
 
-test('wand framing, continuity, and direction are isolated per chat and bounded', () => {
+test('retired wand preferences are preserved as bounded opaque chat data without defaults', () => {
     const original = { schema: 1, bindings: {} };
     const changed = setChatWandPreferences(original, { framing: 'wide', continuity: 'strong', visualDirection: '  blue   hour '.repeat(120) });
     assert.deepEqual(getChatWandPreferences(original), null);
     assert.equal(getChatWandPreferences(changed).framing, 'wide');
     assert.equal(getChatWandPreferences(changed).continuity, 'strong');
-    assert.ok(getChatWandPreferences(changed).visualDirection.length <= 1000);
-    assert.equal(getChatWandPreferences(setChatWandPreferences({}, { framing: 'bad', continuity: 'bad' })).framing, 'auto');
+    assert.equal(getChatWandPreferences(changed).visualDirection, '  blue   hour '.repeat(120));
+    assert.equal(getChatWandPreferences(setChatWandPreferences({}, { framing: 'bad', continuity: 'bad' })).framing, 'bad');
+    assert.deepEqual(getChatWandPreferences(setChatWandPreferences({}, {})), {});
+    assert.deepEqual(getChatWandPreferences(setChatWandPreferences({}, { visualDirection: 'x'.repeat(9000) })), {});
 });
 
 test('Auto source preference is separate from deliberate identity pinning', () => {

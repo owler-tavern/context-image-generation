@@ -8,7 +8,6 @@ import {
     approveCinematicSuggestion,
     dismissCinematicSuggestion,
     adjustCinematicSuggestion,
-    retriggerCinematicBeat,
     resetCinematicSession,
     settleCinematicPlan,
     projectNextCinematicSuggestion,
@@ -108,17 +107,6 @@ test('unknown cost and over-ceiling cost fail closed while the exact boundary is
     const unknownCeiling = createCinematicSession({ sessionId: 'unknown', mode: 'frequent' });
     const unknownSuggestion = evaluateCinematicAutomation({ session: unknownCeiling, acceptedSceneDelta: delta() });
     assert.equal(approveCinematicSuggestion(unknownSuggestion.session, unknownSuggestion.suggestion, { estimatedCost: 0 }).status, 'unknown-cost-ceiling');
-});
-
-test('manual retrigger creates a new plan candidate without replaying a chat event', () => {
-    const session = createCinematicSession({ sessionId: 's', mode: 'balanced', costCeiling: 1 });
-    const first = retriggerCinematicBeat({ session, beatId: 'beat:missed', retriggerId: 'retry:1', reason: 'missed beat' });
-    const repeat = retriggerCinematicBeat({ session: first.session, beatId: 'beat:missed', retriggerId: 'retry:1', reason: 'missed beat' });
-    assert.equal(first.status, 'suggested');
-    assert.equal(first.suggestion.triggerSource, 'manual-retrigger');
-    assert.equal(first.suggestion.replayedChatEvent, false);
-    assert.equal(first.suggestion.beatId, 'beat:missed');
-    assert.deepEqual(repeat, first);
 });
 
 test('session reset clears counters and seen events while preserving deterministic new session identity', () => {
@@ -237,17 +225,6 @@ test('new accepted events do not create an overlapping card while one suggestion
     assert.equal(second.session.pendingSuggestions[first.suggestion.suggestionId].eventIds.includes(second.events[0].eventId), false);
 });
 
-test('manual retriggers register pending provenance and can use every card action without replaying chat', () => {
-    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
-    const retry = retriggerCinematicBeat({ session, beatId: 'beat:missed', retriggerId: 'retry:registered' });
-    assert.ok(retry.session.eventRegistry[retry.suggestion.eventId]);
-    assert.ok(retry.session.pendingSuggestions[retry.suggestion.suggestionId]);
-    const approved = approveCinematicSuggestion(retry.session, retry.suggestion, { estimatedCost: 0.1 });
-    assert.equal(approved.status, 'approved');
-    assert.equal(approved.plan.triggerSource, 'manual-retrigger');
-    assert.equal(approved.plan.dispatch.network, false);
-});
-
 test('settlement verifies the complete stored plan identity before changing budget state', () => {
     const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
     const suggested = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
@@ -256,15 +233,6 @@ test('settlement verifies the complete stored plan identity before changing budg
     const result = settleCinematicPlan(approved.session, forged, 'completed', { actualCost: 0.2 });
     assert.equal(result.status, 'invalid-plan');
     assert.equal(result.session.reservedCost, 0.2);
-});
-
-test('manual retrigger respects the single pending-card invariant', () => {
-    const session = createCinematicSession({ sessionId: 's', mode: 'frequent', costCeiling: 1 });
-    const first = evaluateCinematicAutomation({ session, acceptedSceneDelta: delta() });
-    const retry = retriggerCinematicBeat({ session: first.session, beatId: 'beat:missed', retriggerId: 'retry:while-pending' });
-    assert.equal(retry.status, 'pending-suppressed');
-    assert.deepEqual(retry.suggestion, first.suggestion);
-    assert.equal(Object.keys(retry.session.pendingSuggestions).length, 1);
 });
 
 test('queued events drain into the next card exactly once after the current card is used or dismissed', () => {

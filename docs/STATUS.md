@@ -7,6 +7,7 @@ Ship the consolidated branch review and September 16 user feedback on `codex/v2.
 Extension review shipped. Follow-up host correction: SillyTavern patched and offline verified; TauriTavern stable 2.2.0 replacement built and tested, staged pending closure of the running app for smoke testing and installation.
 
 ## Completed
+- Follow-up cleanup: removed runtime handlers/rendering for retired Automation controls, manual-retrigger/focus/settings-update helper APIs, unused automatic-generation/swipe defaults, and retired scene-preference interpretation/defaults. Existing bounded saved values remain opaque compatibility data; active optional cinematic cards retain their runtime. Removed obsolete tests alongside deleted APIs and retained migration regression coverage.
 - Integrated Add/Edit connection beside the active connection selector, with focus and explicit activation.
 - Combined model search, selection, and refresh; removed blank conditional actions and garbled labels.
 - Simplified Scene details to Generation instruction; removed empty Automation UI and retired preference handlers. Legacy saved values remain inert.
@@ -19,6 +20,7 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 - Removed four obsolete tracked agent reports/specs; ignored local attachment caches and working notes without deleting them. Retained decision records and compatibility data.
 
 ## Verification
+- Retired-feature cleanup: **948 tests passed, 0 failed**; syntax and diff checks passed. Nine fewer tests overall reflect removed API tests and added legacy roundtrip coverage. No new browser or provider verification was performed for this cleanup.
 - Host follow-up: installed SillyTavern handler and prompt converter passed 55 offline assertions across 12 image cases after reproducing 15 failures before the fix. Exact preview IDs, three aspect ratios, resolution, and both avatar byte strings are preserved. Fetch was stubbed; no provider request was made.
 - Extension suite after host-patch tooling: **957 passed, 0 failed**. Host JavaScript syntax check passed.
 - TauriTavern stable `v2.2.0` host: exact-model allowlist correction and regression test implemented; standard release executable built successfully. Frontend/type checks, 890 contract tests (3 skipped), Rust crate-boundary checks, split-crate Rust tests (including 646 application tests), 5 host-resource tests, and development workspace compilation passed. The full modality regression is included. Native launch and installation remain pending.
@@ -39,6 +41,8 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 
 ## Decisions
 Wand and slash remain the only generation actions. No automatic retries, model aliases, generation timeout, or legacy user-data purge was introduced. See the consolidated review for issue disposition.
+
+Removed UI features should not retain executable handlers, helper APIs, or new defaults without an active caller. Retained legacy scene values and retrigger session records are bounded compatibility data only, so an ordinary save does not unnecessarily destroy user data. Optional cinematic observation/staging still has active UI callers and is not removed by the retired-settings cleanup.
 
 ## Next action
 After the user saves/closes TauriTavern, smoke-test the staged standard executable with its isolated portable marker, then replace only the installed executable after rechecking its original hash. Do not copy the portable marker into the installed directory. Restart SillyTavern to load its host patch. Actual provider dimensions and avatar likeness remain unverified.

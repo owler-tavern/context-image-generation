@@ -175,9 +175,7 @@ const defaultSettings = {
     image_size: '',
     thinking_level: 'auto',
     use_google_search: false,
-    auto_generate: 'off',
     use_avatars: false,
-    regenerate_on_swipe: false,
     include_descriptions: false,
     use_previous_image: false,
     previous_image_opt_in_version: 1,
@@ -185,7 +183,7 @@ const defaultSettings = {
     gallery: [],
     [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
     visible_canon_pending: {},
-    rp_library: { schema: 1, identities: {}, assets: {}, preferences: { sceneContinuity: false } },
+    rp_library: { schema: 1, identities: {}, assets: {}, preferences: {} },
     scene_state_pending: { schema: 1, pending: {} },
     cinematic_automation: { schema: 1, enabled: false, mode: 'balanced', budgetType: 'generations', generationLimit: 5, costCeiling: null },
 };
@@ -1015,7 +1013,6 @@ async function createStoryMemorySurface(featureOverride = null) {
         settings,
         getChat: () => getContext().chat || [],
         getChatId: () => getContext().chatId,
-        getChat: () => getContext().chat || [],
         isCurrent: ({ chatId, epoch }) => String(getContext().chatId) === String(chatId) && chatLifecycleEpoch.isCurrent(epoch),
         saveSettings,
         fetchImpl: fetch,
@@ -1131,15 +1128,6 @@ function renderCinematicSuggestion(suggestion = cinematicRuntime?.getState()?.su
     if (anchor.length) anchor.after(root); else messageElement.append(root);
 }
 
-function refreshCinematicSurface(suggestionOverride, statusOverride = null) {
-    renderCinematicSuggestion(suggestionOverride);
-    const state = cinematicRuntime?.getState();
-    const settings = extension_settings[extensionName]?.cinematic_automation || {};
-    const status = statusOverride || (state?.suggestion ? `${state.suggestion.budgetText}. ${state.suggestion.waitingText}` : (settings.enabled && settings.mode !== 'off' ? 'Waiting for an accepted story change.' : 'Cinematic suggestions are off.'));
-    $('#cig_cinematic_status').text(status);
-    $('#cig_cinematic_enabled').prop('checked', settings.enabled === true);
-}
-
 async function createCinematicSurface(featureOverride = null) {
     if (!extraStoryToolEnabled('cinematic')) return;
     const feature = featureOverride || await ensureCinematicFeature();
@@ -1148,7 +1136,6 @@ async function createCinematicSurface(featureOverride = null) {
     cinematicRuntime = feature.createCinematicRuntime({
         settings: runtimeSettings,
         getChatId: () => getContext().chatId,
-        getChat: () => getContext().chat || [],
         getEpoch: () => chatLifecycleEpoch.capture(),
         readState: () => ({
             cinematicAutomation: chat_metadata?.[CHAT_CANON_KEY]?.[CINEMATIC_AUTOMATION_KEY],
@@ -1202,28 +1189,28 @@ async function createCinematicSurface(featureOverride = null) {
                         stagedSuggestion: { suggestionId: id, shot, kind: suggestion.kind || '' },
                     });
                     void saveChatConditional();
-                    refreshCinematicSurface(null, 'Shot staged for the next wand. No image was made.');
-                } else if (chatCaptureIsCurrent(captured)) refreshCinematicSurface();
+                    renderCinematicSuggestion(null);
+                } else if (chatCaptureIsCurrent(captured)) renderCinematicSuggestion();
                 return result;
             });
         },
         adjust: (id, adjustments) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
-            return cinematicRuntime.adjust(id, adjustments).then((result) => { if (chatCaptureIsCurrent(captured)) refreshCinematicSurface(); return result; });
+            return cinematicRuntime.adjust(id, adjustments).then((result) => { if (chatCaptureIsCurrent(captured)) renderCinematicSuggestion(); return result; });
         },
         dismiss: (id) => {
             const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
             return cinematicRuntime.dismiss(id).then((result) => {
                 if (chatCaptureIsCurrent(captured)) {
-                    if (result?.status === 'dismissed') refreshCinematicSurface(null, 'Cinematic suggestion dismissed. Waiting for the next accepted story change.');
-                    else refreshCinematicSurface();
+                    if (result?.status === 'dismissed') renderCinematicSuggestion(null);
+                    else renderCinematicSuggestion();
                 }
                 return result;
             });
         },
     });
     feature.installCinematicStyles(document);
-    refreshCinematicSurface();
+    renderCinematicSuggestion();
 }
 
 async function observeCinematicMessage(messageId) {
@@ -1237,7 +1224,7 @@ async function observeCinematicMessage(messageId) {
         messageId: Number(messageId),
         message,
     });
-    if (result.status !== 'stale') refreshCinematicSurface();
+    if (result.status !== 'stale') renderCinematicSuggestion();
 }
 
 function hasPendingRecoveryWork() {
@@ -1388,15 +1375,6 @@ async function loadSettings() {
     $('#cig_include_descriptions').prop('checked', extension_settings[extensionName].include_descriptions);
     $('#cig_use_previous_image').prop('checked', extension_settings[extensionName].use_previous_image);
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
-    const cinematicSettings = extension_settings[extensionName].cinematic_automation;
-    $('#cig_cinematic_enabled').prop('checked', cinematicSettings.enabled === true);
-    $('#cig_cinematic_mode').val(cinematicSettings.mode || 'balanced');
-    $('#cig_cinematic_budget_type').val(cinematicSettings.budgetType || 'generations');
-    $('#cig_cinematic_generation_limit').val(cinematicSettings.generationLimit ?? 5);
-    $('#cig_cinematic_cost_ceiling').val(cinematicSettings.costCeiling ?? '');
-    $('#cig_cinematic_generation_budget').prop('hidden', cinematicSettings.budgetType === 'cost');
-    $('#cig_cinematic_cost_budget').prop('hidden', cinematicSettings.budgetType !== 'cost');
-
     toggleImageSizeVisibility();
     toggleProviderSpecificSettings();
     renderModelManager();
@@ -3144,7 +3122,6 @@ function renderExtraStoryTools() {
     $('#cig_story_memory').prop('hidden', !extraStoryToolEnabled('storyMemory'));
     $('#cig_appearances').prop('hidden', !extraStoryToolEnabled('appearanceMemory'));
     $('#cig_gallery').prop('hidden', !extraStoryToolEnabled('gallery') && !hasRecoveryImages());
-    $('#cig_cinematic_automation').prop('hidden', !extraStoryToolEnabled('cinematic'));
     $('#cig_extra_story_tools_status').text(extras.enabled ? 'Choose the individual tools you want below.' : 'Extra story tools are off. The wand, visual style, and current chat characters remain available.');
 }
 
@@ -3164,7 +3141,7 @@ async function setExtraStoryTools(patch = {}) {
     if (!extraStoryToolEnabled('gallery')) galleryRenderState.markDirty();
     if (extraStoryToolEnabled('gallery')) galleryRenderState.refresh({ force: true });
     if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
-    if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
+    if (extraStoryToolEnabled('cinematic')) renderCinematicSuggestion();
     if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
 }
 
@@ -3931,47 +3908,6 @@ jQuery(async () => {
         await setExtraStoryTools({ enabled: false });
     });
 
-    $('#cig_cinematic_enabled, #cig_cinematic_mode, #cig_cinematic_budget_type, #cig_cinematic_generation_limit, #cig_cinematic_cost_ceiling').on('change input', function () {
-        const settings = extension_settings[extensionName];
-        const cinematic = settings.cinematic_automation || (settings.cinematic_automation = {});
-        cinematic.enabled = $('#cig_cinematic_enabled').prop('checked');
-        cinematic.mode = $('#cig_cinematic_mode').val() || 'balanced';
-        cinematic.budgetType = $('#cig_cinematic_budget_type').val() || 'generations';
-        const limit = Number.parseInt($('#cig_cinematic_generation_limit').val(), 10);
-        cinematic.generationLimit = Number.isInteger(limit) && limit > 0 ? Math.min(limit, 100) : 5;
-        const ceiling = Number.parseFloat($('#cig_cinematic_cost_ceiling').val());
-        cinematic.costCeiling = Number.isFinite(ceiling) && ceiling >= 0 ? ceiling : null;
-        $('#cig_cinematic_generation_limit').val(cinematic.generationLimit);
-        $('#cig_cinematic_generation_budget').prop('hidden', cinematic.budgetType === 'cost');
-        $('#cig_cinematic_cost_budget').prop('hidden', cinematic.budgetType !== 'cost');
-        cinematicRuntime?.updateSettings(cinematicRuntimeSettings());
-        saveSettingsDebounced();
-        refreshCinematicSurface();
-    });
-
-    $('#cig_cinematic_retrigger').on('click', async function () {
-        const beat = String($('#cig_cinematic_retrigger_beat').val() || '').trim() || 'missed story beat';
-        const captured = { chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() };
-        try {
-            const result = await cinematicRuntime?.retrigger(beat, `manual:${Date.now()}`, 'missed or failed beat', captured);
-            const status = result?.status === 'suggested'
-                ? 'Manual cinematic suggestion is ready. No chat event was replayed.'
-                : result?.status === 'pending-suppressed'
-                    ? 'Finish the current cinematic suggestion before adding another.'
-                    : result?.reason || 'Manual cinematic suggestion could not be created.';
-            if (chatCaptureIsCurrent(captured)) {
-                refreshCinematicSurface(result?.suggestion, status);
-                if (result?.status === 'suggested') cinematicFeature?.focusCinematicSuggestionCard({ documentLike: document, suggestionId: result.suggestion?.suggestionId });
-            }
-            if (result?.status === 'suggested') toastr.info(status, 'Context Image Generation');
-            else if (result?.status === 'pending-suppressed') toastr.info(status, 'Context Image Generation');
-            else toastr.info(status, 'Context Image Generation');
-        } catch (error) {
-            $('#cig_cinematic_status').text(`Manual cinematic suggestion failed: ${error?.message || 'try again.'}`);
-            showGenerationError(error, 'Manual cinematic retrigger');
-        }
-    });
-
     $(document).on('change', '[data-cig-chat-appearance-source]', function (e) {
         e.preventDefault();
         try { chooseAppearanceSource($(this).attr('data-cig-chat-appearance-source'), String($(this).val() || 'auto')); }
@@ -4105,7 +4041,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CHANGED, async () => {
         chatLifecycleEpoch.advance();
-        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
+        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); renderCinematicSuggestion(); });
         if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
         setTimeout(async () => {
             injectAllMessageButtons();
@@ -4116,7 +4052,7 @@ jQuery(async () => {
 
     eventSource.on(event_types.CHAT_CREATED, async () => {
         chatLifecycleEpoch.advance();
-        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); refreshCinematicSurface(); });
+        if (extraStoryToolEnabled('cinematic')) await cinematicLifecycle.run(() => { cinematicRuntime?.load({ chatId: getContext().chatId, epoch: chatLifecycleEpoch.capture() }); renderCinematicSuggestion(); });
         if (extraStoryToolEnabled('storyMemory')) await storyMemoryLifecycle.run(() => refreshStoryMemorySurface());
         setTimeout(async () => { injectAllMessageButtons(); markImagesCastSettingsStale(); }, 100);
     });

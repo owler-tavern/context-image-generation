@@ -12,7 +12,7 @@ test('uses one avatar-reference setting while keeping legacy swipe generation in
     assert.match(index, /cigSettings\.use_char_avatar \|\| cigSettings\.use_user_avatar/);
     assert.match(index, /delete cigSettings\.use_char_avatar/);
     assert.match(index, /delete cigSettings\.use_user_avatar/);
-    assert.match(index, /regenerate_on_swipe:\s*false/);
+    assert.doesNotMatch(index, /regenerate_on_swipe:\s*false/);
     assert.doesNotMatch(index, /\$\('#cig_regenerate_on_swipe'\)/u);
     assert.doesNotMatch(settings, /id="cig_regenerate_on_swipe"/u);
     assert.match(settings, /id="cig_use_avatars"/);

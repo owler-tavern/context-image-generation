@@ -44,7 +44,7 @@ test('suggestion actions and narrow-safe controls are accessible', () => {
 });
 
 test('production dismiss refreshes the card from the settled runtime result', () => {
-    assert.match(index, /if \(result\?\.status === 'dismissed'\) refreshCinematicSurface\(null, 'Cinematic suggestion dismissed\./u);
+    assert.match(index, /if \(result\?\.status === 'dismissed'\) renderCinematicSuggestion\(null\)/u);
     assert.match(index, /data-cig-cinematic-id/);
 });
 
@@ -60,22 +60,8 @@ test('cinematic suggestions stage the next wand and never dispatch from the card
     assert.doesNotMatch(settings, />Approve</u);
 });
 
-test('manual cinematic retrigger reports a visible suggestion result even before a message card can mount', () => {
-    assert.match(index, /refreshCinematicSurface\(result\?\.suggestion, status\)/u);
-    assert.match(index, /Manual cinematic suggestion is ready/u);
-    assert.match(index, /No chat event was replayed/u);
-    assert.match(index, /focusCinematicSuggestionCard\(\{ documentLike: document, suggestionId: result\.suggestion\?\.suggestionId \}\)/u);
-});
-
-test('production cinematic runtime binds manual retriggers to the current chat messages', () => {
-    assert.match(index, /createCinematicRuntime\(\{[\s\S]*getChat: \(\) => getContext\(\)\.chat \|\| \[\]/u);
-    assert.match(index, /renderCinematicSuggestion\(suggestionOverride\)/u);
-});
-
-test('production manual retrigger captures lifecycle identity and skips stale refreshes', () => {
-    assert.match(index, /const captured = \{ chatId: getContext\(\)\.chatId, epoch: chatLifecycleEpoch\.capture\(\) \};[\s\S]*cinematicRuntime\?\.retrigger\([\s\S]*captured\)/u);
-    assert.match(index, /if \(chatCaptureIsCurrent\(captured\)\) \{[\s\S]*refreshCinematicSurface\(result\?\.suggestion, status\)/u);
-    assert.match(index, /suggestion\.target\.epoch[\s\S]*chatLifecycleEpoch\.capture\(\)/u);
+test('retired cinematic controls have no production bindings', () => {
+    assert.doesNotMatch(index, /cig_cinematic_(?:retrigger|enabled|mode|budget_type|generation_limit|cost_ceiling|status)/u);
 });
 
 test('previous image is a strict opt-in at capture and pending continuation is cleared when turned off', () => {

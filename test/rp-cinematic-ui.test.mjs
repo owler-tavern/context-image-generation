@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { renderCinematicSuggestionCard, CINEMATIC_UI_CSS, createCinematicUiController, focusCinematicSuggestionCard } from '../lib/rp/cinematic-ui.js';
+import { renderCinematicSuggestionCard, CINEMATIC_UI_CSS, createCinematicUiController } from '../lib/rp/cinematic-ui.js';
 
 const suggestion = {
     suggestionId: 'suggestion:test', state: 'suggested', kind: 'location',
@@ -20,29 +20,6 @@ test('suggestion card renders why, proposed shot, budget, and wand staging actio
     assert.doesNotMatch(html, /data-cig-cinematic-action="approve"/);
     assert.match(html, /Use for next wand/);
     assert.match(CINEMATIC_UI_CSS, /min-height:\s*44px/);
-});
-
-test('successful manual suggestion closes an open host overlay and focuses the mounted card', () => {
-    const calls = { close: 0, scroll: 0, focus: 0 };
-    const host = { style: { display: 'block' } };
-    const toggle = { click() { calls.close += 1; host.style.display = 'none'; } };
-    const approve = { focus() { calls.focus += 1; }, setAttribute() {}, getAttribute() { return null; } };
-    const card = {
-        getAttribute(name) { return name === 'data-cig-cinematic-card' ? 'suggestion:test' : null; },
-        querySelector() { return approve; },
-        scrollIntoView() { calls.scroll += 1; },
-    };
-    const documentLike = {
-        querySelector(selector) {
-            return { '#rm_extensions_block': host, '#extensions-settings-button > .drawer-toggle': toggle }[selector] || null;
-        },
-        querySelectorAll() { return [card]; },
-        defaultView: { getComputedStyle: (element) => element.style },
-    };
-    const result = focusCinematicSuggestionCard({ documentLike, suggestionId: 'suggestion:test' });
-    assert.deepEqual(result, { status: 'focused', hostClosed: true });
-    assert.deepEqual(calls, { close: 1, scroll: 1, focus: 1 });
-    assert.equal(host.style.display, 'none');
 });
 
 test('UI controller routes card actions without hidden network calls', async () => {

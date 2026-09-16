@@ -3,6 +3,7 @@
 Version: **2.5.0**. Generation entry points remain the message wand and `/proimagine` (aliases `/proimg`, `/geminiimg`); both use the shared kernel. Settings actions are configuration-only and never generate images. Catalog discovery does not verify a generation route or image quality.
 
 ## Changes
+- Removed unused runtime code behind the retired Automation controls, manual-retrigger/focus helpers, automatic-generation defaults, and scene-preference interpretation. Legacy saved values remain bounded compatibility data. Cleanup suite: 948 passing tests.
 - Add/Edit connection opens a focused editor directly below the active connection selector. Saving a new connection does not activate it automatically.
 - Model search, selection, and Refresh Models share one area. Blank readiness actions and garbled separators are fixed.
 - Scene details contains only Generation instruction. Empty Automation UI is removed. Retired depth/framing/continuity/custom-direction values remain stored but inert.

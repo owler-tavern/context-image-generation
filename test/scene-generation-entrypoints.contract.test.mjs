@@ -37,9 +37,9 @@ test('wand and slash remain registered through the shared production entry-point
     assert.match(index, /aliases:\s*\['proimg',\s*'geminiimg'\]/u);
 });
 
-test('retired settings values remain stored but have no visible or bound controls', () => {
-    assert.match(index, /auto_generate:\s*'off'/u);
-    assert.match(index, /regenerate_on_swipe:\s*false/u);
+test('retired automatic settings have no defaults, visible controls, or bound controls', () => {
+    assert.doesNotMatch(index, /auto_generate:\s*'off'/u);
+    assert.doesNotMatch(index, /regenerate_on_swipe:\s*false/u);
     assert.doesNotMatch(settings, /id="cig_(?:auto_generate|regenerate_on_swipe)"/u);
     assert.doesNotMatch(index, /\$\('#cig_(?:auto_generate|regenerate_on_swipe)'\)/u);
 });

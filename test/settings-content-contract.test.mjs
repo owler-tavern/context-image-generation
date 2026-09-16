@@ -62,8 +62,8 @@ test('each existing preference control remains once in its user-facing group', (
 
 test('retired automatic and overswipe values have no visible settings controls', () => {
     assert.doesNotMatch(settings, /id="cig_(?:regenerate_on_swipe|auto_generate)"/u);
-    assert.match(index, /regenerate_on_swipe:\s*false/u);
-    assert.match(index, /auto_generate:\s*'off'/u);
+    assert.doesNotMatch(index, /regenerate_on_swipe:\s*false/u);
+    assert.doesNotMatch(index, /auto_generate:\s*'off'/u);
 });
 
 test('ADR-002 keeps Settings configuration-only and makes model refresh discoverable', () => {

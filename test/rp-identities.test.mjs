@@ -58,5 +58,6 @@ test('library migration is additive and idempotent', () => {
     assert.equal(migrated.schema, 1);
     assert.deepEqual(migrateRpLibrary(migrated), migrated);
     assert.deepEqual(migrated.assets, {});
-    assert.equal(migrated.preferences.sceneContinuity, false);
+    assert.deepEqual(migrated.preferences, {});
+    assert.deepEqual(migrateRpLibrary({ preferences: { sceneContinuity: true } }).preferences, { sceneContinuity: true });
 });

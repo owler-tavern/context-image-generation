@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createCinematicRuntime } from '../lib/rp/cinematic-runtime.js';
+import { compactCinematicRuntimeState, createCinematicRuntime } from '../lib/rp/cinematic-runtime.js';
 import { buildSceneGenerationSnapshot } from '../lib/rp/scene-generation.js';
 
 function interpretationDelta({ location = null, cast = null } = {}) {
@@ -33,6 +33,19 @@ function setup(overrides = {}) {
     });
     return { runtime, persisted, calls, switchChat(id) { currentChatId = id; epoch += 1; } };
 }
+
+test('legacy retrigger caches survive a bounded compact and load roundtrip without restoring the retrigger API', () => {
+    const retriggerSuggestions = Object.fromEntries(Array.from({ length: 20 }, (_value, index) => [`retry:${index}`, { legacy: index }]));
+    const compacted = compactCinematicRuntimeState({ session: { sessionId: 'chat-a', retriggerSuggestions } });
+    assert.deepEqual(Object.keys(compacted.session.retriggerSuggestions), Array.from({ length: 16 }, (_value, index) => `retry:${index + 4}`));
+
+    const runtime = createCinematicRuntime({
+        readState: () => ({ cinematicAutomation: compacted, storyState: { schema: 1, sceneFacts: {} } }),
+    });
+    runtime.load({ chatId: 'chat-a', epoch: 1 });
+    assert.deepEqual(runtime.getState().session.retriggerSuggestions, compacted.session.retriggerSuggestions);
+    assert.equal('retrigger' in runtime, false);
+});
 
 test('runtime observes accepted story deltas, persists a card, and ignores ordinary message count', async () => {
     const { runtime, persisted, calls } = setup();
@@ -120,78 +133,6 @@ test('approval blocks when the captured route changes after the card was created
     const blocked = await runtime.approve(result.suggestion.suggestionId);
     assert.equal(blocked.status, 'route-invalid');
     assert.equal(calls.dispatch, 0);
-});
-
-test('manual retrigger is explicit provenance and does not replay a chat event', async () => {
-    const { runtime, calls } = setup({ getChat: () => [{ mes: 'Ava enters the library.', name: 'Ava' }] });
-    await runtime.load({ chatId: 'chat-a', epoch: 1 });
-    const result = await runtime.retrigger('beat:missed', 'retry-1', 'missed beat');
-    assert.equal(result.suggestion.triggerSource, 'manual-retrigger');
-    assert.equal(result.suggestion.replayedChatEvent, false);
-    assert.equal(result.suggestion.target.messageId, 0);
-    assert.equal(calls.dispatch, 0);
-});
-
-test('manual retrigger captures chat identity before queued execution', async () => {
-    let releaseInterpretation;
-    let interpretationStarted;
-    const interpretation = new Promise((resolve) => { releaseInterpretation = resolve; });
-    const started = new Promise((resolve) => { interpretationStarted = resolve; });
-    const { runtime, switchChat } = setup({
-        interpret: async () => {
-            interpretationStarted();
-            return interpretation;
-        },
-        getChat: () => [{ mes: 'Ava enters the library.', name: 'Ava' }],
-    });
-    await runtime.load({ chatId: 'chat-a', epoch: 1 });
-    const observing = runtime.observe({ chatId: 'chat-a', epoch: 1, messageId: 0, message: { mes: 'Ava enters the library.' } });
-    await interpretationStarted;
-    const retrigger = runtime.retrigger('beat:missed', 'retry-before-queue', 'missed beat');
-    switchChat('chat-b');
-    runtime.load({ chatId: 'chat-b', epoch: 2 });
-    releaseInterpretation({ accepted: false });
-    await observing;
-    const result = await retrigger;
-    assert.equal(result.status, 'stale');
-    assert.match(result.reason, /chat changed/i);
-    assert.equal(runtime.getState().chatId, 'chat-b');
-    assert.equal(runtime.getState().suggestion, null);
-});
-
-test('manual retrigger does not refresh an active chat after persistence crosses a chat switch', async () => {
-    let activeChat = 'chat-a';
-    let activeEpoch = 1;
-    let releaseSave;
-    let saveStarted;
-    const saveGate = new Promise((resolve) => { releaseSave = resolve; });
-    const started = new Promise((resolve) => { saveStarted = resolve; });
-    const durable = new Map();
-    const runtime = createCinematicRuntime({
-        settings: { enabled: true, mode: 'frequent', generationLimit: 2 },
-        getChatId: () => activeChat,
-        getChat: () => [{ mes: `${activeChat} latest message` }],
-        getEpoch: () => activeEpoch,
-        readState: ({ chatId } = {}) => durable.get(chatId || activeChat) || { storyState: { schema: 1, sceneFacts: {} } },
-        writeState: (value, { chatId } = {}) => durable.set(chatId || activeChat, structuredClone(value)),
-        saveDurableState: async () => { saveStarted(); await saveGate; },
-        saveChat: async () => {},
-        interpret: ({ acceptedSceneDelta }) => acceptedSceneDelta,
-        dispatch: async () => ({ status: 'completed' }),
-    });
-    runtime.load({ chatId: 'chat-a', epoch: 1 });
-    const retrigger = runtime.retrigger('beat:missed', 'retry-during-save', 'missed beat');
-    await started;
-    activeChat = 'chat-b';
-    activeEpoch = 2;
-    runtime.load({ chatId: 'chat-b', epoch: 2 });
-    releaseSave();
-    const result = await retrigger;
-    assert.equal(result.status, 'stale');
-    assert.match(result.reason, /chat changed/i);
-    assert.equal(runtime.getState().chatId, 'chat-b');
-    assert.equal(runtime.getState().suggestion, null);
-    assert.ok(durable.get('chat-a')?.cinematicAutomation?.session?.pendingSuggestions);
 });
 
 test('generation-count ceiling stops later suggestions after a completed receipt', async () => {
@@ -343,19 +284,6 @@ test('inactive settlement is durable across a runtime restart without overwritin
     activeEpoch = 4;
     restarted.load({ chatId: 'chat-b', epoch: 4 });
     assert.equal(restarted.getState().session.generationCount, bBefore.session.generationCount);
-});
-
-test('settings updates propagate to every remembered chat session', async () => {
-    const { runtime, switchChat } = setup();
-    runtime.load({ chatId: 'chat-a', epoch: 1 });
-    switchChat('chat-b');
-    runtime.load({ chatId: 'chat-b', epoch: 2 });
-    runtime.updateSettings({ mode: 'conservative', generationLimit: 7, costCeiling: null });
-    switchChat('chat-a');
-    runtime.load({ chatId: 'chat-a', epoch: 3 });
-    assert.equal(runtime.getState().session.mode, 'conservative');
-    assert.equal(runtime.getState().session.generationLimit, 7);
-    assert.equal(runtime.getState().session.costCeiling, null);
 });
 
 test('active chat persistence uses a bounded provider-free projection and reloads a pending card', async () => {
