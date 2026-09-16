@@ -19,7 +19,7 @@ Implementation and isolated SillyTavern UI acceptance verified. Git publication 
 - Removed four obsolete tracked agent reports/specs; ignored local attachment caches and working notes without deleting them. Retained decision records and compatibility data.
 
 ## Verification
-- Final integrated `npm test`: **954 passed, 0 failed**, including the previously missing no-spend helper.
+- Final integrated `npm test`: **954 passed, 0 failed**, including the previously missing no-spend helper. The committed Git archive was independently extracted into a clean temporary directory and also passed all 954 tests.
 - Initial full run: 952 passed, 2 failed. Both were obsolete assertions for intentionally removed behavior: no Gallery recovery on thrown chat-save errors, and the retired visual-preference handler. Corrected expectations and reran the whole suite.
 - Independent Sol source review: no remaining P1 implementation finding after correcting host model scoping and consistent recovery visibility.
 - Actual SillyTavern 1.18.0 staging host, isolated temporary profile on loopback port 8017: Add opens/focuses editor; Close hides it; custom credential-free connection saves without switching the active provider; model search filters actual options; no visible blank CIG buttons; retired controls absent.
