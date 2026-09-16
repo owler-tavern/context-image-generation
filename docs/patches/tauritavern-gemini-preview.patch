@@ -1,0 +1,101 @@
+diff --git a/src-tauri/crates/tt-application/src/services/chat_completion_service/payload/makersuite.rs b/src-tauri/crates/tt-application/src/services/chat_completion_service/payload/makersuite.rs
+index 4a24965f..6d9ed0a0 100644
+--- a/src-tauri/crates/tt-application/src/services/chat_completion_service/payload/makersuite.rs
++++ b/src-tauri/crates/tt-application/src/services/chat_completion_service/payload/makersuite.rs
+@@ -25,6 +25,7 @@ const GOOGLE_IMAGE_GENERATION_MODELS: &[&str] = &[
+     "gemini-2.5-flash-image-preview",
+     "gemini-2.5-flash-image",
+     "gemini-3-pro-image-preview",
++    "gemini-3.1-flash-image-preview",
+ ];
+ 
+ const GOOGLE_NO_SEARCH_MODELS: &[&str] = &[
+@@ -1829,45 +1830,49 @@ mod tests {
+ 
+     #[test]
+     fn makersuite_image_generation_sets_response_modalities_and_image_config() {
+-        let payload = json!({
+-            "model": "gemini-3-pro-image-preview",
+-            "request_images": true,
+-            "request_image_resolution": "image_size_1",
+-            "request_image_aspect_ratio": "16:9",
+-            "messages": [{"role": "user", "content": "hello"}]
+-        })
+-        .as_object()
+-        .cloned()
+-        .expect("payload must be object");
+-
+-        let (_, upstream) = build(payload).expect("build should succeed");
+-        let body = upstream.as_object().expect("body must be object");
+-        let config = body
+-            .get("generationConfig")
+-            .and_then(Value::as_object)
+-            .expect("generationConfig must be object");
+-
+-        assert_eq!(
+-            config
+-                .get("responseModalities")
+-                .and_then(Value::as_array)
+-                .and_then(|value| value.first())
+-                .and_then(Value::as_str),
+-            Some("text")
+-        );
+-
+-        let image_config = config
+-            .get("imageConfig")
+-            .and_then(Value::as_object)
+-            .expect("imageConfig must be object");
+-        assert_eq!(
+-            image_config.get("imageSize").and_then(Value::as_str),
+-            Some("image_size_1")
+-        );
+-        assert_eq!(
+-            image_config.get("aspectRatio").and_then(Value::as_str),
+-            Some("16:9")
+-        );
++        for model in [
++            "gemini-3-pro-image-preview",
++            "gemini-3.1-flash-image-preview",
++        ] {
++            let payload = json!({
++                "model": model,
++                "request_images": true,
++                "request_image_resolution": "image_size_1",
++                "request_image_aspect_ratio": "16:9",
++                "messages": [{"role": "user", "content": "hello"}]
++            })
++            .as_object()
++            .cloned()
++            .expect("payload must be object");
++
++            let (_, upstream) = build(payload).expect("build should succeed");
++            let body = upstream.as_object().expect("body must be object");
++            let config = body
++                .get("generationConfig")
++                .and_then(Value::as_object)
++                .expect("generationConfig must be object");
++
++            assert_eq!(
++                config.get("responseModalities"),
++                Some(&json!(["text", "image"])),
++                "{model} must request text and image output"
++            );
++
++            let image_config = config
++                .get("imageConfig")
++                .and_then(Value::as_object)
++                .expect("imageConfig must be object");
++            assert_eq!(
++                image_config.get("imageSize").and_then(Value::as_str),
++                Some("image_size_1"),
++                "{model} must preserve the requested image size"
++            );
++            assert_eq!(
++                image_config.get("aspectRatio").and_then(Value::as_str),
++                Some("16:9"),
++                "{model} must preserve the requested aspect ratio"
++            );
++        }
+     }
+ 
+     #[test]

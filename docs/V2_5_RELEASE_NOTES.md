@@ -19,3 +19,5 @@ Legacy outfit data remains inert and preserved. Optional Story Memory, cinematic
 954 deterministic tests passed. Isolated SillyTavern browser checks verified settings interactions and narrow layout; see `STATUS.md` for exact evidence. Native TauriTavern and paid-provider generation are **NOT VERIFIED**.
 
 Some SillyTavern versions omit image configuration for exact preview model IDs. The follow-up includes an opt-in, backed-up host patch and offline verifier; see `HOST_GEMINI_FIX.md`. The installed SillyTavern host correction passed 55 request assertions, and the extended extension suite passed 957 tests. Host changes are separate from extension updates. Actual provider dimensions and avatar likeness remain unverified.
+
+The TauriTavern follow-up includes a stable `v2.2.0` source patch and regression test for `gemini-3.1-flash-image-preview`. A standard native executable has been built locally; this extension update alone does not install that executable. See `STATUS.md` for installation and verification status.

@@ -4,7 +4,7 @@
 Ship the consolidated branch review and September 16 user feedback on `codex/v2.5`, preserving both local installations and existing user data.
 
 ## Current milestone
-Extension review shipped. Follow-up host correction: SillyTavern patched and offline verified; TauriTavern source/build work in progress.
+Extension review shipped. Follow-up host correction: SillyTavern patched and offline verified; TauriTavern stable 2.2.0 replacement built and tested, staged pending closure of the running app for smoke testing and installation.
 
 ## Completed
 - Integrated Add/Edit connection beside the active connection selector, with focus and explicit activation.
@@ -21,6 +21,8 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 ## Verification
 - Host follow-up: installed SillyTavern handler and prompt converter passed 55 offline assertions across 12 image cases after reproducing 15 failures before the fix. Exact preview IDs, three aspect ratios, resolution, and both avatar byte strings are preserved. Fetch was stubbed; no provider request was made.
 - Extension suite after host-patch tooling: **957 passed, 0 failed**. Host JavaScript syntax check passed.
+- TauriTavern stable `v2.2.0` host: exact-model allowlist correction and regression test implemented; standard release executable built successfully. Frontend/type checks, 890 contract tests (3 skipped), Rust crate-boundary checks, split-crate Rust tests (including 646 application tests), 5 host-resource tests, and development workspace compilation passed. The full modality regression is included. Native launch and installation remain pending.
+- TauriTavern Clippy ran but failed on three `result_large_err` findings in unchanged `tt-adapter-sync/src/sync/job_executor.rs` at lines 62, 123, and 182. The overall required gate is therefore **PARTIAL**, not green; no unrelated sync changes were made.
 - Final integrated `npm test`: **954 passed, 0 failed**, including the previously missing no-spend helper. The committed Git archive was independently extracted into a clean temporary directory and also passed all 954 tests.
 - Initial full run: 952 passed, 2 failed. Both were obsolete assertions for intentionally removed behavior: no Gallery recovery on thrown chat-save errors, and the retired visual-preference handler. Corrected expectations and reran the whole suite.
 - Independent Sol source review: no remaining P1 implementation finding after correcting host model scoping and consistent recovery visibility.
@@ -32,10 +34,11 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 - Installed SillyTavern backend was corrected locally to accept the two Gemini 3 preview image IDs and preserve absent optional image settings. Restart SillyTavern to load the change. Host updates may overwrite it; the repeatable patch and offline verifier are documented in `docs/HOST_GEMINI_FIX.md`. Updating the extension alone does not patch the host.
 - Real provider-generated dimensions, image quality, and avatar likeness remain **NOT VERIFIED**. No paid generation was performed.
 - Native TauriTavern runtime remains **NOT VERIFIED**; browser acceptance was performed in SillyTavern. Both receive the same extension files, not a claim of identical host behavior.
+- TauriTavern's running 2.2.0 executable still has the old model gate. The corrected standard executable and verified original backup are prepared. The user was asked to save/close the app before replacement because its single-instance plugin prevents a reliable isolated smoke launch while the original remains active. No app or profile data was replaced.
 - Broad entrypoint refactoring and thumbnail/decode performance optimization are deferred: no measured performance problem or safe migration evidence justifies a broad rewrite in this fix release.
 
 ## Decisions
 Wand and slash remain the only generation actions. No automatic retries, model aliases, generation timeout, or legacy user-data purge was introduced. See the consolidated review for issue disposition.
 
 ## Next action
-Reload both applications after the synchronized branch update. Validate actual provider dimensions and avatar likeness on an explicitly selected compatible host/provider route; native TauriTavern acceptance remains outstanding.
+After the user saves/closes TauriTavern, smoke-test the staged standard executable with its isolated portable marker, then replace only the installed executable after rechecking its original hash. Do not copy the portable marker into the installed directory. Restart SillyTavern to load its host patch. Actual provider dimensions and avatar likeness remain unverified.
