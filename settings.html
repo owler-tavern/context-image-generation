@@ -8,34 +8,18 @@
                 <button id="cig_settings_tab_images_cast" class="menu_button" type="button" role="tab" value="images-cast" data-cig-tab="images-cast" aria-selected="false" aria-controls="cig_settings_panel_images_cast" tabindex="-1">Characters &amp; Library</button>
             </div>
             <section id="cig_settings_panel_setup" class="cig-settings-panel" role="tabpanel" data-cig-panel="setup" aria-labelledby="cig_settings_tab_setup">
-                <div class="cig-connection-actions">
-                    <div class="flex1"><label for="cig_provider">Generate images with</label><select id="cig_provider" class="cig-setting"></select></div>
-                    <input id="cig_edit_connection" class="menu_button" type="button" value="Edit connection" />
-                    <input id="cig_add_connection" class="menu_button" type="button" value="Add connection" />
+                <div class="cig-setup-section">
+                    <h2>Connection</h2>
+                    <div class="cig-connection-actions">
+                        <div class="flex1"><label for="cig_provider">Generate images with</label><select id="cig_provider" class="cig-setting"></select></div>
+                        <input id="cig_edit_connection" class="menu_button" type="button" value="Edit connection" />
+                        <input id="cig_add_connection" class="menu_button" type="button" value="Add connection" />
+                    </div>
                 </div>
                 <small id="cig_provider_info" style="display: none; opacity: 0.8;"></small>
 
-                <div class="cig-model-selection">
-                    <label for="cig_model_search">Find a model</label>
-                    <input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Search available models" autocomplete="off" />
-                    <div class="cig-setup-model-row">
-                        <div class="flex1"><label for="cig_model">Model</label><select id="cig_model" class="cig-setting"></select></div>
-                        <input id="cig_model_refresh" class="menu_button" type="button" value="Refresh Models" aria-describedby="cig_model_refresh_hint" />
-                    </div>
-                    <label class="checkbox_label"><input id="cig_show_all_models" type="checkbox" /><span>Show all returned models</span></label>
-                    <div id="cig_model_method_container" class="flex-container flexFlowColumn" style="display: none;"><label for="cig_model_method">Generation method</label><select id="cig_model_method" class="cig-setting"></select><small id="cig_model_method_note" class="cig-setting-help"></small></div>
-                    <small class="cig-setting-help">Refresh Models checks the active connection and keeps your existing local choices.</small>
-                    <small id="cig_model_refresh_hint" style="display: none; opacity: 0.8;"></small>
-                    <small id="cig_model_note" style="display: none; opacity: 0.8;"></small>
-                    <small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small>
-                    <small id="cig_model_discovery_note" style="display: none; opacity: 0.8;"></small>
-                </div>
-
-                <details id="cig_model_manager" class="cig_model_manager"><summary>Enter a model ID</summary><div class="cig-manual-model-entry"><label for="cig_managed_model_id">Model ID</label><input id="cig_managed_model_id" class="text_pole" type="text" placeholder="Actual model ID" autocomplete="off" /><input id="cig_add_model" class="menu_button" type="button" value="Use model ID" /></div></details>
-
-                <div class="cig-setup-readiness"><small id="cig_setup_status" class="cig-setup-status" role="status" aria-live="polite"></small><button id="cig_setup_fix" class="menu_button" type="button" hidden></button><small id="cig_setup_issue" class="cig-setup-issue" role="status" aria-live="polite" style="display: none;"></small><small class="cig-setting-help">Use the wand in chat to generate an image.</small></div>
-
-                <details id="cig_connection_editor" class="cig-connection-editor"><summary>Connection settings</summary>
+                <section id="cig_connection_editor" class="cig-connection-editor" aria-labelledby="cig_connection_editor_heading" hidden>
+                    <h2 id="cig_connection_editor_heading">Connection details</h2>
                     <div class="cig-connection-editor-content">
                         <label for="cig_connection_preset">Provider</label><select id="cig_connection_preset" class="text_pole"><option value="">Choose provider</option></select><small id="cig_connection_editing_status" role="status" aria-live="polite"></small>
                         <div id="cig_builtin_connection_fields" class="flex-container flexFlowColumn" style="display: none;"><div id="cig_provider_key_container" class="flex-container flexFlowColumn"><label for="cig_provider_api_key" id="cig_provider_api_key_label">Provider API key</label><input id="cig_provider_api_key" class="cig-setting text_pole" type="password" placeholder="Enter API key" autocomplete="off" /></div><div class="cig-connection-actions"><input id="cig_builtin_connection_save" class="menu_button" type="button" value="Save key" /><input id="cig_builtin_connection_use" class="menu_button" type="button" value="Use this connection" /></div></div>
@@ -53,9 +37,29 @@
                             <div class="cig-custom-connection-actions"><input id="cig_custom_connection_use" class="menu_button" type="button" value="Use this connection" /><input id="cig_custom_connection_save" class="menu_button" type="button" value="Save connection" /><input id="cig_custom_connection_test" class="menu_button" type="button" value="Test and fetch models" /><button id="cig_custom_connection_delete" class="menu_button" type="button" aria-label="Delete selected custom connection">Delete connection</button></div>
                             <small id="cig_custom_connection_status" role="status" aria-live="polite"></small><small id="cig_custom_connection_route_summary" role="status" aria-live="polite"></small><small id="cig_custom_connection_local_warning" class="cig-custom-connection-warning" role="status" aria-live="polite" hidden></small><small id="cig_custom_connection_first_request_warning" class="cig-custom-connection-warning" role="status" aria-live="polite" hidden></small><pre id="cig_custom_connection_preview" aria-label="Sanitized route preview"></pre>
                         </section>
-                        <button id="cig_connection_editor_cancel" class="menu_button" type="button">Close editor</button>
+                        <button id="cig_connection_editor_cancel" class="menu_button" type="button">Close connection details</button>
                     </div>
-                </details>
+                </section>
+
+                <div class="cig-model-selection">
+                    <div class="cig-setup-model-row">
+                        <div class="flex1"><label for="cig_model">Model</label><select id="cig_model" class="cig-setting"></select></div>
+                        <div class="cig-model-filter"><label for="cig_model_search">Search models</label><input id="cig_model_search" class="text_pole cig-model-search" type="search" placeholder="Filter available models" autocomplete="off" /></div>
+                        <input id="cig_model_refresh" class="menu_button" type="button" value="Refresh Models" aria-describedby="cig_model_refresh_hint" />
+                    </div>
+                    <label class="checkbox_label"><input id="cig_show_all_models" type="checkbox" /><span>Show all returned models</span></label>
+                    <div id="cig_model_method_container" class="flex-container flexFlowColumn" style="display: none;"><label for="cig_model_method">Generation method</label><select id="cig_model_method" class="cig-setting"></select><small id="cig_model_method_note" class="cig-setting-help"></small></div>
+                    <small class="cig-setting-help">Refresh Models checks the active connection and keeps your existing local choices.</small>
+                    <small id="cig_model_refresh_hint" style="display: none; opacity: 0.8;"></small>
+                    <small id="cig_model_note" style="display: none; opacity: 0.8;"></small>
+                    <small id="cig_model_discovery_status" class="cig-model-discovery-status" role="status" aria-live="polite"></small>
+                    <small id="cig_model_discovery_note" style="display: none; opacity: 0.8;"></small>
+                    <small id="cig_host_compatibility_note" class="cig-capability-note" role="status" aria-live="polite" hidden></small>
+                </div>
+
+                <details id="cig_model_manager" class="cig_model_manager"><summary>Enter a model ID</summary><div class="cig-manual-model-entry"><label for="cig_managed_model_id">Model ID</label><input id="cig_managed_model_id" class="text_pole" type="text" placeholder="Actual model ID" autocomplete="off" /><input id="cig_add_model" class="menu_button" type="button" value="Use model ID" /></div></details>
+
+                <div class="cig-setup-readiness"><small id="cig_setup_status" class="cig-setup-status" role="status" aria-live="polite"></small><button id="cig_setup_fix" class="menu_button" type="button" hidden></button><small id="cig_setup_issue" class="cig-setup-issue" role="status" aria-live="polite" style="display: none;"></small><small class="cig-setting-help">Use the wand in chat to generate an image.</small></div>
 
                 <details id="cig_advanced_setup" class="cig_advanced_setup"><summary>Troubleshooting</summary><div id="cig_provider_advanced_container" class="flex-container flexFlowColumn" style="display: none;"><small id="cig_provider_advanced_info" style="display: none; opacity: 0.8;"></small></div><div class="cig_advanced_run_controls"><button id="cig_cancel_generation" class="menu_button" type="button" style="display: none;" disabled>Cancel active generations</button><div class="cig-troubleshooting-actions"><button id="cig_show_preflight" class="menu_button" type="button">Inspect last plan</button><button id="cig_export_diagnostics" class="menu_button" type="button">Export diagnostics</button></div><pre id="cig_preflight_summary" role="status" style="display: none;"></pre></div></details>
             </section>
@@ -68,10 +72,6 @@
                 </div>
                 <div id="cig_preferences_scene_context" class="cig-preference-group" data-cig-preference-group="scene-context">
                     <h2 class="cig-subheading">Scene details</h2>
-                    <small class="cig-setting-help">Framing, continuity, and custom visual direction are saved for the current chat. Message depth and generation instruction apply to every chat. The wand and slash command remain the only manual generation actions.</small>
-                    <div class="cig-setting-row"><div class="flex1"><label for="cig_message_depth">Message depth</label><small class="cig-setting-help">Choose how many recent messages describe the scene.</small><input type="number" id="cig_message_depth" class="cig-setting text_pole cig-message-depth" min="1" max="10" value="1" /></div></div>
-                    <div class="cig-setting-row"><div class="flex1"><label for="cig_framing_preference">Framing preference</label><small class="cig-setting-help">Choose how tightly the scene is composed when the story does not specify a shot.</small><select id="cig_framing_preference" class="cig-setting"><option value="auto">Automatic</option><option value="close-up">Close-up</option><option value="medium">Medium shot</option><option value="wide">Wide shot</option><option value="full-body">Full body</option></select></div><div class="flex1"><label for="cig_continuity_strength">Continuity strength</label><small class="cig-setting-help">Control how strongly saved character appearance and current state guide the image.</small><select id="cig_continuity_strength" class="cig-setting"><option value="minimal">Minimal</option><option value="balanced">Balanced</option><option value="strong">Strong</option></select></div></div>
-                    <div class="flex-container flexFlowColumn"><label for="cig_custom_visual_instruction">Custom visual instruction</label><small class="cig-setting-help">Optional reusable direction such as lighting, palette, or medium. Up to 1000 characters.</small><textarea id="cig_custom_visual_instruction" class="cig-setting text_pole textarea_compact" rows="2" maxlength="1000" placeholder="Optional visual direction..."></textarea></div>
                     <div class="flex-container flexFlowColumn"><label for="cig_system_instruction">Generation instruction</label><small class="cig-setting-help">Guide the style and details the image should follow. This is sent with your generation request.</small><textarea id="cig_system_instruction" class="cig-setting text_pole textarea_compact" rows="3" placeholder="Instructions for the image generation model..."></textarea></div>
                 </div>
                 <div id="cig_preferences_references" class="cig-preference-group" data-cig-preference-group="references">
@@ -81,19 +81,6 @@
                     <label class="checkbox_label" title="Include character and persona descriptions in the image prompt"><input type="checkbox" id="cig_include_descriptions" class="cig-setting" /><span>Use character descriptions</span></label>
                     <label id="cig_previous_image_reference_option" class="checkbox_label" title="Use the last generated image as a visual reference"><input type="checkbox" id="cig_use_previous_image" class="cig-setting" /><span>Use the previous image</span></label>
                     <small class="cig-setting-help">References help the image stay consistent with people and recent scenes.</small>
-                </div>
-                <div id="cig_preferences_automation" class="cig-preference-group" data-cig-preference-group="automation">
-                    <h2>Automation</h2>
-                    <div id="cig_cinematic_automation" class="cig-cinematic-settings">
-                        <h3>Cinematic suggestions</h3>
-                        <small class="cig-setting-help">Cinematic suggestions stage context for the next wand. Suggestions never call a provider. They suggest a shot when the accepted story state changes location, cast, or emotional beat.</small>
-                        <label class="checkbox_label"><input type="checkbox" id="cig_cinematic_enabled" class="cig-setting" /><span>Enable cinematic suggestions</span></label>
-                        <div class="cig-setting-row"><div class="flex1"><label for="cig_cinematic_mode">Suggestion frequency</label><select id="cig_cinematic_mode" class="cig-setting"><option value="conservative">Conservative</option><option value="balanced">Balanced</option><option value="frequent">Frequent</option><option value="off">Off</option></select></div><div class="flex1"><label for="cig_cinematic_budget_type">Suggestion limit</label><select id="cig_cinematic_budget_type" class="cig-setting"><option value="generations">Suggestion count</option><option value="cost">Cost tracking (when supported)</option></select></div></div>
-                        <div id="cig_cinematic_generation_budget" class="flex-container flexFlowColumn"><label for="cig_cinematic_generation_limit">Suggestions per chat session</label><input id="cig_cinematic_generation_limit" class="cig-setting text_pole" type="number" min="1" max="100" step="1" value="5" /><small class="cig-setting-help">This limits provider-free suggestions only; it never starts image generation.</small></div>
-                        <div id="cig_cinematic_cost_budget" class="flex-container flexFlowColumn" hidden><label for="cig_cinematic_cost_ceiling">Suggestion cost tracking</label><input id="cig_cinematic_cost_ceiling" class="cig-setting text_pole" type="number" min="0" step="0.01" placeholder="Unavailable until exact pricing is known" /><small class="cig-setting-help">Suggestions never spend or call a provider; this field is retained for compatibility when exact pricing is available. No currency is invented.</small></div>
-                        <div class="cig-cinematic-retrigger flex-container flexFlowColumn"><label for="cig_cinematic_retrigger_beat">Missed or failed beat</label><div class="cig-cinematic-retrigger-row"><input id="cig_cinematic_retrigger_beat" class="cig-setting text_pole" type="text" maxlength="160" placeholder="Optional beat name" /><button id="cig_cinematic_retrigger" class="menu_button" type="button">Suggest missed beat</button></div><small class="cig-setting-help">Creates a fresh suggestion without replaying or generating from a chat event.</small></div>
-                        <small id="cig_cinematic_status" class="cig-setting-help" role="status" aria-live="polite"></small>
-                    </div>
                 </div>
             </section>
             <section id="cig_settings_panel_images_cast" class="cig-settings-panel" role="tabpanel" data-cig-panel="images-cast" aria-labelledby="cig_settings_tab_images_cast" hidden>

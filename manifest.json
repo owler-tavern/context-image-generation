@@ -7,8 +7,8 @@
     "js": "index.js",
     "css": "style.css",
     "author": "BlueOwler (fork of Elouann)",
-    "description": "Gemini-powered image generation with avatar references and character context (Nano Banana). Fork adding LinkAPI provider support.",
-    "version": "1.8.0",
+    "description": "Context-aware scene images with optional avatar references, configurable providers, and wand or slash generation.",
+    "version": "2.5.0",
     "homePage": "https://github.com/owler-tavern/context-image-generation",
     "manifest_version": 3
 }

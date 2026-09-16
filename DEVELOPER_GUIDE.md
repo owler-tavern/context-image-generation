@@ -15,7 +15,7 @@ This repository is a fork of [elouannd/context-image-generation](https://github.
 | `origin` (`owler-tavern/context-image-generation`) | This fork; changes should target here. |
 | `upstream` (`elouannd/context-image-generation`) | Original project; use for selectively reviewing or bringing in upstream work. |
 
-The manifest currently remains **1.8.0** because no exact semantic v2.5 release version was approved. Treat the version comment at the top of `index.js` as stale historical text, not as the release version. The v2.5 scope is documented in `docs/V2_5_RELEASE_NOTES.md`; update the manifest only with an explicitly approved semantic version.
+The manifest and entrypoint identify **2.5.0**. Current implementation and verification status is in `docs/STATUS.md`; release scope and host limitations are in `docs/V2_5_RELEASE_NOTES.md`.
 
 ## Repository map
 
@@ -30,7 +30,15 @@ The manifest currently remains **1.8.0** because no exact semantic v2.5 release 
 | `manifest.json` | SillyTavern extension entry point and published metadata. |
 | `README.md` | User-facing installation and feature reference. Keep it concise; put maintainer details here. |
 
-There is currently no package manifest. Node built-in contract tests live in `test/`; run them with `node --test test/*.test.mjs`.
+Node built-in tests live in `test/`; run `npm test` with Node 22 or later. No dependency installation is required. GitHub Actions runs the same command on pushes and pull requests. Required helpers live in tracked `test/support/`, never ignored agent folders.
+
+## Host and recovery contracts
+
+- SillyTavern and TauriTavern installations are separate checkouts. A push does not update the other installation without a pull. Preserve dirty local changes before synchronizing.
+- `lib/providers/host-compatibility.js` reads only the same-origin host frontend asset. Model migrations produce an advisory, never an automatic external model alias or proof of backend capability. Missing host metadata is unknown.
+- Aspect ratio travels in the immutable plan, proxy request, and an explicit prompt instruction. Some host backends gate structured image configuration on an exact model allowlist. Provider output dimensions still require live verification.
+- Stale-message and chat-save-failure recovery bypass optional Gallery visibility and await settings persistence before announcing success. A failed recovery save exposes the existing file in preview and reports failure. No automatic generation retry occurs.
+- Retired scene preference values remain stored but are not read into provider prompts. Cinematic staging remains explicit and one-shot. Ordinary story text is preserved instead of being replaced by derived scene metadata.
 
 ## Runtime model
 

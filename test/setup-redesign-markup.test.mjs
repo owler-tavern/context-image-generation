@@ -13,14 +13,14 @@ function setupMarkup() {
     return settings.slice(opening.index, closing);
 }
 
-test('Setup makes one active connection and model selection visible before connection editing', () => {
+test('Setup keeps connection details with the active connection and model controls together', () => {
     const setup = setupMarkup();
     for (const id of ['cig_provider', 'cig_edit_connection', 'cig_add_connection', 'cig_model_search', 'cig_model', 'cig_model_refresh', 'cig_show_all_models', 'cig_model_method_container', 'cig_model_method', 'cig_model_method_note', 'cig_connection_editor']) {
         assert.match(setup, new RegExp(`id="${id}"`), `missing ${id}`);
     }
     assert.match(setup, /<label for="cig_provider">Generate images with<\/label>/);
     assert.ok(setup.indexOf('id="cig_provider"') < setup.indexOf('id="cig_connection_editor"'));
-    assert.ok(setup.indexOf('id="cig_model"') < setup.indexOf('id="cig_connection_editor"'));
+    assert.ok(setup.indexOf('id="cig_connection_editor"') < setup.indexOf('id="cig_model"'));
     assert.match(setup, /Use the wand in chat to generate an image\./);
 });
 
@@ -37,10 +37,10 @@ test('Setup keeps one model chooser and an accessible manual model entry', () =>
 
 test('connection editor separates built-in credentials, custom routes, and troubleshooting', () => {
     const setup = setupMarkup();
-    const editorStart = setup.indexOf('<details id="cig_connection_editor"');
+    const editorStart = setup.indexOf('<section id="cig_connection_editor"');
     const editorEnd = setup.indexOf('<details id="cig_advanced_setup"', editorStart);
     const editor = setup.slice(editorStart, editorEnd);
-    assert.match(editor, /<summary>Connection settings<\/summary>/);
+    assert.match(editor, /<h2 id="cig_connection_editor_heading">Connection details<\/h2>/);
     assert.match(editor, /id="cig_connection_preset"/);
     assert.match(editor, /<option value="">Choose provider<\/option>/);
     assert.match(editor, /id="cig_builtin_connection_fields"[\s\S]*id="cig_provider_key_container"/);

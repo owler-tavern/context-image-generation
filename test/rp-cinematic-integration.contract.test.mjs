@@ -28,13 +28,12 @@ test('cinematic automation is mounted into real chat lifecycle hooks and uses st
     assert.doesNotMatch(runtime, /attachGeneratedImage|dispatch:\s*async|generate:\s*async/u);
 });
 
-test('settings expose explicit cinematic controls and honest cost fallback', () => {
-    for (const id of ['cig_cinematic_enabled', 'cig_cinematic_mode', 'cig_cinematic_budget_type', 'cig_cinematic_generation_limit', 'cig_cinematic_cost_ceiling', 'cig_cinematic_retrigger_beat', 'cig_cinematic_retrigger', 'cig_cinematic_status']) assert.match(settings, new RegExp(`id="${id}"`));
-    assert.match(settings, /Suggestions never call a provider/);
-    assert.match(settings, /No currency is invented/);
+test('cinematic automation remains optional runtime behavior without an empty Preferences section', () => {
+    assert.doesNotMatch(settings, /id="cig_cinematic_(?:enabled|mode|budget_type|generation_limit|cost_ceiling|retrigger_beat|retrigger|status)"/u);
+    assert.doesNotMatch(settings, /<h2>Automation<\/h2>/u);
     assert.match(index, /cinematic_automation/);
     assert.match(index, /cinematic_automation_sessions/);
-    assert.match(index, /cinematicRuntime\?\.retrigger/);
+    assert.match(index, /extraStoryToolEnabled\('cinematic'\)/);
 });
 
 test('suggestion actions and narrow-safe controls are accessible', () => {
@@ -54,7 +53,7 @@ test('cinematic suggestions stage the next wand and never dispatch from the card
     assert.match(index, /cinematicRuntime(?:\?\.)?\.dismiss/u);
     assert.match(index, /setChatWandPreferences/u);
     assert.match(index, /invocation === 'wand' && chatPreferences\.stagedSuggestion\?\.shot/u);
-    assert.match(index, /Cinematic shot: \$\{chatPreferences\.stagedSuggestion\.shot\}/u);
+    assert.match(index, /\[Cinematic shot selected for this generation\]: \$\{chatPreferences\.stagedSuggestion\.shot\}/u);
     assert.match(index, /stagedSuggestion: null/u);
     assert.doesNotMatch(index, /cinematicRuntime\?\.approve/u);
     assert.doesNotMatch(index, /Cinematic image generated/u);

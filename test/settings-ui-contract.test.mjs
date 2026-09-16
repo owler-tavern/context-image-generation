@@ -60,7 +60,7 @@ function setupMarkup() {
 
 function connectionEditorMarkup() {
     const setup = setupMarkup();
-    const opening = setup.indexOf('<details id="cig_connection_editor"');
+    const opening = setup.indexOf('<section id="cig_connection_editor"');
     const closing = setup.indexOf('<details id="cig_advanced_setup"', opening);
     assert.notEqual(opening, -1, 'missing Connection settings editor');
     assert.notEqual(closing, -1, 'missing Troubleshooting after Connection settings');
@@ -94,10 +94,11 @@ test('settings shell owns exactly three labelled tabs and matching panels', () =
     }
 });
 
-test('settings keeps troubleshooting separate from connection and manual-model disclosures', () => {
+test('settings keeps troubleshooting separate from connection details and manual-model disclosures', () => {
     const details = [...settings.matchAll(/<details\b[^>]*>/g)];
     const ids = details.map((detail) => attributes(detail[0]).id).filter(Boolean);
-    for (const id of ['cig_model_manager', 'cig_connection_editor', 'cig_advanced_setup']) assert.ok(ids.includes(id), `missing ${id}`);
+    for (const id of ['cig_model_manager', 'cig_advanced_setup']) assert.ok(ids.includes(id), `missing ${id}`);
+    assert.match(settings, /<section id="cig_connection_editor"[^>]*hidden/);
     assert.doesNotMatch(settings, /role="tab"[^>]*(?:value="advanced"|>\s*Advanced\s*<)/i);
 
     const advanced = advancedMarkup();
@@ -117,8 +118,8 @@ test('Setup exposes separate polite readiness and runtime issue status regions b
         assert.match(element, /role="status"/);
         assert.match(element, /aria-live="polite"/);
     }
+    assert.ok(setup.indexOf('id="cig_connection_editor"') < setup.indexOf('id="cig_model"'));
     assert.ok(setup.indexOf('id="cig_model"') < setup.indexOf('id="cig_setup_status"'));
-    assert.ok(setup.indexOf('id="cig_setup_issue"') < setup.indexOf('id="cig_connection_editor"'));
 });
 
 test('Setup controls remain unique and include the active connection contract', () => {

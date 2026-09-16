@@ -120,7 +120,7 @@ test('preserves a saved image size while unsupported models hide it and restores
     });
 });
 
-test('hides unsupported visual-reference controls without losing saved preferences and restores them when support returns', () => {
+test('keeps visual-reference controls visible without losing saved preferences and restores them when support returns', () => {
     assert.equal(typeof settingsUi.projectReferencePreferences, 'function');
     const saved = Object.freeze({ useAvatars: true, usePreviousImage: true });
     const supported = settingsUi.projectReferencePreferences(saved, true);
@@ -130,12 +130,20 @@ test('hides unsupported visual-reference controls without losing saved preferenc
     assert.deepEqual(supported, {
         showAvatarControl: true,
         showPreviousImageControl: true,
+        enabled: true,
         note: '',
     });
     assert.deepEqual(unsupported, {
-        showAvatarControl: false,
-        showPreviousImageControl: false,
-        note: 'Visual references are unavailable for this model. Your saved reference preferences will be used when available.',
+        showAvatarControl: true,
+        showPreviousImageControl: true,
+        enabled: false,
+        note: 'Visual references are unavailable for this model. Your saved reference preferences are kept and will be available when you choose a supported model.',
+    });
+    assert.deepEqual(settingsUi.projectReferencePreferences(saved, 'unknown'), {
+        showAvatarControl: true,
+        showPreviousImageControl: true,
+        enabled: false,
+        note: 'Visual references have not been verified for this model. Your saved reference preferences are kept and will be available when you choose a supported model.',
     });
     assert.deepEqual(restored, supported);
     assert.deepEqual(saved, { useAvatars: true, usePreviousImage: true });

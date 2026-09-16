@@ -2,7 +2,7 @@
  * Context Image Generation 🍌
  * Gemini-powered image generation with avatar references and character context
  * Uses SillyTavern's backend to handle Google AI authentication
- * Version 1.8.0
+ * Version 2.5.0
  */
 
 import {
@@ -34,6 +34,7 @@ import { mergeProviderModels, mergeFetchedModelEntries, updateLocalModelEntries,
 import { getProviderModelEntries, setProviderModelRecords } from './lib/providers/model-record-store.js';
 import { cancelModelRefreshUi, createModelSelectorController, setControlBusyState } from './lib/providers/model-selector-ui.js';
 import { discoverProviderModels, discoverCustomConnectionModels, createModelDiscoveryCoordinator } from './lib/providers/model-discovery.js';
+import { readHostImageModelCompatibility } from './lib/providers/host-compatibility.js';
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { cancelCancellableRuns, listCancellableRunIds } from './lib/generation-controls.js';
@@ -180,10 +181,6 @@ const defaultSettings = {
     include_descriptions: false,
     use_previous_image: false,
     previous_image_opt_in_version: 1,
-    message_depth: 1,
-    framing_preference: 'auto',
-    continuity_strength: 'balanced',
-    custom_visual_instruction: '',
     system_instruction: 'You are an image generation assistant. When reference images are provided, they represent the characters in the story. Generate an illustration that depicts the scene described in the prompt while maintaining the art style and appearance of the reference characters. You are not obligated to include both characters - if the scene depicts only one character alone, illustrate them alone. When available, you can use the internet to search for reference pictures and information to improve the accuracy and quality of your generations.',
     gallery: [],
     [STORY_MEMORY_SETTINGS_KEY]: { schema: 2, artifacts: {}, collections: {} },
@@ -197,6 +194,8 @@ const MAX_GALLERY_SIZE = 50;
 const generationCoordinator = createRunCoordinator();
 let lastGenerationPlanInspection = null;
 let setupRuntimeIssue = null;
+let hostCompatibilityRequest = null;
+const hostCompatibilityCache = new Map();
 let storyMemoryController = null;
 let storyMemorySurfaceMount = null;
 let storyMemoryLoadPromise = null;
@@ -207,7 +206,10 @@ let cinematicUiController = null;
 let imagesCastSettingsStale = true;
 let pendingRecoveryScheduled = false;
 function galleryIsVisible() {
-    return extraStoryToolEnabled('gallery') && imagesCastSettingsAreVisible();
+    return (extraStoryToolEnabled('gallery') || hasRecoveryImages()) && imagesCastSettingsAreVisible();
+}
+function hasRecoveryImages() {
+    return (extension_settings[extensionName]?.gallery || []).some(item => item?.sourceMetadata?.attachmentStatus === 'not-attached');
 }
 const galleryRenderState = createGalleryRenderState({
     isVisible: galleryIsVisible,
@@ -282,7 +284,7 @@ function renderSetupReadiness(settings) {
         apiKey: getProviderApiKey(settings, providerId),
         route: getSelectedModelRoute(settings),
     });
-    $('#cig_setup_status').text(`${providerUi?.label || providerId}${settings.model ? ` Â· ${settings.model}` : ''}: ${readiness.label}`).attr('data-cig-readiness', readiness.state);
+    $('#cig_setup_status').text(`${providerUi?.label || providerId}${settings.model ? ` · ${settings.model}` : ''}: ${readiness.label}`).attr('data-cig-readiness', readiness.state);
     const action = { 'needs-key': 'Add key', 'needs-model': 'Choose model', 'needs-method': 'Choose generation method', 'needs-provider': 'Add connection', unavailable: 'Choose connection' }[readiness.state];
     $('#cig_setup_fix').text(action || '').prop('hidden', !action).attr('data-readiness', readiness.state);
     renderSetupTabStatus(readiness);
@@ -869,7 +871,7 @@ function useImageConnection(providerId) {
     renderProviderDropdown();
     refreshManagedModels();
     renderChatAppearanceSources();
-    $('#cig_connection_editor').prop('open', false);
+    $('#cig_connection_editor').prop('hidden', true);
     saveSettingsDebounced();
 }
 
@@ -880,7 +882,8 @@ function openConnectionEditor(providerId = '') {
     if (custom) { settings.custom_connection_editor_id = custom.id; customConnectionDraftId = custom.id; }
     else if (providerId === 'custom') { settings.custom_connection_editor_id = ''; customConnectionDraftId = createCustomConnectionId(); }
     renderCustomConnectionEditor();
-    $('#cig_connection_editor').prop('open', true);
+    $('#cig_connection_editor').prop('hidden', false);
+    $('#cig_connection_preset').trigger('focus');
 }
 
 function renderConnectionEditorMode() {
@@ -903,7 +906,7 @@ function renderConnectionEditorMode() {
         const ui = projectProviderUi(builtin.id, settings.model);
         $('#cig_provider_key_container').toggle(ui.requiresApiKey);
         $('#cig_provider_api_key_label').text(ui.credential.label);
-        $('#cig_provider_api_key').val('').attr('placeholder', getProviderApiKey(settings, builtin.id) ? 'Key saved â€” enter a new key to replace it' : 'Enter API key');
+        $('#cig_provider_api_key').val('').attr('placeholder', getProviderApiKey(settings, builtin.id) ? 'Key saved — enter a new key to replace it' : 'Enter API key');
         $('#cig_provider_info').text(ui.credential.setupHelp || '').toggle(Boolean(ui.credential.setupHelp));
         $('#cig_builtin_connection_save').toggle(ui.requiresApiKey);
         $('#cig_builtin_connection_use').prop('disabled', ui.requiresApiKey && !getProviderApiKey(settings, builtin.id));
@@ -920,10 +923,10 @@ function getSetupModelContext(settings) {
     const raw = getCustomConnection(settings, providerId) ? localEntries : mergeProviderModels(providerId, localEntries);
     const all = raw.map(model => ({
         id: model.id,
-        label: `${model.label || model.id}${model.label && model.label !== model.id ? ` â€” ${model.id}` : ''}`,
+        label: `${model.label || model.id}${model.label && model.label !== model.id ? ` — ${model.id}` : ''}`,
         knownImage: model.source?.kind === 'built-in' || (!model.source && Boolean(model.transport)) || model.capabilities?.imageGeneration?.state === 'supported' || model.routeEvidence?.state === 'verified',
     }));
-    if (settings.model && !all.some(model => model.id === settings.model)) all.push({ id: settings.model, label: `${settings.model} â€” not in the latest list` });
+    if (settings.model && !all.some(model => model.id === settings.model)) all.push({ id: settings.model, label: `${settings.model} — not in the latest list` });
     const models = projectSetupModels(all, { selectedModelId: settings.model, query: $('#cig_model_search').val(), showAll: $('#cig_show_all_models').prop('checked') });
     return { providerId, models, selectedModelId: settings.model || '', ui };
 }
@@ -1384,8 +1387,6 @@ async function loadSettings() {
     $('#cig_use_avatars').prop('checked', extension_settings[extensionName].use_avatars);
     $('#cig_include_descriptions').prop('checked', extension_settings[extensionName].include_descriptions);
     $('#cig_use_previous_image').prop('checked', extension_settings[extensionName].use_previous_image);
-    $('#cig_message_depth').val(extension_settings[extensionName].message_depth);
-    syncChatWandPreferenceControls();
     $('#cig_system_instruction').val(extension_settings[extensionName].system_instruction);
     const cinematicSettings = extension_settings[extensionName].cinematic_automation;
     $('#cig_cinematic_enabled').prop('checked', cinematicSettings.enabled === true);
@@ -1438,8 +1439,41 @@ function renderModelManager() {
     $('#cig_model_method_container').toggle(Boolean(settings.model) && !builtin);
     $('#cig_model_method_note').text(!settings.model ? '' : builtin ? 'Generation method supplied by the provider preset.' : !route.transportId ? 'Choose the method documented by your provider. Model names do not determine the method.' : 'This method is saved for this model. Optional image features stay off until supported.');
     const state = getProviderDiscoveryState(settings, providerId);
-    $('#cig_model_discovery_note').text(state.warning ? 'Models could not be refreshed. Your active connection and selected model are unchanged.' : 'Refresh updates this connectionâ€™s catalog without changing your selection.');
+    $('#cig_model_discovery_note').text(state.warning ? 'Models could not be refreshed. Your active connection and selected model are unchanged.' : 'Refresh updates this connection’s catalog without changing your selection.');
+    void renderHostCompatibilityNotice(settings, route);
     renderSetupReadiness(settings);
+}
+
+async function renderHostCompatibilityNotice(settings, route = getSelectedModelRoute(settings)) {
+    const modelId = String(settings?.model || '').trim();
+    const transportId = route?.transportId || route?.model?.transportId || route?.transport || '';
+    const requestKey = `${settings?.provider || ''}:${modelId}:${transportId}`;
+    const note = $('#cig_host_compatibility_note').text('').prop('hidden', true);
+    const showCompatibility = (compatibility) => {
+        const current = extension_settings[extensionName] || {};
+        const currentRoute = getSelectedModelRoute(current);
+        const currentTransport = currentRoute?.transportId || currentRoute?.model?.transportId || currentRoute?.transport || '';
+        if (`${current.provider || ''}:${String(current.model || '').trim()}:${currentTransport}` !== requestKey) return;
+        note.text(compatibility.userMessage || '').prop('hidden', compatibility.state !== 'advisory');
+    };
+    if (hostCompatibilityCache.has(requestKey)) {
+        showCompatibility(hostCompatibilityCache.get(requestKey));
+        return;
+    }
+    if (hostCompatibilityRequest?.key === requestKey) return;
+    hostCompatibilityRequest?.controller.abort();
+    const controller = new AbortController();
+    hostCompatibilityRequest = { key: requestKey, controller };
+    try {
+        const compatibility = await readHostImageModelCompatibility({ modelId, transportId, signal: controller.signal });
+        if (controller.signal.aborted || hostCompatibilityRequest?.controller !== controller) return;
+        hostCompatibilityCache.set(requestKey, compatibility);
+        showCompatibility(compatibility);
+    } catch (error) {
+        if (error?.name !== 'AbortError') note.text('').prop('hidden', true);
+    } finally {
+        if (hostCompatibilityRequest?.controller === controller) hostCompatibilityRequest = null;
+    }
 }
 
 function refreshManagedModels() {
@@ -1503,7 +1537,7 @@ function toggleImageSizeVisibility() {
     $('#cig_image_size_capability_note').text(imageSizePreference.note).prop('hidden', !imageSizePreference.note);
     $('#cig_flash2_options').prop('hidden', !(ui.supportsThinking || ui.supportsGoogleSearch));
     $('#cig_model_note').text(ui.modelNote || '').toggle(Boolean(ui.modelNote));
-    renderReferenceCapabilityControls(ui.supportsReferenceImages);
+    renderReferenceCapabilityControls(ui.referenceCapabilityState);
     if (imageSizePreference.showControl) updateSizeDropdown(ui.imageSizeOptions, imageSizePreference.selectedValue);
 }
 
@@ -1511,14 +1545,16 @@ function selectSetupModel(modelId) {
     modelSelectorController.selectSetupModel(modelId);
 }
 
-function renderReferenceCapabilityControls(supportsReferenceImages) {
+function renderReferenceCapabilityControls(referenceCapabilityState) {
     const settings = extension_settings[extensionName] || {};
     const referencePreferences = projectReferencePreferences({
         useAvatars: settings.use_avatars,
         usePreviousImage: settings.use_previous_image,
-    }, supportsReferenceImages);
-    $('#cig_avatar_reference_option').toggle(referencePreferences.showAvatarControl);
-    $('#cig_previous_image_reference_option').toggle(referencePreferences.showPreviousImageControl);
+    }, referenceCapabilityState);
+    $('#cig_avatar_reference_option').prop('hidden', false);
+    $('#cig_previous_image_reference_option').prop('hidden', false);
+    $('#cig_use_avatars').prop('disabled', !referencePreferences.enabled);
+    $('#cig_use_previous_image').prop('disabled', !referencePreferences.enabled);
     $('#cig_reference_capability_note').text(referencePreferences.note).prop('hidden', !referencePreferences.note);
 }
 
@@ -1667,7 +1703,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
     const preflightAccepted = true; // The explicit wand/slash request is the generation intent.
-    const recentMessages = cloneSnapshot(getRecentMessages(settings.message_depth || 1, messageId)) || [];
+    const recentMessages = cloneSnapshot(getRecentMessages(1, messageId)) || [];
     let messageContent = prompt;
     if (messageId !== null || sender !== null) {
         if (recentMessages.length > 0) {
@@ -1698,17 +1734,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     // opaque contributor-owned input.
     const capability = getReferenceImageCapability(providerId, modelId);
     const settingsSnapshot = createGenerationSettingsSnapshot(settings);
-    const chatPreferences = chatWandPreferences();
-    if (chatPreferences.framing) settingsSnapshot.framing_preference = chatPreferences.framing;
-    if (chatPreferences.continuity) settingsSnapshot.continuity_strength = chatPreferences.continuity;
-    if (chatPreferences.visualDirection != null) settingsSnapshot.custom_visual_instruction = chatPreferences.visualDirection;
-    if (invocation === 'wand' && chatPreferences.stagedSuggestion?.shot) {
-        const existingDirection = String(settingsSnapshot.custom_visual_instruction || '').trim();
-        settingsSnapshot.custom_visual_instruction = [existingDirection, `Cinematic shot: ${chatPreferences.stagedSuggestion.shot}`]
-            .filter(Boolean).join('\n').slice(0, 1000);
-        chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { stagedSuggestion: null });
-        void saveChatConditional();
-    }
+    const chatPreferences = getChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY]) || {};
     const effectiveCastOverrides = invocation === 'wand' ? chatCastPreferences() : [];
     const currentChatId = String(getContext().chatId || '');
     const gallerySnapshot = Array.isArray(settingsSnapshot.gallery)
@@ -1755,10 +1781,13 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     });
     const sceneMetadata = createSceneArtifactMetadata(sceneSnapshot);
     const scenePlan = { ...sceneMetadata, state: cloneSnapshot(sceneSnapshot.state), ...(sceneSnapshot.castOverrides?.length ? { castOverrides: cloneSnapshot(sceneSnapshot.castOverrides) } : {}) };
-    // The scene snapshot is the provider-facing source of truth for the wand:
-    // selected text wins, while the clicked message and nearby context resolve
-    // cast, location, and current scene facts.
-    messageContent = sceneSnapshot.prompt || messageContent;
+    // Preserve the story as the provider-facing source; derived scene facts
+    // support reference selection without replacing the user's prose.
+    if (invocation === 'wand' && chatPreferences.stagedSuggestion?.shot) {
+        messageContent = `${messageContent}\n\n[Cinematic shot selected for this generation]: ${chatPreferences.stagedSuggestion.shot}`;
+        chat_metadata[CHAT_CANON_KEY] = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { stagedSuggestion: null });
+        void saveChatConditional();
+    }
     if (continuationIsCurrent && continuation.plan?.facts?.length) {
         const facts = continuation.plan.facts.map((fact) => fact?.text || fact?.value || fact?.label).filter(Boolean);
         if (facts.length) messageContent = `${messageContent}\n\n[Still-valid story facts]\n${facts.join('; ')}`;
@@ -2096,7 +2125,8 @@ async function galleryItemToDataUrl(item) {
 }
 
 async function addToGallery(imageData, prompt, messageId = null, existingPath = null, sourceMetadata = undefined) {
-    if (!extraStoryToolEnabled('gallery') && !extraStoryToolEnabled('appearanceMemory')) return;
+    const recovery = sourceMetadata?.attachmentStatus === 'not-attached';
+    if (!recovery && !extraStoryToolEnabled('gallery') && !extraStoryToolEnabled('appearanceMemory')) return;
     const settings = extension_settings[extensionName];
 
     if (!settings.gallery) {
@@ -2112,7 +2142,7 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
             url = await saveBase64AsFile(imageData, extensionName, `cig_gallery_${Date.now()}`, 'png');
         } catch (error) {
             console.error(`[${extensionName}] Failed to save gallery image:`, error);
-            return;
+            throw error;
         }
     }
 
@@ -2131,13 +2161,22 @@ async function addToGallery(imageData, prompt, messageId = null, existingPath = 
 
     settings.gallery = trimGalleryToLimit(settings.gallery, MAX_GALLERY_SIZE, settings.rp_library).gallery;
 
-    saveSettingsDebounced();
+    if (recovery) {
+        try { await saveSettings(); }
+        catch (error) {
+            // Keep the saved file visible for manual recovery even if settings storage failed.
+            $('#cig_preview_image').attr('src', url);
+            $('#cig_preview_container').prop('hidden', false);
+            throw error;
+        }
+    } else saveSettingsDebounced();
     if (canIncrementallyPrependGalleryItem({ previouslyRendered, gallery: settings.gallery, insertedItem })) {
         galleryRenderState.add(insertedItem);
     } else {
         galleryRenderState.markDirty();
         galleryRenderState.refresh();
     }
+    return insertedItem;
 }
 
 function createGalleryTile(item, index) {
@@ -2200,7 +2239,7 @@ function removeGalleryTile(index) {
 }
 
 function renderGallery() {
-    const visible = extraStoryToolEnabled('gallery');
+    const visible = extraStoryToolEnabled('gallery') || hasRecoveryImages();
     $('#cig_gallery').prop('hidden', !visible);
     if (!visible) return;
     const settings = extension_settings[extensionName];
@@ -2319,10 +2358,6 @@ function appearanceSourcePreferences(chatState = chat_metadata?.[CHAT_CANON_KEY]
     return canon.appearanceSources || {};
 }
 
-function chatWandPreferences() {
-    return getChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY]) || {};
-}
-
 function chatCastPreferences() {
     return getChatCastOverrides(chat_metadata?.[CHAT_CANON_KEY]);
 }
@@ -2333,11 +2368,6 @@ async function persistCurrentChatCanon(candidate) {
         candidate,
         save: saveChatConditional,
     });
-}
-
-function setChatWandPreference(name, value) {
-    const candidate = setChatWandPreferences(chat_metadata?.[CHAT_CANON_KEY], { [name]: value });
-    void persistCurrentChatCanon(candidate);
 }
 
 function chooseChatCastOverride(identityId, action) {
@@ -3113,7 +3143,7 @@ function renderExtraStoryTools() {
     }
     $('#cig_story_memory').prop('hidden', !extraStoryToolEnabled('storyMemory'));
     $('#cig_appearances').prop('hidden', !extraStoryToolEnabled('appearanceMemory'));
-    $('#cig_gallery').prop('hidden', !extraStoryToolEnabled('gallery'));
+    $('#cig_gallery').prop('hidden', !extraStoryToolEnabled('gallery') && !hasRecoveryImages());
     $('#cig_cinematic_automation').prop('hidden', !extraStoryToolEnabled('cinematic'));
     $('#cig_extra_story_tools_status').text(extras.enabled ? 'Choose the individual tools you want below.' : 'Extra story tools are off. The wand, visual style, and current chat characters remain available.');
 }
@@ -3136,14 +3166,6 @@ async function setExtraStoryTools(patch = {}) {
     if (extraStoryToolEnabled('appearanceMemory')) renderAppearanceList();
     if (extraStoryToolEnabled('cinematic')) refreshCinematicSurface();
     if (extraStoryToolEnabled('storyMemory')) refreshStoryMemorySurface();
-}
-
-function syncChatWandPreferenceControls() {
-    const settings = extension_settings[extensionName] || {};
-    const preferences = chatWandPreferences();
-    $('#cig_framing_preference').val(preferences.framing || settings.framing_preference || 'auto');
-    $('#cig_continuity_strength').val(preferences.continuity || settings.continuity_strength || 'balanced');
-    $('#cig_custom_visual_instruction').val(preferences.visualDirection ?? settings.custom_visual_instruction ?? '');
 }
 
 function renderAppearanceList(lifecycleView = null) {
@@ -3756,7 +3778,6 @@ jQuery(async () => {
     $('#cig_settings [data-cig-tab]').on('click', function () {
         const selectedTab = activateSettingsTab($(this).attr('data-cig-tab'));
         if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
-        if (selectedTab === 'preferences') syncChatWandPreferenceControls();
         this.focus();
     }).on('keydown', function (event) {
         const keys = ['ArrowLeft', 'ArrowRight', 'Home', 'End'];
@@ -3770,7 +3791,6 @@ jQuery(async () => {
         const nextTab = tabs.eq(nextIndex);
         const selectedTab = activateSettingsTab(nextTab.attr('data-cig-tab'));
         if (selectedTab === 'images-cast') renderImagesCastSettings({ force: true });
-        if (selectedTab === 'preferences') syncChatWandPreferenceControls();
         nextTab.trigger('focus');
     });
 
@@ -3790,7 +3810,7 @@ jQuery(async () => {
     });
     $('#cig_edit_connection').on('click', () => openConnectionEditor(extension_settings[extensionName].provider));
     $('#cig_add_connection').on('click', () => openConnectionEditor(''));
-    $('#cig_connection_editor_cancel').on('click', () => $('#cig_connection_editor').prop('open', false));
+    $('#cig_connection_editor_cancel').on('click', () => $('#cig_connection_editor').prop('hidden', true));
     $('#cig_connection_preset').on('change', function () { openConnectionEditor($(this).val()); });
     $('#cig_custom_connection_use').on('click', () => {
         const id = extension_settings[extensionName].custom_connection_editor_id;
@@ -3951,21 +3971,6 @@ jQuery(async () => {
             showGenerationError(error, 'Manual cinematic retrigger');
         }
     });
-
-    $('#cig_message_depth').on('change', function () {
-        let value = parseInt($(this).val(), 10);
-        if (isNaN(value) || value < 1) value = 1;
-        if (value > 10) value = 10;
-        $(this).val(value);
-        extension_settings[extensionName].message_depth = value;
-        saveSettingsDebounced();
-    });
-
-    $('#cig_framing_preference').on('change', function () { setChatWandPreference('framing', $(this).val() || 'auto'); });
-
-    $('#cig_continuity_strength').on('change', function () { setChatWandPreference('continuity', $(this).val() || 'balanced'); });
-
-    $('#cig_custom_visual_instruction').on('input', function () { setChatWandPreference('visualDirection', String($(this).val() || '').slice(0, 1000)); });
 
     $(document).on('change', '[data-cig-chat-appearance-source]', function (e) {
         e.preventDefault();

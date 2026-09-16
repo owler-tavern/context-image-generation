@@ -19,7 +19,7 @@ test('settings owns chat-scoped appearance controls and has no second Generate a
     assert.match(settings, /Auto, Avatar, or Description/);
     assert.doesNotMatch(settings, /id="cig_generate_btn"/);
     assert.match(index, /setChatAppearanceSource\(/);
-    assert.match(index, /setChatWandPreference\(/);
+    assert.doesNotMatch(index, /function setChatWandPreference\(/);
     assert.match(index, /Auto \(recommended\)/);
     assert.match(index, /Pinned in this chat/);
 });

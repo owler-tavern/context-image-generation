@@ -29,7 +29,7 @@ test('builds the current LinkAPI Gemini proxy request', () => {
 
 test('LinkAPI preserves the configured generation instruction and exact selected avatar bytes, with the authoritative scene constraint last', () => {
     const messages = buildGenerationMessages({
-        options: { systemInstruction: 'Keep Ava recognizable.' },
+        options: { systemInstruction: 'Keep Ava recognizable.', aspectRatio: '16:9' },
         references: [{ id: 'host:character', role: 'host-avatar', identityId: 'character:ava', assetId: 'asset:ava', label: 'Ava' }],
         prompt: { descriptionText: 'Ava has a red coat.', messageContent: 'Ava walks through rain.' },
     }, {
@@ -46,5 +46,6 @@ test('LinkAPI preserves the configured generation instruction and exact selected
     assert.deepEqual(parts.filter((part) => part.type === 'image_url').map((part) => part.image_url.url), ['data:image/png;base64,EXACT_AVATAR_BYTES']);
     assert.doesNotMatch(JSON.stringify(parts), /UNRELATED_GROUP_BYTES/);
     assert.match(parts.at(-1).text, /Ava walks through rain\./);
+    assert.match(parts.at(-1).text, /Render the final image in 16:9 aspect ratio\. This image shape is required\./);
     assert.match(parts.at(-1).text, new RegExp(FINAL_SCENE_CONSTRAINT.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&')));
 });

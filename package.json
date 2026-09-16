@@ -1,0 +1,9 @@
+{
+  "name": "context-image-generation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.mjs"
+  },
+  "engines": { "node": ">=22" }
+}

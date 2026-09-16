@@ -1,4 +1,4 @@
-/* Context Image Generation �� */
+/* Context Image Generation */
 .cig-setting {
     width: 100%;
 }
@@ -21,7 +21,7 @@
 
 .cig-model-search {
     width: 100%;
-    margin-top: 6px;
+    margin-top: 0;
 }
 
 .cig-model-discovery-status {
@@ -59,11 +59,33 @@
     gap: 0.5rem;
 }
 
+#cig_settings_panel_setup .cig-setup-section,
 #cig_settings_panel_setup .cig-connection-editor,
 #cig_settings_panel_setup .cig_model_manager,
 #cig_settings_panel_setup .cig_advanced_setup,
 #cig_settings_panel_setup .cig-custom-connection-advanced {
     padding: 0.5rem 0;
+}
+
+#cig_settings_panel_setup .cig-setup-section > h2,
+#cig_settings_panel_setup .cig-connection-editor > h2 {
+    margin: 0 0 0.5rem;
+    font-size: 1rem;
+}
+
+#cig_settings_panel_setup .cig-connection-editor {
+    border-top: 1px solid var(--SmartThemeBorderColor);
+    margin-top: 0.75rem;
+}
+
+#cig_settings_panel_setup .cig-model-filter {
+    flex: 1 1 12rem;
+    min-width: min(100%, 12rem);
+}
+
+#cig_settings_panel_setup #cig_setup_fix[hidden],
+#cig_settings_panel_setup #cig_connection_editor[hidden] {
+    display: none !important;
 }
 
 #cig_settings_panel_setup .cig-custom-connection-dual-fields {
@@ -157,6 +179,10 @@
     #cig_settings_panel_setup .cig-troubleshooting-actions > .menu_button,
     #cig_settings_panel_setup .cig-manual-model-entry > .menu_button {
         width: 100%;
+    }
+
+    #cig_settings_panel_setup .cig-model-filter {
+        min-width: 0;
     }
 
     #cig_settings_panel_setup .cig-custom-connection-dual-fields {

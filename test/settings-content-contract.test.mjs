@@ -21,13 +21,12 @@ function countId(id) {
     return (settings.match(new RegExp(`id="${id}"`, 'g')) || []).length;
 }
 
-test('Preferences presents the four scannable groups in the intended order', () => {
+test('Preferences presents the three scannable groups in the intended order', () => {
     const preferences = panelMarkup('cig_settings_panel_preferences');
     const groupIds = [
         'cig_preferences_image',
         'cig_preferences_scene_context',
         'cig_preferences_references',
-        'cig_preferences_automation',
     ];
     const positions = groupIds.map((id) => preferences.indexOf(`id="${id}"`));
     assert.ok(positions.every((position) => position >= 0), 'all preference groups are present');
@@ -35,7 +34,7 @@ test('Preferences presents the four scannable groups in the intended order', () 
     assert.match(preferences, /id="cig_preferences_image"[\s\S]*?<h2>Visual style<\/h2>/);
     assert.match(preferences, /id="cig_preferences_scene_context"[\s\S]*?<h2[^>]*>Scene details<\/h2>/);
     assert.match(preferences, /id="cig_preferences_references"[\s\S]*?<h2[^>]*>Consistency options<\/h2>/);
-    assert.match(preferences, /id="cig_preferences_automation"[\s\S]*?<h2>Automation<\/h2>/);
+    assert.doesNotMatch(preferences, /id="cig_preferences_automation"|<h2>Automation<\/h2>/);
     assert.equal((preferences.match(/<details\b/g) || []).length, 0, 'Preferences has no nested disclosure');
 });
 
@@ -43,9 +42,8 @@ test('each existing preference control remains once in its user-facing group', (
     const preferences = panelMarkup('cig_settings_panel_preferences');
     const expected = {
         cig_preferences_image: ['cig_aspect_ratio', 'cig_image_size', 'cig_thinking_level', 'cig_use_google_search'],
-        cig_preferences_scene_context: ['cig_message_depth', 'cig_system_instruction'],
+        cig_preferences_scene_context: ['cig_system_instruction'],
         cig_preferences_references: ['cig_use_avatars', 'cig_include_descriptions', 'cig_use_previous_image'],
-        cig_preferences_automation: ['cig_cinematic_enabled', 'cig_cinematic_mode'],
     };
     const groupIds = Object.keys(expected);
     for (const [position, groupId] of groupIds.entries()) {
@@ -74,18 +72,16 @@ test('ADR-002 keeps Settings configuration-only and makes model refresh discover
     assert.match(settings, /id="cig_model_refresh"[^>]*value="Refresh Models"/u);
     assert.match(settings, /Refresh Models checks the active connection and keeps your existing local choices\./u);
     assert.match(settings, /Use the wand in chat to generate an image\./u);
-    for (const id of ['cig_message_depth', 'cig_system_instruction', 'cig_use_avatars', 'cig_use_previous_image', 'cig_extra_appearance_memory']) {
+    for (const id of ['cig_system_instruction', 'cig_use_avatars', 'cig_use_previous_image', 'cig_extra_appearance_memory']) {
         assert.match(settings, new RegExp(`id="${id}"`), `${id} remains configurable`);
     }
     assert.doesNotMatch(settings, /id="cig_generate_btn"/u);
     assert.doesNotMatch(settings, /outfit\s+(?:create|creation|select|selection|lock|controls)|attire\s+controls/iu);
     assert.doesNotMatch(settings, /automatic\s+generation|generate\s+on\s+swipe|automatic story tools/iu);
     assert.doesNotMatch(settings, /(?:Cinematic|Iteration|Story Memory)[^<]*(?:generation entry|generate from|generation action)/iu);
-    assert.match(settings, /The wand and slash command remain the only manual generation actions\./u);
-    assert.match(settings, /Cinematic suggestions stage context for the next wand\./u);
-    assert.match(settings, /Suggestions never call a provider\./u);
-    assert.match(settings, /before staging it as context for the next wand\./u);
-    assert.doesNotMatch(settings, /next wand or slash command/iu);
+    for (const retiredId of ['cig_message_depth', 'cig_framing_preference', 'cig_continuity_strength', 'cig_custom_visual_instruction', 'cig_cinematic_enabled', 'cig_cinematic_mode']) {
+        assert.doesNotMatch(settings, new RegExp(`id="${retiredId}"`), `${retiredId} is not user-facing`);
+    }
 });
 
 test('Refresh Models discovery is not generation verification in release docs', () => {
@@ -145,13 +141,11 @@ test('everyday settings use plain task groups and keep advanced/provider languag
     const preferences = panelMarkup('cig_settings_panel_preferences');
     const imagesCast = panelMarkup('cig_settings_panel_images_cast');
     assert.match(preferences, /<h2>Visual style<\/h2>/);
-    assert.match(preferences, /<h2>Automation<\/h2>/);
     assert.match(imagesCast, /<h2>Current chat characters<\/h2>/);
     assert.match(imagesCast, /id="cig_extra_story_tools"[\s\S]*?Story Memory/);
     assert.doesNotMatch(`${preferences}${imagesCast}`, /canon|reference plan|revision|cast override|route contract/i);
-    assert.match(preferences, /Framing, continuity, and custom visual direction are saved for the current chat/);
-    assert.match(preferences, /Message depth and generation instruction apply to every chat/);
     assert.match(preferences, /<label for="cig_system_instruction">Generation instruction<\/label>/u);
+    assert.doesNotMatch(preferences, /Framing preference|Continuity strength|Custom visual instruction|Message depth|Automation/u);
 });
 
 test('story extras are opt-in, grouped once, and keep the ordinary view core-only by default', () => {
@@ -204,8 +198,10 @@ test('reference capability feedback preserves saved preferences and clears when 
     assert.match(preferences, /id="cig_avatar_reference_option"/);
     assert.match(preferences, /id="cig_previous_image_reference_option"/);
     assert.match(index, /projectReferencePreferences\(/);
-    assert.match(index, /#cig_avatar_reference_option'\)\.toggle\(referencePreferences\.showAvatarControl\)/);
-    assert.match(index, /#cig_previous_image_reference_option'\)\.toggle\(referencePreferences\.showPreviousImageControl\)/);
+    assert.match(index, /#cig_avatar_reference_option'\)\.prop\('hidden', false\)/);
+    assert.match(index, /#cig_previous_image_reference_option'\)\.prop\('hidden', false\)/);
+    assert.match(index, /#cig_use_avatars'\)\.prop\('disabled', !referencePreferences\.enabled\)/);
+    assert.match(index, /#cig_use_previous_image'\)\.prop\('disabled', !referencePreferences\.enabled\)/);
     assert.match(index, /#cig_reference_capability_note'\)\.text\(referencePreferences\.note\)\.prop\('hidden', !referencePreferences\.note\)/);
     assert.doesNotMatch(index, /settings\.use_avatars\s*=\s*false/);
     assert.doesNotMatch(index, /settings\.use_previous_image\s*=\s*false/);

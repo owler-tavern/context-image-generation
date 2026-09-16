@@ -30,7 +30,7 @@ test('selected passage is the immutable scene focus while recent context only en
     assert.equal(snapshot.state.sceneFacts.location, 'library');
     assert.match(snapshot.prompt, /Ava raises the lantern\./);
     assert.match(snapshot.prompt, /Location: library/);
-    assert.match(snapshot.prompt, /Framing: medium/);
+    assert.doesNotMatch(snapshot.prompt, /Framing:|Continuity strength:/);
     assert.equal(snapshot.sourcePassage, 'Ava raises the lantern.');
 });
 
@@ -153,15 +153,14 @@ test('scene state pending entries are chat-scoped and clone inputs', () => {
     assert.equal(entry.target.messageId, 4);
 });
 
-test('prompt builder captures durable visual defaults without provider calls', () => {
+test('retired visual overrides do not enter the scene prompt', () => {
     const prompt = buildScenePrompt({
         sourcePassage: 'Ava smiles.',
         state: { sceneFacts: { cast: [{ label: 'Ava' }] } },
         settings: { framing_preference: 'close-up', continuity_strength: 'minimal', custom_visual_instruction: 'Warm dusk light.' },
     });
-    assert.match(prompt, /Framing: close-up/);
-    assert.match(prompt, /Continuity strength: minimal/);
-    assert.match(prompt, /Warm dusk light\./);
+    assert.doesNotMatch(prompt, /Framing:|Continuity strength:|Warm dusk light/);
+    assert.match(prompt, /Ava smiles/);
 });
 
 test('scene artifact metadata preserves the safe inspection and exact source moment', () => {

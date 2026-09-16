@@ -10,6 +10,32 @@ const target = {
     messageFingerprint: 'v1-9d8aac7b',
 };
 
+test('a rejected chat save preserves the generated artifact before reporting failure', async () => {
+    const { calls, options } = dependencies({ safe: true, message });
+    options.saveChat = async () => { throw new Error('disk unavailable'); };
+    options.rollbackMedia = async () => calls.push('rollback');
+    await assert.rejects(attachGeneratedImageSafely(options), /disk unavailable/);
+    assert.ok(calls.includes('rollback'));
+    const recovered = calls.find(call => call?.gallery);
+    assert.equal(recovered.gallery, 'gallery/cig_1.png');
+    assert.equal(recovered.metadata.reason, 'chat-save-failed');
+    assert.ok(calls.some(call => /available in the gallery/.test(call?.notify || '')));
+});
+
+test('a missing recovery receipt never announces Gallery success', async () => {
+    const { calls, options } = dependencies({ safe: false, reason: 'chat-changed' });
+    options.addToGallery = async () => undefined;
+    await assert.rejects(attachGeneratedImageSafely(options), /recovery entry/);
+    assert.equal(calls.some(call => call?.notify), false);
+});
+
+test('a failed recovery save never announces Gallery success', async () => {
+    const { calls, options } = dependencies({ safe: false, reason: 'chat-changed' });
+    options.addToGallery = async () => { throw new Error('settings unavailable'); };
+    await assert.rejects(attachGeneratedImageSafely(options), /settings unavailable/);
+    assert.equal(calls.some(call => call?.notify), false);
+});
+
 function dependencies(validation) {
     const calls = [];
     return {

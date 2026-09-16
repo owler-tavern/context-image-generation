@@ -108,6 +108,26 @@ test('host and OpenAI transports omit an unsupported saved size from request pay
     }).size, undefined);
 });
 
+test('OpenAI adapter includes text from string-format messages in the generation prompt', async () => {
+    const requests = [];
+    await DEFAULT_TRANSPORTS['openai-images'].generate({
+        plan: {
+            resolved: { providerId: 'fixture', modelId: 'fixture-image', endpoint: 'https://fixture.example/v1', capabilities: unsupportedSizes },
+            messages: [{ role: 'user', content: 'A landscape with a lighthouse.' }],
+            prompt: { sourceMessage: 'Fallback prompt that must not replace the message.' },
+        },
+        connection: { id: 'fixture:default', providerId: 'fixture', kind: 'browser-api-key', enabled: true },
+        signal: new AbortController().signal,
+        transportContext: {
+            requestOpenAiImages: async (request) => {
+                requests.push(request);
+                return { imageData: PNG, mimeType: 'image/png' };
+            },
+        },
+    });
+    assert.equal(requests[0].prompt, 'A landscape with a lighthouse.');
+});
+
 test('schema-2 LinkAPI curated OpenAI Images plan derives its size from aspect ratio', async () => {
     const calls = [];
     for (const modelId of ['gpt-image-2-c']) {

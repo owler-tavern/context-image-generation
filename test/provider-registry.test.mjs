@@ -82,7 +82,9 @@ test('normalizes Z.AI and ArliAI built-ins with their explicit native route evid
 
 test('preserves Gemini reference caps through Google AI Studio and LinkAPI proxy routes', () => {
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-2.5-flash-image'), { maxCount: 3 });
+    assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3-pro-image'), { maxCount: 14 });
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3-pro-image-preview'), { maxCount: 14 });
+    assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3.1-flash-image'), { maxCount: 4 });
     assert.deepEqual(getReferenceImageCapability('makersuite', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });
     assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-2.5-flash-image'), { maxCount: 3 });
     assert.deepEqual(getReferenceImageCapability('linkapi', 'gemini-3.1-flash-image-preview'), { maxCount: 4 });

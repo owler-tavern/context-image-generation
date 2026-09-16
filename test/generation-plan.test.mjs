@@ -65,13 +65,10 @@ test('Director overrides are captured in the immutable provider-facing scene pla
         options: { ...baseInput.options, framing: 'wide', continuity: 'strong', visualDirection: 'blue hour' },
     });
     assert.equal(plan.scene.sourcePassage, 'Ava raises the lantern.');
-    assert.match(plan.scene.prompt, /Framing: wide\./);
-    assert.match(plan.scene.prompt, /Continuity strength: strong\./);
-    assert.match(plan.scene.prompt, /Additional visual instruction: blue hour/);
     assert.equal(plan.prompt.focusText, 'Ava raises the lantern.');
-    assert.equal(plan.options.framing, 'wide');
-    assert.equal(plan.options.continuity, 'strong');
-    assert.equal(plan.options.visualDirection, 'blue hour');
+    assert.equal(Object.hasOwn(plan.options, 'framing'), false);
+    assert.equal(Object.hasOwn(plan.options, 'continuity'), false);
+    assert.equal(Object.hasOwn(plan.options, 'visualDirection'), false);
 });
 
 test('captures an immutable complete route snapshot', () => {

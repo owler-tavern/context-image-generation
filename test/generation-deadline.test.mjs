@@ -434,7 +434,7 @@ test('message delivery records committed chat-save failure and final Gallery per
         appendMedia: async () => ({ id: 'attachment' }),
         rollbackMedia: async () => {},
         saveChat: async () => { throw Object.assign(new Error('aborted'), { name: 'AbortError' }); },
-        addToGallery: async () => { throw new Error('Gallery must not be reached'); },
+        addToGallery: async () => ({ url: 'gallery/cig.png' }),
         notify: () => {},
     }).deliver({
         artifact: { imageData: 'AA==', mimeType: 'image/png' },
@@ -444,7 +444,7 @@ test('message delivery records committed chat-save failure and final Gallery per
     });
     await assert.rejects(failed, (error) => error?.name === 'AbortError');
     assert.deepEqual(failedEvents.filter(([stage]) => stage === 'chat-save'), [['chat-save', 'started'], ['chat-save', 'failed']]);
-    assert.deepEqual(failedEvents.filter(([stage]) => stage === 'gallery-save'), []);
+    assert.deepEqual(failedEvents.filter(([stage]) => stage === 'gallery-save'), [['gallery-save', 'started'], ['gallery-save', 'completed']]);
 
     const completeEvents = [];
     await createMessageDeliveryAdapter({

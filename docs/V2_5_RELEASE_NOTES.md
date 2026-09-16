@@ -1,23 +1,21 @@
 # v2.5 release notes
 
-## Scope
+Version: **2.5.0**. Generation entry points remain the message wand and `/proimagine` (aliases `/proimg`, `/geminiimg`); both use the shared kernel. Settings actions are configuration-only and never generate images. Catalog discovery does not verify a generation route or image quality.
 
-v2.5 implements ADR-002's focused generation boundary:
+## Changes
+- Add/Edit connection opens a focused editor directly below the active connection selector. Saving a new connection does not activate it automatically.
+- Model search, selection, and Refresh Models share one area. Blank readiness actions and garbled separators are fixed.
+- Scene details contains only Generation instruction. Empty Automation UI is removed. Retired depth/framing/continuity/custom-direction values remain stored but inert.
+- Avatar and previous-image controls remain visible across model changes, with explanations when capability is unknown or unsupported. Saved preferences are retained.
+- Source-story text stays authoritative. Aspect ratio remains in structured requests and now has an explicit prompt instruction as well.
+- Host model migrations produce an advisory, not a silent provider-model substitution. Google AI Studio has explicit current final Gemini options; LinkAPI IDs are not invented or renamed.
+- HTTP-200 host errors retain sanitized reasons and provider/model attribution. String-format message content is preserved in Images prompts.
+- Stale-message and chat-save-error images get durable Gallery recovery even if the optional Gallery is off. Failed recovery persistence does not claim success.
+- Clean-checkout tests now work through `npm test`; CI runs them on pushes and pull requests. Obsolete agent reports were removed.
 
-- The message wand generates from the current roleplay message or selected passage and delivers to that captured message.
-- `/proimagine`, `/proimg`, and `/geminiimg` generate from an explicit prompt and deliver to preview/Gallery.
-- Both entry points share one Scene Generation kernel for readiness, planning, dispatch, coordination, and normalized errors.
-- Settings is configuration-only. Provider, model, scene preferences, optional avatar/previous-image references, and saved-appearance memory remain available. **Refresh Models** checks the selected provider and keeps existing local model IDs when discovery is empty or fails.
-- Cinematic suggestions and Story Memory are provider-free staging surfaces for the next wand only. Gallery, Improve tools, and saved appearances remain provider-free support surfaces. They cannot introduce another generation entry point.
-- Attire remains ordinary prompt/scene content. Outfit controls, automatic generation, generate-on-swipe, iteration dispatch, and Director dispatch are retired.
-- Legacy `rp_outfits`, `outfit_pending`, per-chat `outfitState`, `sceneFacts.outfits`, historical outfit collections, and historical `activeOutfits` data remain inert and readable for rollback. Opaque `sceneFacts.outfits` values survive ordinary scene reconciliation and successful wand persistence without entering prompts or generation plans. No user-owned images or metadata are purged.
+## Compatibility and evidence
+Legacy outfit data remains inert and preserved. Optional Story Memory, cinematic suggestions, Appearance Memory, Gallery, and Improve tools do not add generation actions. Cinematic suggestions and Story Memory stage context for the next wand only.
 
-## Evidence
+954 deterministic tests passed. Isolated SillyTavern browser checks verified settings interactions and narrow layout; see `STATUS.md` for exact evidence. Native TauriTavern and paid-provider generation are **NOT VERIFIED**.
 
-Deterministic settings, UI, provider-contract, Story Memory, and cinematic compatibility tests pass in the Task 7 focused run. Task 6's preservation and retirement evidence is recorded in `docs/STATUS.md`. Live wand/slash generation and paid-provider image quality remain **NOT TESTED**; no live or paid provider action was performed for this documentation change.
-
-The extension manifest remains `1.8.0` because no exact semantic v2.5 version was approved during this task. The product scope is v2.5, but changing the manifest version requires an explicit semantic-version decision.
-
-## Deferred
-
-Purging legacy outfit data, deleting historical assets, adding Settings generation, adding new entry points, and paid-provider benchmarking remain separately authorized work.
+Some SillyTavern versions omit image configuration for exact preview model IDs. An advisory and aspect-ratio prompt cannot guarantee provider dimensions or avatar likeness. Correcting that host/provider boundary remains a known limitation.

@@ -22,12 +22,12 @@ function troubleshootingMarkup() {
     return settings.slice(opening.index, closing + '</details>'.length);
 }
 
-test('Setup leads with active connection and model selection before readiness and editing', () => {
+test('Setup keeps connection editing beside the active connection and model selection before readiness', () => {
     const setup = setupMarkup();
-    const ids = ['cig_provider', 'cig_edit_connection', 'cig_add_connection', 'cig_model_search', 'cig_model', 'cig_model_method_container', 'cig_setup_status', 'cig_setup_issue', 'cig_connection_editor'];
+    const ids = ['cig_provider', 'cig_edit_connection', 'cig_add_connection', 'cig_connection_editor', 'cig_model', 'cig_model_search', 'cig_model_method_container', 'cig_setup_status', 'cig_setup_issue'];
     const positions = ids.map((id) => setup.indexOf(`id="${id}"`));
     assert.ok(positions.every((position) => position >= 0), 'Setup exposes the active connection, model, status, and editor controls');
-    assert.ok(positions.every((position, i) => i === 0 || position > positions[i - 1]), 'Setup follows connection, model, readiness, then editing');
+    assert.ok(positions.every((position, i) => i === 0 || position > positions[i - 1]), 'Setup follows connection, connection details, model, then readiness');
     assert.match(setup, /<label for="cig_provider">Generate images with<\/label>/);
     for (const id of ['cig_setup_status', 'cig_setup_issue']) {
         const element = setup.match(new RegExp(`<[^>]+id="${id}"[^>]*>`))?.[0] || '';
@@ -39,7 +39,7 @@ test('Setup leads with active connection and model selection before readiness an
 
 test('Setup keeps credentials inside the focused connection editor and model routing explicit', () => {
     const setup = setupMarkup();
-    const editorStart = setup.indexOf('<details id="cig_connection_editor"');
+    const editorStart = setup.indexOf('<section id="cig_connection_editor"');
     const troubleshootingStart = setup.indexOf('<details id="cig_advanced_setup"', editorStart);
     const editor = setup.slice(editorStart, troubleshootingStart);
     assert.match(editor, /id="cig_builtin_connection_fields"[\s\S]*id="cig_provider_key_container"/);
@@ -47,6 +47,7 @@ test('Setup keeps credentials inside the focused connection editor and model rou
     assert.match(keyField, /placeholder="Enter API key"/);
     assert.doesNotMatch(keyField, /sk-|Bearer/i);
     for (const id of ['cig_connection_preset', 'cig_connection_editing_status', 'cig_builtin_connection_save', 'cig_builtin_connection_use', 'cig_connection_editor_cancel']) assert.match(editor, new RegExp(`id="${id}"`));
+    assert.match(editor, /<h2 id="cig_connection_editor_heading">Connection details<\/h2>/);
     for (const id of ['cig_show_all_models', 'cig_model_method', 'cig_model_method_note']) assert.match(setup, new RegExp(`id="${id}"`));
 });
 
@@ -88,4 +89,22 @@ test('Setup tab has an accessible incomplete or issue status without changing th
 test('hidden Setup tab status has an authoritative display-none rule', () => {
     const hiddenRule = style.match(/\.cig-setup-tab-status\[hidden\]\s*\{[^}]*\}/)?.[0] || '';
     assert.match(hiddenRule, /display:\s*none\s*!important\s*;/);
+});
+
+test('connection actions reveal a focused top-of-setup editor and hidden readiness actions never render blank', () => {
+    assert.match(index, /function openConnectionEditor\(providerId = ''\)/);
+    assert.match(index, /#cig_connection_editor'\)\.prop\('hidden', false\)/);
+    assert.match(index, /#cig_connection_preset'\)\.trigger\('focus'\)/);
+    assert.match(index, /#cig_connection_editor_cancel'\)\.on\('click', \(\) => \$\('#cig_connection_editor'\)\.prop\('hidden', true\)\)/);
+    assert.match(style, /#cig_setup_fix\[hidden\][\s\S]*display:\s*none\s*!important/);
+});
+
+test('host compatibility warnings are advisory, selection-guarded, and cached in Setup', () => {
+    assert.match(settings, /id="cig_host_compatibility_note"[^>]*role="status"[^>]*aria-live="polite"[^>]*hidden/);
+    assert.match(index, /readHostImageModelCompatibility/);
+    assert.match(index, /const hostCompatibilityCache = new Map\(\)/);
+    assert.match(index, /if \(hostCompatibilityCache\.has\(requestKey\)\)/);
+    assert.match(index, /hostCompatibilityCache\.set\(requestKey, compatibility\)/);
+    assert.match(index, /compatibility\.state !== 'advisory'/);
+    assert.match(index, /hostCompatibilityRequest\?\.controller\.abort\(\)/);
 });

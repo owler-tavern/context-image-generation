@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createNoSpendInterceptionGate, runControlledNoSpendUat } from '../.superpowers/sdd/2026-08-31-provider-model-discovery-routing/live-uat.mjs';
+import { createNoSpendInterceptionGate, runControlledNoSpendUat } from './support/live-uat.mjs';
 import { discoverCustomConnectionModels } from '../lib/providers/model-discovery.js';
 import { createCustomConnectionId, migrateCustomConnections, removeCustomConnectionFromSettings, selectCustomConnection, upsertCustomConnection, validateCustomConnection } from '../lib/providers/custom-connections.js';
 

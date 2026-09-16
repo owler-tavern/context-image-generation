@@ -178,6 +178,7 @@ test('production controller carries parsed custom records through persistence in
     const settings = {
         provider: CONNECTION_ID,
         model: 'manual-image',
+        use_avatars: true,
         custom_connections: {
             schema: 1,
             connections: { [CONNECTION_ID]: connection },
@@ -249,6 +250,7 @@ test('production controller carries parsed custom records through persistence in
     $('#cig_model').val('fresh-image');
     await $('#cig_model').trigger('change');
     assert.equal(settings.model, 'fresh-image');
+    assert.equal(settings.use_avatars, true, 'changing a model never clears the saved avatar preference');
     assert.equal(getProjection().selectedModelId, 'fresh-image');
     assert.deepEqual(selectionEffects, [
         ['cancel', CONNECTION_ID],

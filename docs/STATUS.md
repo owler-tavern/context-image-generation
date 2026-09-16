@@ -1,128 +1,39 @@
-# v2.5 Status
-
-## Setup redesign and per-model methods — implemented
-
-- Objective: explicit active connection/model, independent editing/fetching, truthful readiness, and Gemini plus OpenAI Images methods within one saved custom connection.
-- Plan: `docs/SETUP_IMPLEMENTATION_PLAN.md`. Design: `docs/SETUP_UX_REVIEW.md`.
-- Implemented: explicit activation with remembered model per connection; one searchable selector and manual-ID entry; model-specific method selection; independent editor and troubleshooting; removed experimental checkbox/enforcement; actionable readiness; catalog authentication independent from the shared generation key; explicit key removal. Saving active edits is labeled as applying to the active connection.
-- Contracts: additive schema-1 `generationMethods` and `catalogAuth`; deterministic route resolver; mixed-model evidence scoped to model/method; refresh preserves assignments; key/route changes invalidate proof; late generation responses cannot restore proof for a changed key or route. Legacy single-method records remain supported.
-- Verified: 932/932 available Node tests passed, including actual mocked adapter requests for both Gemini and OpenAI Images methods, discovery retention, persistence, explicit activation and readiness. `node --check index.js` and `git diff --check` passed. Excluded only the pre-existing missing-fixture `test/no-spend-uat.test.mjs` (imports absent `.superpowers/sdd/2026-08-31-provider-model-discovery-routing/live-uat.mjs`).
-- Browser verified using an isolated SillyTavern data directory on loopback port 8002: loaded actual extension; saving a custom connection retained Google AI Studio as active; explicit Use switched connection; two manual models retained different Gemini/Images methods when switching; selected connection/model/method survived reload; Add key recovery opened that connection's editor. Desktop and 390px layout inspected, with narrow tab spacing corrected. Test data used example.test, no real credentials or provider calls.
-- Independent review: activation and mixed routing accepted; clarified shared-key/catalog-auth contract, added explicit key removal and active-save wording, added missing-action recovery. Editor fetch reports counts; model selection takes place after explicit activation.
-- Not verified: live LinkAPI catalog and paid Gemini/GPT image generation. Browser host emitted unrelated Extension Manager dependency/JSON errors; no clean-host-console claim. Host startup attempted legacy public override migration and sandbox denied those writes; isolated data was used throughout.
-- Next live acceptance: reload the real SillyTavern instance, refresh LinkAPI, select a Gemini model then a GPT image model and generate from the wand with the same connection. The isolated setup/provider commit snapshot passes 930/930 available tests; older scene changes remain outside this commit. No push requested.
-
-## Provider bug fixes — 2026-09-05
-
-- Objective: restore LinkAPI catalog visibility and make saved custom-model experimental consent reach generation.
-- Cause: LinkAPI discovery rejected every ID outside four curated routes. Custom generation looked up consent using legacy transport names while the checkbox stored canonical names.
-- Changes: retain unknown LinkAPI catalog IDs visibly as Unverified; add the documented `gpt-image-2` Images route on discovery; unify consent aliases while retaining provider/model isolation and old approvals.
-- Verification: failing regressions reproduced discovery loss, alias mismatch, and legacy-consent revocation. Final available suite: 920 passed, zero failed, excluding `test/no-spend-uat.test.mjs`, which imports the missing pre-existing `.superpowers/sdd/2026-08-31-provider-model-discovery-routing/live-uat.mjs`. The initial unrestricted run had 918 passing tests and that one module-load failure. The LinkAPI regression exercises discovery, persistence, selector projection, consent, and simulated adapter dispatch. Syntax checks and `git diff --check` passed.
-- Live limits: no connected SillyTavern browser tab was available. No live catalog request or paid image generation has been performed for this patch. Unknown catalog protocols remain unresolved rather than being guessed.
-- Next action: reload SillyTavern, refresh the provider catalog, and verify the selected model against the live provider. Both reported code defects are patched; live acceptance remains unverified.
+# v2.5 status
 
 ## Objective
-Implement ADR-002: two generation entry points, one kernel, optional references, and inert legacy outfit data.
+Ship the consolidated branch review and September 16 user feedback on `codex/v2.5`, preserving both local installations and existing user data.
 
 ## Current milestone
-Task 9 live provider acceptance — wand dispatch reproduced a non-terminal provider wait; branch is NOT READY for live generation.
+Implementation and isolated SillyTavern UI acceptance verified. Git publication and synchronization receipts are reported after the final push.
 
 ## Completed
-- ADR-002 accepted and corrected to wand + slash.
-- Generation source and delivery destination contracts implemented.
-- Extracted a dependency-injected scene-generation kernel without production wiring.
-- Defined the Task 4 composition seams for capture, reference materialization, plan/message construction, provider dispatch, and coordination.
-- Historical Task 3: added dormant, dependency-injected message and preview/Gallery delivery adapters before production wiring.
-- Historical Task 3: added pure wand and slash request factories plus thin entry adapters; Task 4 subsequently composed them into `index.js`.
-- Composed the production kernel and registered exactly two generation sources: the message wand and `/proimagine` (including its existing aliases).
-- Removed automatic, overswipe, iteration, Director, and cinematic provider dispatch while preserving legacy preferences and historical artifacts as inert/readable data.
-- Added a deterministic optional-reference contributor pipeline in avatar, previous-image, saved-appearance order. Contributor failures are non-blocking notices; duplicate reference or asset IDs fail before planning.
-- Moved saved appearance library, tombstone, chat-pin, and appearance-asset resolution out of kernel capture and behind the explicitly enabled saved-appearance contributor.
-- Corrected the contributor boundary so disabled Appearance Memory cannot affect identities, cast truths, prompt descriptions, avatar policy, or saved-reference planning.
-- Captured avatar, previous-image, and saved-appearance inputs once before asynchronous materialization, preventing delayed work from mixing chats.
-- Decoupled saved-appearance asset resolution from the previous-image toggle and its selected Gallery item.
-- Retired outfit UI, handlers, prompt projection, plan/provenance fields, settings normalization, and pending-recovery scheduling. Legacy `rp_outfits`, `outfit_pending`, chat `outfitState`, and historical `activeOutfits` artifacts remain inert and structurally preserved.
-- Removed the remaining scene and cinematic outfit-state architecture. Current attire remains ordinary source text only; non-outfit scene facts remain available.
-- Preserved realistic opaque legacy `outfitState` values larger than 8192 bytes across every ordinary chat-canon writer and the coordinated host metadata save seam without weakening the generic unknown-field budget.
-- Added real extension-settings load/save and historical Story Memory artifact-reader coverage for compatibility preservation.
-- Carried the current opaque `outfitState` through visible-canon replay before its first save and during final cleanup, even when the historical candidate omits the field or contains a stale value.
-- Restored routine chat-canon persistence to SillyTavern's existing `saveChatConditional` coordination path; the preservation seam no longer selects direct one-to-one or group writers.
-- Reconciled Settings copy with ADR-002: provider/model refresh is discoverable, Settings remains configuration-only, and cinematic/Story Memory surfaces stage context only for the next wand.
-- Removed retired outfit-only CSS selectors while retaining shared layout and cinematic suggestion styling.
-- Reconciled PRODUCT, README, DEVELOPER_GUIDE, and ROADMAP with the two-entry v2.5 boundary; added `docs/V2_5_RELEASE_NOTES.md` with evidence and deferrals. Approved pre-existing README/DEVELOPER_GUIDE opening and ownership hunks remain unchanged.
-- Kept `manifest.json` at `1.8.0`; no exact semantic v2.5 version was approved, so the release-note limitation is explicit rather than inferred.
-- Corrected the Task 7 review finding: README and DEVELOPER_GUIDE now distinguish catalog discovery from route/image-generation verification, and DEVELOPER_GUIDE carries the approved D4 appearance-memory wording.
-- Task 8 deterministic acceptance found no demonstrated regression requiring a product-code fix.
-- The initial Task 8 self-critique missed preservation and retirement gaps; the independent Sol whole-branch review correctly marked the branch NOT READY and drove this correction round.
-- Preserved `sceneFacts.outfits` as opaque compatibility data through scene reconciliation and successful wand persistence without interpreting it, adding it to deltas, or injecting it into prompts.
-- Retired outfit-specific Story Memory collection creation and membership changes while keeping historical outfit collections visible, readable, and read-only.
-- Routed custom provider catalog refresh through the cancellable discovery coordinator and made provider-switch cancellation clear stale Refresh Models busy, disabled, and accessibility state unconditionally.
-- Corrected settings and product documentation: wand and slash remain the manual generation actions, while cinematic suggestions and Story Memory stage context only for the next wand.
+- Integrated Add/Edit connection beside the active connection selector, with focus and explicit activation.
+- Combined model search, selection, and refresh; removed blank conditional actions and garbled labels.
+- Simplified Scene details to Generation instruction; removed empty Automation UI and retired preference handlers. Legacy saved values remain inert.
+- Kept reference controls visible with supported/unsupported/unknown explanations and preserved choices across model changes.
+- Preserved source-story prompts; added an explicit aspect-ratio instruction while retaining structured request fields.
+- Preserved exact provider model IDs. Added current final Gemini choices only for Google AI Studio; host migration metadata produces a nonblocking advisory.
+- Recovered stale-target/chat-save-failure images even when optional Gallery is disabled. Recovery awaits settings persistence and errors do not announce success.
+- Preserved sanitized HTTP-200 host errors and provider/model attribution; repaired string-message prompt flattening.
+- Restored the missing tracked test helper, added `npm test` and GitHub Actions, and set release metadata to 2.5.0.
+- Removed four obsolete tracked agent reports/specs; ignored local attachment caches and working notes without deleting them. Retained decision records and compatibility data.
 
 ## Verification
-- `node --test test/scene-generation-contracts.test.mjs` — 8 passed.
-- `node --test test/scene-generation-kernel.test.mjs` — 7 passed after the expected missing-module red run.
-- `node --test test/scene-generation-delivery.test.mjs` — 5 passed after the expected missing-module red run.
-- Focused kernel parity suite — 54 passed: `scene-generation-kernel`, `generation-plan`, `generation-coordinator`, `provider-dispatch`, `run-coordinator-phase-c`, and `no-spend-uat`.
-- Task 4 focused authority suite — 91 passed, 0 failed.
-- Full repository suite — 856 passed, 0 failed: `node --test test/*.mjs`.
-- Task 5 focused contributor/kernel/reference suite — 40 passed, 0 failed.
-- Task 5 full repository suite — 864 passed, 0 failed: `node --test test/*.mjs`.
-- Task 5 correction RED — the production-boundary contract failed because `index.js` had no immutable contributor-capture assembly; deterministic race and disabled-appearance tests were added before production changes.
-- Task 5 correction focused contributor/kernel/reference suite — 43 passed, 0 failed.
-- Task 5 correction full repository suite — 867 passed, 0 failed: `node --test test/*.mjs`.
-- Task 6 focused retirement/migration/chat-canon/plan/domain suite — 60 passed, 0 failed.
-- Task 6 syntax checks — `index.js`, `lib/generation-plan.js`, and `lib/rp/continuity-shelf.js` passed `node --check`.
-- Task 6 full repository suite — 870 passed, 0 failed: `node --test test/*.mjs`.
-- Task 6 `git diff --check` — passed.
-- Task 6 correction RED — the expanded retirement suite reported 2 passed and 5 failed for real settings/metadata seams, large opaque legacy state, scene retention, and cinematic events; a final source assertion exposed one stale cinematic outfit branch at 6 passed and 1 failed.
-- Task 6 correction focused suite — 63 passed, 0 failed.
-- Task 6 correction affected scene/cinematic/canon/settings/Story Memory suite — 122 passed, 0 failed.
-- Task 6 correction full repository suite — 873 passed, 0 failed: `node --test test/*.mjs`.
-- Task 6 correction round 2 RED — the retirement suite reported 5 passed and 3 failed for coordinated-save bypass, 17KB replay loss, and missing production wiring.
-- Task 6 correction round 2 focused suite — 64 passed, 0 failed.
-- Task 6 correction round 2 affected replay/persistence/scene/cinematic/canon/settings/Story Memory suite — 156 passed, 0 failed.
-- Task 6 correction round 2 full repository suite — 874 passed, 0 failed: `node --test test/*.mjs`.
-- Task 7 RED — new ADR-002 settings assertions failed on missing Refresh Models copy and stale cinematic/Story Memory wording before implementation; existing cinematic/Story Memory contracts also caught wording regressions during the green pass.
-- Task 7 focused settings/provider/documentation suite — 76 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs test/p4-story-memory-runtime.test.mjs test/rp-cinematic-integration.contract.test.mjs`.
-- Task 7 `git diff --check` — passed before final allowlist staging.
-- Task 7 correction round 1 RED — the new release-documentation contract failed because README and DEVELOPER_GUIDE did not state the discovery/verification boundary.
-- Task 7 correction round 1 focused settings/provider/documentation suite — 41 passed, 0 failed: `node --test test/settings-content-contract.test.mjs test/settings-ui-contract.test.mjs test/provider-contracts.test.mjs`.
-- Task 7 correction round 1 `git diff --check` — passed before final allowlist staging.
-- Task 8 syntax checks — `node --check index.js` plus every `lib/**/*.js` file passed: 1 index file + 81 library files, process exit 0.
-- Task 8 complete repository suite — 106 test files, 884 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo: `$tests = Get-ChildItem test -File -Filter '*.test.mjs' | ForEach-Object { $_.FullName }; node --test $tests`; process exit 0.
-- Task 8 initial rubric self-critique — superseded by the independent Sol whole-branch review, which found four P1 and two P2 issues.
-- Final-review correction baseline focused suite — 155 passed, 0 failed.
-- Opaque scene-fact preservation RED — 31 passed, 5 failed before the compatibility seam; focused GREEN — 36 passed, 0 failed.
-- Historical outfit-collection retirement RED — 44 passed, 3 failed before the read-only boundary; strengthened collision/normalized-kind RED — 18 passed, 1 failed; focused GREEN — 73 passed, 0 failed.
-- Custom Refresh Models cancellation RED — 31 passed, 3 failed before coordinator/UI cancellation wiring; focused GREEN — 53 passed, 0 failed.
-- Settings runtime-truth RED — 17 passed, 1 failed before copy correction; focused GREEN — 18 passed, 0 failed.
-- Final-review correction focused suite — 127 passed, 0 failed after correcting the stale deletion assertion.
-- Final-review correction syntax checks — `index.js` plus every `lib/**/*.js` file passed: 82 files total, process exit 0.
-- Final-review correction complete repository suite — 106 test files, 890 passed, 0 failed, 0 cancelled, 0 skipped, 0 todo; process exit 0.
-- Final-review correction `git diff --check` — passed.
-- Independent Sol correction re-review — READY against the P0/P1 completion gate; no P0/P1 findings remain. Documentation-only P2 bookkeeping was corrected in `75aea01`.
-- Task 9 live host — loaded the current extension in SillyTavern at `http://127.0.0.1:8001/`; CIG Settings rendered and reported the selected provider/model ready without invoking generation.
-- Task 9 responsive Settings — at 320px, 360px, 480px, and 1280px, `#cig_settings` had no horizontal overflow; the live DOM contained zero CIG Generate actions and zero outfit controls.
-- Task 9 slash registration — typing `/pro` without submitting displayed `/proimagine` and its generation help in SillyTavern's live slash autocomplete; the input was then cleared.
-- Task 9 console — no error-level browser console entries were observed. Host-level settings/deprecation warnings were present and were not attributed to this extension.
-- Authorized LinkAPI wand test — opened an existing local character chat, revealed the message actions, and invoked the CIG wand once with the saved LinkAPI configuration. The wand entered `Generating image…` but remained busy for more than three minutes with no new message attachment, Gallery item, toast, setup issue, or error-level console entry.
-- The stalled page was reloaded to terminate the browser-side request. The second authorized `/proimagine` provider call was deliberately not used because the first request had no terminal outcome and another call could duplicate spend without adding diagnostic value.
+- Final integrated `npm test`: **954 passed, 0 failed**, including the previously missing no-spend helper.
+- Initial full run: 952 passed, 2 failed. Both were obsolete assertions for intentionally removed behavior: no Gallery recovery on thrown chat-save errors, and the retired visual-preference handler. Corrected expectations and reran the whole suite.
+- Independent Sol source review: no remaining P1 implementation finding after correcting host model scoping and consistent recovery visibility.
+- Actual SillyTavern 1.18.0 staging host, isolated temporary profile on loopback port 8017: Add opens/focuses editor; Close hides it; custom credential-free connection saves without switching the active provider; model search filters actual options; no visible blank CIG buttons; retired controls absent.
+- Browser Gemini model switch: avatar preference remained checked/enabled and 16:9 remained selected. 390px viewport: panel clientWidth/scrollWidth both 381px. Screenshot inspected.
+- Browser tests used no user chats/credentials and sent no provider catalog or generation request. An unrelated global Extension Manager startup notice was dismissed.
 
-## Failures / open issues
-- Live browser UAT is outstanding.
-- No paid-provider verification is authorized.
-- Live wand/slash generation, paid-provider verification, and image-quality acceptance remain **NOT TESTED**.
-- Live browser acceptance is **PARTIAL** because no character/chat was active: message-wand visibility, keyboard activation, and zero-request behavior across real message/navigation events remain untested.
-- Network-request capture was unavailable through the selected browser surface. The earlier no-spend checks invoked no generation action; the later authorized wand test did invoke one provider path, but its request/response status was not observable in a complete network trace.
-- The LinkAPI wand request has an unresolved non-terminal live failure. Whether LinkAPI accepted or billed the request could not be established from the available browser evidence.
+## Known limitations
+- Installed SillyTavern backend has an exact image-model allowlist excluding `gemini-3.1-flash-image-preview`; it therefore omits structured image configuration for that ID. The extension preserves the exact provider ID and warns from advertised host migration metadata. Prompt instructions are not a guarantee of output dimensions. A host correction or explicitly selected provider-supported alternative remains necessary for structured control on that affected route.
+- Real provider-generated dimensions, image quality, and avatar likeness remain **NOT VERIFIED**. No paid generation was performed.
+- Native TauriTavern runtime remains **NOT VERIFIED**; browser acceptance was performed in SillyTavern. Both receive the same extension files, not a claim of identical host behavior.
+- Broad entrypoint refactoring and thumbnail/decode performance optimization are deferred: no measured performance problem or safe migration evidence justifies a broad rewrite in this fix release.
 
 ## Decisions
-- Settings is configuration-only.
-- Legacy outfit data is preserved, not purged.
-- Saved appearance contributes only when Appearance Memory is explicitly enabled; avatar, previous image, and saved appearance can all be absent without blocking a text-only plan.
-- Legacy outfit records are preserved as opaque compatibility data. Compatibility writes may carry them forward unchanged, but no production path interprets, mutates, or injects them into generation.
-- v2.5 documentation names only wand and slash as generation entry points. Cinematic suggestions and Story Memory may stage context only for the next wand; Gallery, Improve tools, and saved appearances remain provider-free support/configuration surfaces.
+Wand and slash remain the only generation actions. No automatic retries, model aliases, generation timeout, or legacy user-data purge was introduced. See the consolidated review for issue disposition.
 
 ## Next action
-Diagnose the LinkAPI transport/request behavior before retrying paid wand or slash generation. Generation waits for a provider response unless the user explicitly cancels an active pre-commit run; Slash provider delivery remains **NOT TESTED live**.
+Reload both applications after the synchronized branch update. Validate actual provider dimensions and avatar likeness on an explicitly selected compatible host/provider route; native TauriTavern acceptance remains outstanding.

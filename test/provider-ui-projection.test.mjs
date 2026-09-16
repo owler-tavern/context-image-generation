@@ -58,6 +58,7 @@ test('projects a fixture provider UI entirely from registry metadata', () => {
             modelNote: undefined,
             models: [{ id: 'fixture-image', label: 'Fixture Image' }],
             supportsReferenceImages: false,
+            referenceCapabilityState: 'unsupported',
             imageSizeOptions: [{ value: 'small', label: 'Small' }, { value: 'large', label: 'Large' }],
             supportsThinking: false,
             supportsGoogleSearch: false,
@@ -152,6 +153,7 @@ test('projects explicit credential ownership for host, extension, and unavailabl
 test('shows reference controls for LinkAPI Gemini routes with verified model caps', () => {
     assert.equal(projectProviderUi('makersuite', 'gemini-2.5-flash-image').supportsReferenceImages, true);
     assert.equal(projectProviderUi('linkapi', 'gemini-2.5-flash-image').supportsReferenceImages, true);
+    assert.equal(projectProviderUi('makersuite', 'gemini-3.1-flash-image').referenceCapabilityState, 'supported');
     assert.equal(projectProviderUi('openrouter', 'google/gemini-2.5-flash-image-preview').supportsReferenceImages, false);
 });
 
