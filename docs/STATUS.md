@@ -1,12 +1,26 @@
 # v2.5 status
 
 ## Objective
+Add the exact LinkAPI Nano Banana 2.1 model on `codex/v2.5`, preserving the previous Nano Banana 2 controls and the existing generation/delivery workflow.
+
+Previous release objective:
 Ship the consolidated branch review and September 16 user feedback on `codex/v2.5`, preserving both local installations and existing user data.
 
 ## Current milestone
+October 7 follow-up: LinkAPI `gemini-nano-banana-2.1` native Gemini integration is implemented and mock-verified on `codex/v2.5`; all 964 regression tests pass. Live provider/browser acceptance remains open.
+
 Extension review shipped. Follow-up host correction: SillyTavern patched and offline verified; TauriTavern stable 2.2.0 replacement built and tested, staged pending closure of the running app for smoke testing and installation.
 
+## October 7 implementation plan
+- Current state: LinkAPI Gemini presets use the host proxy, whose image-model allowlist does not include the new gateway ID.
+- Target: a selectable built-in model sends native `contents` to the exact user-supplied `https://linkapi.ai/v1beta/models/gemini-nano-banana-2.1:generateContent` endpoint, using the existing LinkAPI key and generation coordinator.
+- Extend the registry, route-evidence contract, and dispatch adapter boundary; reuse bounded response reading, image decoding, error normalization, model discovery, and UI projection. Preserve all existing routes and saved selections.
+- Stages: add the curated native route and adapter; exercise selection/discovery/reload and mocked dispatch success/failures; run the complete regression suite and inspect the final diff.
+- The owner confirmed that all previous Nano Banana 2 features are available for this model. Preserve the same four-reference extension limit, image sizes, aspect ratio, thinking, and Google Search controls; translate them into native Gemini fields. This is an owner-supplied compatibility requirement, not live provider verification.
+- Live browser CORS and paid provider generation require separate acceptance evidence. Rollback is the narrow extension commit; no host patch, credential migration, or saved-model rewrite is required.
+
 ## Completed
+- October 7: added the exact Nano Banana 2.1 model and native route using the existing LinkAPI key. Preserved avatar/previous-image bytes and full ordered prompts; added native aspect ratio, 512px–4K resolution, thinking, and Google Search fields. Existing model routes, saved selections, delivery, and catalog safety remain unchanged.
 - Follow-up cleanup: removed runtime handlers/rendering for retired Automation controls, manual-retrigger/focus/settings-update helper APIs, unused automatic-generation/swipe defaults, and retired scene-preference interpretation/defaults. Existing bounded saved values remain opaque compatibility data; active optional cinematic cards retain their runtime. Removed obsolete tests alongside deleted APIs and retained migration regression coverage.
 - Integrated Add/Edit connection beside the active connection selector, with focus and explicit activation.
 - Combined model search, selection, and refresh; removed blank conditional actions and garbled labels.
@@ -20,6 +34,10 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 - Removed four obsolete tracked agent reports/specs; ignored local attachment caches and working notes without deleting them. Retained decision records and compatibility data.
 
 ## Verification
+- October 7: **964 tests passed, 0 failed, 0 skipped** (`npm test`), including 16 new native-route tests. These exercise UI projection, catalog refresh/reload, settings migration, exact URL/auth/payloads, all image-size/thinking options, avatar/previous-image byte preservation, validated image decoding, HTTP and HTTP-200 errors, credential redaction, redirects, cancellation, and bounded response reading. Fetch is mocked; no paid request was sent.
+- October 7 syntax checks and `git diff --check` passed. Source critique found no remaining implementation blocker; direct-browser CORS and real provider capability acceptance remain the principal open risks.
+- October 7 initial checks: one new test incorrectly expected fetched copies to retain built-in route evidence; corrected it to exercise the curated selection after reload. The first full run passed 963/964; its sole failure was the expected LinkAPI help-copy fixture, updated for the new route. The complete rerun passed.
+- October 7 `npm audit --omit=dev` could not run (`ENOLOCK`): this dependency-free repository has no lockfile. No dependency was added.
 - Retired-feature cleanup: **948 tests passed, 0 failed**; syntax and diff checks passed. Nine fewer tests overall reflect removed API tests and added legacy roundtrip coverage. No new browser or provider verification was performed for this cleanup.
 - Host follow-up: installed SillyTavern handler and prompt converter passed 55 offline assertions across 12 image cases after reproducing 15 failures before the fix. Exact preview IDs, three aspect ratios, resolution, and both avatar byte strings are preserved. Fetch was stubbed; no provider request was made.
 - Extension suite after host-patch tooling: **957 passed, 0 failed**. Host JavaScript syntax check passed.
@@ -33,6 +51,7 @@ Extension review shipped. Follow-up host correction: SillyTavern patched and off
 - Browser tests used no user chats/credentials and sent no provider catalog or generation request. An unrelated global Extension Manager startup notice was dismissed.
 
 ## Known limitations
+- October 7 Nano Banana 2.1: native browser CORS, live key/model acceptance, actual resolution/aspect ratio, generated-image quality, and reference likeness remain **NOT VERIFIED**. Full feature parity is enabled per the owner's explicit requirement; mocked payload/response tests do not establish provider behavior. No authenticated provider call or installed-host UI smoke test was performed for this addition.
 - Installed SillyTavern backend was corrected locally to accept the two Gemini 3 preview image IDs and preserve absent optional image settings. Restart SillyTavern to load the change. Host updates may overwrite it; the repeatable patch and offline verifier are documented in `docs/HOST_GEMINI_FIX.md`. Updating the extension alone does not patch the host.
 - Real provider-generated dimensions, image quality, and avatar likeness remain **NOT VERIFIED**. No paid generation was performed.
 - Native TauriTavern runtime remains **NOT VERIFIED**; browser acceptance was performed in SillyTavern. Both receive the same extension files, not a claim of identical host behavior.
@@ -45,4 +64,7 @@ Wand and slash remain the only generation actions. No automatic retries, model a
 Removed UI features should not retain executable handlers, helper APIs, or new defaults without an active caller. Retained legacy scene values and retrigger session records are bounded compatibility data only, so an ordinary save does not unnecessarily destroy user data. Optional cinematic observation/staging still has active UI callers and is not removed by the retired-settings cleanup.
 
 ## Next action
+Reload/update the extension, select **LinkAPI → Nano Banana 2.1**, and perform a live generation with the existing LinkAPI key to confirm browser CORS and provider acceptance of the enabled controls. Keep generated quality/dimension/reference evidence separate from the deterministic suite.
+
+Historical host follow-up:
 After the user saves/closes TauriTavern, smoke-test the staged standard executable with its isolated portable marker, then replace only the installed executable after rechecking its original hash. Do not copy the portable marker into the installed directory. Restart SillyTavern to load its host patch. Actual provider dimensions and avatar likeness remain unverified.

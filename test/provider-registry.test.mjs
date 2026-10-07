@@ -11,6 +11,7 @@ test('routes LinkAPI Gemini and OpenAI image models by model contract', () => {
 
 test('routes every LinkAPI model exposed by the built-in UI', () => {
     const expectedTransports = {
+        'gemini-nano-banana-2.1': 'linkapi-gemini-native',
         'gemini-2.5-flash-image': 'sillyTavernGeminiProxy',
         'gemini-3.1-flash-image-preview': 'sillyTavernGeminiProxy',
         'gemini-3-pro-image-preview': 'sillyTavernGeminiProxy',

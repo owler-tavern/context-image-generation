@@ -23,7 +23,7 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 
 ## Provider adapters and recovery
 
-- **LinkAPI** keeps its existing Gemini-compatible and OpenAI Images model routes behind provider adapters. This does not change your active SillyTavern Chat Completion profile.
+- **LinkAPI** offers **Nano Banana 2.1** (`gemini-nano-banana-2.1`) through its native Gemini endpoint, with avatar/previous-image references, aspect ratio, 512px–4K sizes, thinking, and Google Search controls. Existing Gemini-compatible and OpenAI Images routes remain available. After updating/reloading the extension, select **LinkAPI → Nano Banana 2.1** and use your existing LinkAPI key. Live compatibility is not yet verified.
 - **TokenReply (Experimental)** provides the text-only `grok-imagine-image` and `grok-imagine-image-quality` profiles. It sends a minimal request until a live compatibility test confirms TokenReply's supported image-size/resolution field and response format.
 - **Hosted provider wave 1 (Experimental):** registry-driven OpenAI GPT Image, Pollinations paid JSON, NanoGPT, Together AI, Routeway, and Navy.ai profiles reuse the validated OpenAI Images transport. Optional capabilities remain disabled unless the selected model's evidence explicitly supports them.
 - **Hosted provider catalog:** Z.AI and ArliAI have dedicated Experimental native adapters with curated built-in models; async/binary/conflicting/chute-specific profiles such as Chutes, Fal.ai, Replicate, CivitAI, PixAI, Kie.ai, Midjourney/LegNext, NovelAI, Stability AI, and Naistera remain unavailable Future Server records.
@@ -32,6 +32,8 @@ Provider availability and evidence status are tracked in [docs/PROVIDER_CATALOG.
 ### Direct-provider troubleshooting
 
 Direct LinkAPI Images and TokenReply requests run in the browser. Use browser DevTools (**F12**): enable **Preserve log**, inspect **Console** for [context-image-generation] OpenAI Images error (HTTP status), and inspect **Network** for images/generations. Do not share the Authorization header or API key. Gemini/SillyTavern-routed request logs appear in the SillyTavern server console.
+
+Nano Banana 2.1 also runs directly in the browser: look for `gemini-nano-banana-2.1:generateContent` in **Network**. Its LinkAPI key is sent in `x-goog-api-key`, not the URL. Browser CORS, actual output quality, and provider acceptance of the controls require a live check.
 ## What's New in this Fork (v1.7.0)
 
 - **Lighter gallery** - Gallery images are now stored as files (only paths are

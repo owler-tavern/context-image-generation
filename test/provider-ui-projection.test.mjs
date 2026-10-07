@@ -125,7 +125,7 @@ test('projects bounded credential copy without provider diagnostics or secrets',
         label: 'LinkAPI API Key',
         placeholder: 'Enter API key',
         setupHelp: 'Enter the API key for LinkAPI.',
-        advancedHelp: 'Used only for image generation. Gemini proxy URL: https://api.linkapi.ai (do not add /v1).',
+        advancedHelp: 'Used only for image generation. Existing Gemini models use https://api.linkapi.ai (do not add /v1). Nano Banana 2.1 uses the native Gemini endpoint at https://linkapi.ai.',
     });
     assert.doesNotMatch(JSON.stringify(directCredential), /sk-|Bearer|api\.linkapi\.ai\/v1/i);
 });

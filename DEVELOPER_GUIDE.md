@@ -25,6 +25,7 @@ The manifest and entrypoint identify **2.5.0**. Current implementation and verif
 | `lib/providers/registry.js` | Curated provider/model metadata and adapter transport selection. |
 | `lib/providers/openai-images.js` | Pure OpenAI Images request/response helpers. |
 | `lib/providers/gemini-proxy.js` | Pure Gemini-compatible SillyTavern proxy request builder. |
+| `lib/providers/linkapi-gemini-native.js` | Exact Nano Banana 2.1 native route, ordered multimodal request conversion, bounded responses, and image/error parsing. |
 | `settings.html` | The extension's settings drawer, including provider credentials, LinkAPI recovery, and model controls. |
 | `style.css` | Settings, gallery, and image UI styling. |
 | `manifest.json` | SillyTavern extension entry point and published metadata. |
@@ -61,7 +62,8 @@ Settings are saved through SillyTavern's `saveSettingsDebounced()`. Provider cre
 | --- | --- | --- | --- |
 | Google AI Studio (`makersuite`) | SillyTavern `/api/backends/chat-completions/generate` | Active SillyTavern provider configuration | Supported by the normal multimodal message path. |
 | OpenRouter | Same SillyTavern backend route | Active SillyTavern provider configuration | Supported by the normal multimodal message path. |
-| LinkAPI + Gemini image model | `sillyTavernGeminiProxy`: Same SillyTavern backend route, forced to `chat_completion_source: 'makersuite'` | Per-provider LinkAPI key as `proxy_password`; `reverse_proxy: 'https://api.linkapi.ai'` | Supported by the normal multimodal message path. |
+| LinkAPI + existing Gemini presets | `sillyTavernGeminiProxy`: Same SillyTavern backend route, forced to `chat_completion_source: 'makersuite'` | Per-provider LinkAPI key as `proxy_password`; `reverse_proxy: 'https://api.linkapi.ai'` | Supported by the normal multimodal message path. |
+| LinkAPI + `gemini-nano-banana-2.1` | `linkapi-gemini-native`: direct browser POST to the exact `/v1beta/models/gemini-nano-banana-2.1:generateContent` route | Existing per-provider LinkAPI key in `x-goog-api-key`; no query credential | Materialized image data becomes native `inlineData`; the same four-reference extension budget applies. Live acceptance remains unverified. |
 | LinkAPI + `gpt-image*` or `dall-e*` model | `openAiImages`: direct browser `POST` to `https://linkapi.ai/v1/images/generations` | Per-provider LinkAPI bearer token | **Not supported.** All built messages are reduced to plain text. |
 | TokenReply + `grok-imagine-image` / `grok-imagine-image-quality` | `openAiImages`: direct browser `POST` to `https://api.tokenreply.com/v1/images/generations` | Per-provider TokenReply bearer token | **Not supported.** Experimental; minimal text-only payload omits image size. |
 | Wave 1 hosted profiles (OpenAI GPT Image, Pollinations, NanoGPT, Together AI, Routeway, Navy.ai) | `openAiImages`: provider-specific HTTPS `/images/generations` route | Registry-derived per-provider bearer key | Experimental; optional capabilities remain unknown unless explicit model evidence enables them. Pollinations paid JSON never puts keys in query strings; NanoGPT uses its detailed catalog parser seam. |
@@ -102,6 +104,8 @@ Aspect ratios map to Images API sizes as follows:
 | `4:3`, `16:9` | `1536x1024` |
 
 Gemini image-size, thinking-level, and Google Search controls retain their existing behavior. The latter two are conditionally added only for model IDs matching `gemini-3.1`.
+
+The Nano Banana 2.1 native adapter additionally maps these controls to `generationConfig.imageConfig`, uppercase `generationConfig.thinkingConfig.thinkingLevel` (omitted for Auto), and `tools: [{ googleSearch: {} }]`. It preserves the existing instruction/reference/scene ordering inside native `contents[].parts`, requests `TEXT` and `IMAGE`, and accepts candidate image `inlineData` or `inline_data` while ignoring thought images. Image decoding still happens once in shared dispatch. Both HTTP errors and HTTP-200 error envelopes redact the exact supplied credential. Responses are bounded to 48 MiB for inline-image JSON and 64 KiB for HTTP errors; the shared decoded-image limit still applies. No host allowlist modification, automatic retry, or model alias is involved.
 
 ## Image and gallery lifecycle
 
