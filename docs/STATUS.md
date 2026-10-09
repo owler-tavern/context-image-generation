@@ -1,5 +1,19 @@
 # v2.5 status
 
+## October 9 scene-only prompt filtering
+- Objective: send narration/dialogue rather than scene plans, tracker text, nested visual dashboards, or hidden thoughts.
+- Preset correction: the supplied scene was one example, not a universal schema. Removed the `<prose>`-only assumption; preserve narrative outside/inside any wrapper and exclude positively identified metadata. Extended tag spelling variants, metadata HTML attributes/summary labels, and paired bracket blocks. No model call or host regex execution is introduced.
+- Current state: raw clicked-message text also entered the supporting-context prompt and scene/cast inference.
+- Target and scope: one dependency-free scene-text extractor and prompt assembler at the shared capture boundary; reuse providers, references, generation instructions, delivery, and original chat/target fingerprints.
+- Stages: remove identified metadata across preset structures; clean supporting context and validate selected focus; exercise final provider payloads and run regressions.
+- Implemented: shared filtering for wand/slash, cleaned inference and context, metadata-only failure before provider dispatch. No stored messages or settings are rewritten.
+- Verification before preset correction: **976 tests passed, 0 failed, 0 skipped** (`npm test`), including 12 new scene-filter tests. Neutral fixtures mirror the supplied wrapper structure; Gemini proxy/native request builders and mocked OpenAI Images dispatch contain only the cleaned scene plus existing instructions. JavaScript syntax and `git diff --check` passed. No provider/network call was sent.
+- Preset correction verification: **980 tests passed, 0 failed, 0 skipped** in the final `npm test` after all review fixes. Includes 16 scene-filter tests covering alternative wrappers, unwrapped narrative, HTML metadata containers, summary labels, and paired brackets. Syntax and diff checks passed. These fixtures are simulated formats, not acceptance evidence for every user preset.
+- Critique/fixes: independent reviewer identified two P2 text-preservation issues (longer closing code fences and the word `hidden` inside quoted attribute values). Both corrected and regression-tested; re-review approved with no new findings. Initial targeted-test failures also exposed fixture whitespace and missing dispatch-harness route/signal fields; the corrected harness reaches the mocked endpoint. The final full run followed all code changes.
+- Preset correction critique: independent reviewer identified occurrence-level bracket pairing and quote-aware summary parsing issues, including bracket-like text inside comments/attributes and nested summary formatting. All reported examples now have passing regression assertions. The shared quote-aware token stream is reused for those paths. Review stopped after three rounds as required by the critic policy.
+- Risks: unknown unwrapped tracker formats cannot be identified universally; incomplete omitted blocks discard their remainder. Installed-host and paid-provider behavior remain unverified.
+- Next action: use short boundary snippets from the owner's other presets to establish rules for remaining unlabelled/unknown trackers, then verify actual installed-host prompts. This is not universal preset acceptance.
+
 ## Objective
 Add the exact LinkAPI Nano Banana 2.1 model on `codex/v2.5`, preserving the previous Nano Banana 2 controls and the existing generation/delivery workflow.
 

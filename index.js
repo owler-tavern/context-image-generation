@@ -38,7 +38,7 @@ import { readHostImageModelCompatibility } from './lib/providers/host-compatibil
 import { dispatchProviderRoute, promoteCustomConnectionEvidence, promoteCustomModelEvidence } from './lib/providers/dispatch.js';
 import { createRunCoordinator } from './lib/generation-coordinator.js';
 import { cancelCancellableRuns, listCancellableRunIds } from './lib/generation-controls.js';
-import { buildFocusedMessageContent } from './lib/rp-selection.js';
+import { buildScenePrompt } from './lib/scene-prompt.js';
 import { captureWandGenerationInput } from './lib/rp-wand.js';
 import { createSceneGenerationKernel } from './lib/scene-generation/kernel.js';
 import { createMessageDeliveryAdapter, createPreviewGalleryDeliveryAdapter } from './lib/scene-generation/delivery.js';
@@ -1681,17 +1681,13 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
     if (!transportId) throw new Error(`Transport route is unresolved for ${providerId}/${modelId}.`);
     const routeModel = providerRoute.model || { id: modelId, providerId, transportId };
     const preflightAccepted = true; // The explicit wand/slash request is the generation intent.
-    const recentMessages = cloneSnapshot(getRecentMessages(1, messageId)) || [];
-    let messageContent = prompt;
-    if (messageId !== null || sender !== null) {
-        if (recentMessages.length > 0) {
-            let storyContext = '[Story Context - Generate an image for the final message]:\n\n';
-            for (const msg of recentMessages) storyContext += `[${msg.isUser ? '{{user}}' : '{{char}}'} (${msg.name})]: ${msg.text}\n\n`;
-            messageContent = buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender, storyContext: storyContext.trim() });
-        } else if (sender) {
-            messageContent = buildFocusedMessageContent({ sourceMessage: prompt, focusText, sender });
-        }
-    }
+    const scenePrompt = buildScenePrompt({
+        sourceMessage: prompt, focusText, sender: sender || '',
+        nearbyMessages: cloneSnapshot(getRecentMessages(1, messageId)) || [],
+        useStoryContext: messageId !== null || sender !== null,
+    });
+    const recentMessages = scenePrompt.nearbyMessages;
+    let messageContent = scenePrompt.messageContent;
     let descriptionText = '';
     if (settings.include_descriptions) {
         const descriptions = getCharacterDescriptions();
@@ -1735,8 +1731,8 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         : null;
     const appearanceIdentities = appearanceReferenceState?.identities || hostReferenceState.identities;
     const sceneSnapshot = buildSceneGenerationSnapshot({
-        selectedPassage: focusText,
-        clickedMessage: { name: sender || '', mes: prompt },
+        selectedPassage: scenePrompt.focusText,
+        clickedMessage: { name: sender || '', mes: scenePrompt.sourceMessage },
         recentContext: recentMessages,
         identities: appearanceIdentities,
         priorStoryState: chat_metadata[SCENE_STATE_METADATA_KEY],
@@ -1779,7 +1775,7 @@ function captureGenerationSnapshot(prompt, sender = null, messageId = null, focu
         target: cloneSnapshot(target),
         provider: { providerId, modelId, transport: transportId, capabilities: routeModel.capabilities || routeModel },
         resolved: { connectionId, providerId, modelId, transportId, endpointClass, modelDefinition: routeModel, ...(routeModel.routeEvidence ? { routeEvidence: routeModel.routeEvidence } : {}), ...(providerRoute.provider?.transports?.[legacyTransport]?.baseUrl ? { endpoint: providerRoute.provider.transports[legacyTransport].baseUrl } : {}), capabilities: routeModel.capabilities || routeModel },
-        prompt: { sourceMessage: prompt, focusText, nearbyMessages: recentMessages, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
+        prompt: { ...scenePrompt, sender: sender || '', messageContent, descriptionText, intent: 'scene' },
         scene: scenePlan,
         canonSnapshot: { references: [], assets: {}, omissions: [] },
         identities: appearanceIdentities,
