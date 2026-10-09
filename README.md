@@ -116,6 +116,12 @@ Nano Banana 2.1 also runs directly in the browser: look for `gemini-nano-banana-
 3. Choose one route: configure Google AI Studio/OpenRouter in SillyTavern Chat Completion settings, or choose a direct hosted profile and enter that provider's key in the extension. Future Server Adapter entries are unavailable.
 4. Select a model appropriate to that route, then generate from the message wand or `/proimagine`.
 
+### Installation files and updates
+
+The extension installer creates a local `.git` directory for version tracking and updates. It is not an uploaded extension folder. Keep it in installer-managed checkouts so the extension manager can update them. To move an installation, reinstall from the repository instead of copying a checkout's `.git` directory. When syncing between devices, exclude extension `.git` directories if the sync tool supports exclusions, or disable extension-file syncing and install/update extensions separately on each device. Windows Git objects can be read-only, causing `Replace sync file ... .git/objects/...: Access is denied` when a file-sync process overwrites them. `.gitignore` does not control TauriTavern sync. In TauriTavern 2.2.0, the Sync scope has an **Extensions** section (Local extensions, Third-party extensions, Extension sources, and Extension store); leave that section unselected to keep installed extension files and Git metadata local to each device. Continue syncing chats and other desired categories.
+
+For a manual installation without Git metadata, download this branch's **Code → Download ZIP**, extract it, and place the contents in an extension folder named `context-image-generation`. Source ZIPs exclude developer tests, CI configuration, and agent instructions. Manual ZIP installations need manual replacement for updates; back up the existing folder first. Runtime files, the `lib/` directory, license, and useful documentation are retained.
+
 ## Usage
 
 ### Message Button

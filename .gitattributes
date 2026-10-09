@@ -1,0 +1,7 @@
+# Keep developer-only files out of Git source ZIPs and git archive downloads.
+/.github/ export-ignore
+/.gitattributes export-ignore
+/.gitignore export-ignore
+/AGENTS.md export-ignore
+/package.json export-ignore
+/test/ export-ignore

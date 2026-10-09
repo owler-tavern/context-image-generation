@@ -1,5 +1,15 @@
 # v2.5 status
 
+## October 9 repository and download cleanup
+- Objective: remove obsolete public working notes and keep developer-only files out of source ZIP installations.
+- Scope: remove six tracked product/planning/review files on `codex/v2.5` and one obsolete research file on `main` (five planning files were already removed there); preserve each branch's runtime, tests, provider documentation, and release behavior.
+- Implemented: export-ignore rules for tests, CI, agent instructions, and development configuration; ignore rules for local tools/caches; installation guidance explaining Git metadata and manual ZIP updates.
+- Verified: `npm test` passed **980/980** on `codex/v2.5`; the independent main tree passed **35/35** tests. Exact tree diffs confirm every runtime file is unchanged. Main and v2.5 archives contain **16** and **103** files respectively, with required runtime/docs present and tests, CI, agent/config files, obsolete notes, and `.git` absent. Diff checks passed. A disposable Windows file replacement reproduced access denial with ReadOnly and succeeded after clearing that attribute; installed Git objects were untouched.
+- Limitation: `.git` is created locally by Git-based installers and is required for their update workflow. Repository cleanup cannot prevent its creation. The owner supplied a mobile-to-PC sync failure replacing `.git/objects/ca/a4afd370b2e9238f4d480f67c3a82d37b042c7`; that exact local file has the Windows ReadOnly attribute. Official v2.2.0 source exposes extension sync categories and its file replacement helper does not handle read-only destination files. Documented the workaround of leaving Extensions out of sync and managing installs independently. No sync setting, Git object attribute, or installed host has been changed; no sync retry has been performed.
+- Rollback: revert the branch-specific cleanup commit; removed tracked notes remain recoverable in Git history.
+- Publication check: the first atomic push was rejected because this checkout fetches only `codex/v2.5` by default, leaving cached `origin/main` stale. Explicitly refreshed both branches; main already contained the earlier five-file cleanup. Reparented the isolated cleanup tree onto current main after confirming that its only intervening changes were those same five deletions. No force-push or runtime merge was used.
+- Next action: leave Extensions unselected in TauriTavern sync, manage extension installations independently on each device, and retry the owner's mobile-to-PC sync. Actual sync acceptance remains unverified.
+
 ## October 9 scene-only prompt filtering
 - Objective: send narration/dialogue rather than scene plans, tracker text, nested visual dashboards, or hidden thoughts.
 - Preset correction: the supplied scene was one example, not a universal schema. Removed the `<prose>`-only assumption; preserve narrative outside/inside any wrapper and exclude positively identified metadata. Extended tag spelling variants, metadata HTML attributes/summary labels, and paired bracket blocks. No model call or host regex execution is introduced.
