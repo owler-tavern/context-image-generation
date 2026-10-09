@@ -2,6 +2,8 @@
 
 This is the standing technical reference for people and agents maintaining this extension. It describes the code currently in this repository; it does not replace SillyTavern's own extension API documentation.
 
+Private research and obsolete implementation plans are excluded from this repository. Runtime modules, tests, and the provider catalog remain available for maintenance.
+
 ## Purpose and ownership
 
 Context Image Generation is a SillyTavern third-party extension that creates scene images from chat context. It can include character and persona details, avatar images, previous generated images, and recent messages in a generation prompt.

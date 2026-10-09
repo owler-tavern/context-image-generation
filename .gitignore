@@ -1,0 +1,20 @@
+# Local AI/research and implementation-planning artifacts
+.claude/
+.superpowers/
+.impeccable/
+PRODUCT.md
+docs/EXTERNAL_EXTENSION_RESEARCH.md
+docs/ROADMAP.md
+docs/superpowers/
+
+# Local task attachments and working notes
+.codex-remote-attachments/
+LEARNINGS.md
+# Local development tools, dependencies, and generated output
+.agents/
+.codex/
+node_modules/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
